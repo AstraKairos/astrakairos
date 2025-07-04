@@ -73,7 +73,7 @@ Esta metodología está basada en el trabajo presentado en el siguiente paper:
     o más directo,
     ```bash
     pip install pandas aiohttp beautifulsoup4
-    ``
+    ```
 
 ## Uso
 
