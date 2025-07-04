@@ -48,8 +48,8 @@ Esta metodología está basada en el trabajo presentado en el siguiente paper:
 
 1.  **Clona el repositorio:**
     ```bash
-    git clone https://github.com/TU_USUARIO/TU_REPOSITORIO.git
-    cd TU_REPOSITORIO
+    git clone https://github.com/TehMartinXz/stelle-doppie-filtering.git
+    cd stelle-doppie-filtering
     ```
 
 2.  **Crea un entorno virtual (recomendado):**
@@ -69,6 +69,11 @@ Esta metodología está basada en el trabajo presentado en el siguiente paper:
     ```bash
     pip install -r requirements.txt
     ```
+
+    o más directo,
+    ```bash
+    pip install pandas aiohttp beautifulsoup4
+    ``
 
 ## Uso
 
