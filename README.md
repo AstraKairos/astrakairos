@@ -1,4 +1,2 @@
-# Candidate Searcher for Binary Stars Astrometric-based Research
-A semi-automatic searcher of Binary Systems for astrometric-based research.
-
-This project has been deprecated in favor of a more general solution (AstraKairos)
+# AstroKairos
+AstroKairos is a scientific Python framework that bridges the gap between massive astronomical catalogs (like Gaia) and practical night-to-night observation, enabling researchers to find and prioritize the most scientifically valuable targets.
