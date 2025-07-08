@@ -1,2 +1,2 @@
-# AstroKairos
-AstroKairos is a scientific Python framework that bridges the gap between massive astronomical catalogs (like Gaia) and practical night-to-night observation, enabling researchers to find and prioritize the most scientifically valuable targets.
+# AstraKairos
+AstraKairos is a scientific Python framework that bridges the gap between massive astronomical catalogs (like Gaia) and practical night-to-night observation, enabling researchers to find and prioritize the most scientifically valuable targets.

@@ -8,7 +8,7 @@ version = "0.1.0"
 authors = [
     { name="Martín Rubina Scapini", email="mrubina@usm.cl" },
 ]
-description = "AstroKairos is a scientific Python framework that bridges the gap between massive astronomical catalogs (like Gaia) and practical night-to-night observation, enabling researchers to find and prioritize the most scientifically valuable targets."
+description = "AstraKairos is a scientific Python framework that bridges the gap between massive astronomical catalogs (like Gaia) and practical night-to-night observation, enabling researchers to find and prioritize the most scientifically valuable targets."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { file = "LICENSE" }

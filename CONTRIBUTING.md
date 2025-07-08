@@ -1,4 +1,4 @@
-# Contributing to AstroKairos
+# Contributing to AstraKairos
 
 We welcome contributions from the community! Whether you're reporting a bug, proposing a new feature, or submitting code, your input is valuable.
 

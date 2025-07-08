@@ -12,11 +12,11 @@ from ..planner import calculations
 from ..utils import io
 
 class AstraKairosPlannerApp:
-    """Main GUI application for the AstroKairos observation planner."""
+    """Main GUI application for the AstraKairos observation planner."""
     
     def __init__(self, root):
         self.root = root
-        self.root.title("AstroKairos - Binary Star Observation Planner")
+        self.root.title("AstraKairos - Binary Star Observation Planner")
         self.root.geometry("800x750")
         self.root.configure(bg='#f0f0f0')
         
@@ -63,7 +63,7 @@ class AstraKairosPlannerApp:
         main_frame.columnconfigure(1, weight=1)
         
         # Title
-        title_label = ttk.Label(main_frame, text="AstroKairos Observation Planner", 
+        title_label = ttk.Label(main_frame, text="AstraKairos Observation Planner", 
                                font=('Arial', 16, 'bold'))
         title_label.grid(row=0, column=0, columnspan=2, pady=(0, 20))
         
