@@ -14,7 +14,7 @@ import webbrowser
 class ObservatorySelector:
     def __init__(self, root):
         self.root = root
-        self.root.title("Observatory Selector - Binary Stars")
+        self.root.title("Candidate Searcher - Binary Stars")
         self.root.geometry("800x700")
         self.root.configure(bg='#f0f0f0')
         
