@@ -1,10 +1,10 @@
-# AstroKairos 🌠
+# AstraKairos 🌠
 
 <!-- [![PyPI version](https://badge.fury.io/py/astrakairos.svg)](https://badge.fury.io/py/astrakairos) --> <!-- Placeholder: Activate once published to PyPI -->
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://github.com/AstraKairos/astrakairos/actions/workflows/ci.yml/badge.svg)](https://github.com/AstraKairos/astrakairos/actions/workflows/ci.yml)
 
- **AstroKairos is an integrated scientific framework to find the *kairos*—the opportune moment—for astronomical discovery. From validating binary star orbits to planning variable star photometry.**
+ **AstraKairos is an integrated scientific framework to find the *kairos*—the opportune moment—for astronomical discovery. From validating binary star orbits to planning variable star photometry.**
 
 This open-source Python suite bridges the gap between massive astronomical catalogs (like Gaia, WDS, and ORB6) and practical night-to-night observation, enabling researchers and amateur astronomers to find and prioritize the most scientifically valuable targets.
 
@@ -18,7 +18,7 @@ This open-source Python suite bridges the gap between massive astronomical catal
 
 ## Installation
 
-AstroKairos is designed to be easily installed via pip.
+AstraKairos is designed to be easily installed via pip.
 
 ```bash
 # It is recommended to use a virtual environment
@@ -37,7 +37,7 @@ pip install git+https://github.com/AstraKairos/astrakairos.git
 
 ## Quickstart
 
-AstroKairos provides two main entry points: a graphical planner and a command-line analyzer.
+AstraKairos provides two main entry points: a graphical planner and a command-line analyzer.
 
 ### 1. Launch the Observation Planner (GUI)
 
