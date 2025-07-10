@@ -6,7 +6,7 @@ import datetime
 from datetime import date
 import ephem
 import webbrowser
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from ..planner import calculations
 from ..utils import io
@@ -265,73 +265,91 @@ class AstraKairosPlannerApp:
         self.date_var.set(date.today().strftime("%Y-%m-%d"))
     
     def calculate_conditions(self):
-        """Calculate and display astronomical conditions."""
-        if not self.selected_location or not self.observer:
-            messagebox.showwarning("Warning", "First select a location")
+        """
+        Calculates and displays all astronomical conditions by calling the
+        refactored calculation modules. This method acts as an orchestrator.
+        """
+        if not self.observer or not self.selected_location:
+            messagebox.showwarning("Selection Required", "Please select a location first.")
             return
         
         try:
-            # Parse date
             obs_date = datetime.datetime.strptime(self.date_var.get(), "%Y-%m-%d")
-            
-            # Get timezone
             timezone = self.selected_location.get('timezone', 'UTC')
             
-            # Calculate sun/moon info
-            info = calculations.calculate_sun_moon_info(self.observer, obs_date, timezone)
+            # 1. Get Sun and Moon information from its dedicated function.
+            sun_moon_info = calculations.calculate_sun_moon_info(self.observer, obs_date, timezone)
             
-            # Format and display
-            self.display_astronomical_info(info, timezone)
+            # 2. Get Optimal Region information, which now includes the Zenith.
+            region_info = calculations.calculate_optimal_region(self.observer, obs_date)
             
-        except ValueError:
-            messagebox.showerror("Error", "Invalid date format. Use YYYY-MM-DD")
-    
-    def display_astronomical_info(self, info, timezone):
-        """Format and display astronomical information."""
-        # Format times
-        def format_time(dt):
-            if dt is None:
-                return "N/A"
-            return dt.strftime('%H:%M:%S')
-        
-        # Determine moon phase description
-        phase = info['moon_phase']
-        if phase < 1:
-            phase_desc = "New Moon"
-        elif phase < 25:
-            phase_desc = "Waxing Crescent"
-        elif phase < 50:
-            phase_desc = "First Quarter"
-        elif phase < 75:
-            phase_desc = "Waxing Gibbous"
-        elif phase < 99:
-            phase_desc = "Full Moon"
-        else:
-            phase_desc = "Waning Gibbous"
-        
-        # Build info text
-        info_text = f"""ASTRONOMICAL CONDITIONS
-Date: {self.date_var.get()}
-Location: {self.selected_location['name']}
-Timezone: {timezone}
+            # 3. Combine the two result dictionaries into a single one.
+            # This is crucial for passing all data to the display function.
+            full_info = {**sun_moon_info, **region_info}
+            
+            # 4. Call the display function with all the combined information.
+            self.display_astronomical_info(full_info, timezone)
+            
+            # (Optional) Store the ranges for later use, e.g., for the search button.
+            self.optimal_ra_range = region_info.get('ra_range')
+            self.optimal_dec_range = region_info.get('dec_range')
 
-SOLAR INFORMATION:
-Sunset: {format_time(info['sunset'])}
-Sunrise: {format_time(info['sunrise'])}
-Midnight: {format_time(info['midnight'])}
+        except ValueError:
+            messagebox.showerror("Invalid Date", "Please use YYYY-MM-DD format.")
+        except Exception as e:
+            messagebox.showerror("Calculation Error", f"An unexpected error occurred: {e}")
+    
+    def display_astronomical_info(self, info: Dict[str, Any], timezone: str):
+        """
+        Formats and displays the full set of astronomical information in the text widget.
+        """
+        self.astro_text.config(state=tk.NORMAL)
+        self.astro_text.delete(1.0, tk.END)
+        
+        def format_dual_time(local_dt_obj, utc_dt_obj):
+            """
+            Helper function to format local and UTC datetime objects.
+            Includes timezone name for local time.
+            """
+            if local_dt_obj is None or utc_dt_obj is None:
+                return "Circumpolar / Not Visible"
+            
+            # Format local time with its timezone
+            local_str = local_dt_obj.strftime('%H:%M:%S %Z') 
+            
+            # Format UTC time (always UTC)
+            utc_str = utc_dt_obj.strftime('%H:%M:%S UTC')
+            
+            return f"{local_str} ({utc_str})"
+
+        def get_phase_desc(phase_percent):
+            """Helper function to get a description for the moon phase."""
+            if phase_percent < 1: return "New Moon"
+            if phase_percent < 49: return "Waxing (Crescent/Quarter)"
+            if phase_percent <= 51: return "Full Moon" # Using a tighter range for Full Moon
+            return "Waning (Gibbous/Quarter)"
+
+        # Build the full text string with the Zenith and dual-time information.
+        info_text = f"""--- CONDITIONS FOR {self.date_var.get()} AT {self.selected_location['name']} ---
+
+ZENITH AT MIDNIGHT:
+  - Right Ascension: {info.get('zenith_ra_str', 'N/A')}
+  - Declination:     {info.get('zenith_dec_str', 'N/A')}
+
+EVENT TIMES:
+  - Sunset:  {format_dual_time(info.get('sunset_local'), info.get('sunset_utc'))}
+  - Sunrise: {format_dual_time(info.get('sunrise_local'), info.get('sunrise_utc'))}
+  - Midnight: {format_dual_time(info.get('midnight_local'), info.get('midnight_utc'))}
 
 LUNAR INFORMATION:
-Moonrise: {format_time(info['moonrise'])}
-Moonset: {format_time(info['moonset'])}
-Moon Phase: {phase_desc} ({phase:.1f}%)
-Position at midnight:
-  - Altitude: {info['moon_alt']:.1f}°
-  - Azimuth: {info['moon_az']:.1f}°
+  - Moonrise: {format_dual_time(info.get('moonrise_local'), info.get('moonrise_utc'))}
+  - Moonset:  {format_dual_time(info.get('moonset_local'), info.get('moonset_utc'))}
+  - Phase:    {get_phase_desc(info.get('moon_phase', 0))} ({info.get('moon_phase', 0):.1f}%)
+  - Position at midnight: {info.get('moon_alt', 0):.1f}° Alt, {info.get('moon_az', 0):.1f}° Az
 """
         
-        # Display
-        self.astro_text.delete(1.0, tk.END)
         self.astro_text.insert(tk.END, info_text)
+        self.astro_text.config(state=tk.DISABLED)
     
     def calculate_optimal_region(self):
         """Calculate optimal observation region."""

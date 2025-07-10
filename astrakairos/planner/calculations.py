@@ -8,7 +8,7 @@ import numpy as np
 def calculate_sun_moon_info(observer: ephem.Observer, obs_date: datetime.datetime, 
                           timezone: str = 'UTC') -> Dict[str, Any]:
     """
-    Calculate sun and moon information for the given observer and date.
+    Calculate sun, moon, and zenith information for the given observer and date.
     
     Args:
         observer: PyEphem observer object
@@ -16,94 +16,113 @@ def calculate_sun_moon_info(observer: ephem.Observer, obs_date: datetime.datetim
         timezone: Timezone string
         
     Returns:
-        Dictionary with sun/moon rise/set times and moon phase info
+        Dictionary with sun/moon rise/set times (local and UTC), moon phase, and zenith coordinates.
     """
-    # Set observer date
     observer.date = obs_date
-    
-    # Create celestial objects
     sun = ephem.Sun()
     moon = ephem.Moon()
-    
-    # Get timezone
     local_tz = pytz.timezone(timezone)
-    
-    # Calculate sun times
-    try:
-        sunset = observer.next_setting(sun)
-        sunrise = observer.next_rising(sun)
-        
-        # Adjust if needed
-        if sunrise < sunset:
-            sunset = observer.previous_setting(sun)
-            
-        # Convert to local time
-        sunset_local = pytz.utc.localize(sunset.datetime()).astimezone(local_tz)
-        sunrise_local = pytz.utc.localize(sunrise.datetime()).astimezone(local_tz)
-        
-        # Calculate midnight
-        if sunrise_local.date() > sunset_local.date():
-            midnight = sunset_local + (sunrise_local - sunset_local) / 2
-        else:
-            midnight = sunset_local + timedelta(hours=12)
-            
-    except ephem.CircumpolarError:
-        sunset_local = None
-        sunrise_local = None
-        midnight = obs_date + timedelta(hours=12)
-    
-    # Calculate moon times
-    try:
-        moonrise = observer.next_rising(moon)
-        moonset = observer.next_setting(moon)
-        
-        if moonrise < moonset:
-            moonset = observer.previous_setting(moon)
-            
-        moonrise_local = pytz.utc.localize(moonrise.datetime()).astimezone(local_tz)
-        moonset_local = pytz.utc.localize(moonset.datetime()).astimezone(local_tz)
-        
-    except ephem.CircumpolarError:
-        moonrise_local = None
-        moonset_local = None
-    
-    # Calculate moon phase at midnight
-    if midnight:
-        observer.date = midnight
-        moon.compute(observer)
-        moon_phase = moon.phase
-        moon_alt = float(moon.alt) * 180 / 3.14159
-        moon_az = float(moon.az) * 180 / 3.14159
-    else:
-        moon_phase = 0
-        moon_alt = 0
-        moon_az = 0
-    
-    return {
-        'sunset': sunset_local,
-        'sunrise': sunrise_local,
-        'midnight': midnight,
-        'moonrise': moonrise_local,
-        'moonset': moonset_local,
-        'moon_phase': moon_phase,
-        'moon_alt': moon_alt,
-        'moon_az': moon_az
+
+    results = {
+        'sunset_local': None, 'sunset_utc': None, 
+        'sunrise_local': None, 'sunrise_utc': None, 
+        'midnight_local': None, 'midnight_utc': None,
+        'moonrise_local': None, 'moonrise_utc': None, 
+        'moonset_local': None, 'moonset_utc': None, 
+        'moon_phase': 0, 'moon_alt': 0, 'moon_az': 0,
+        'zenith_ra_str': 'N/A', 'zenith_dec_str': 'N/A'
     }
 
-def calculate_optimal_region(observer: ephem.Observer, obs_date: datetime.datetime,
-                           min_altitude: float = 40.0) -> Dict[str, Tuple[float, float]]:
-    """
-    Calculate optimal observation region based on moon position and zenith.
-    
-    Args:
-        observer: PyEphem observer object
-        obs_date: Observation date
-        min_altitude: Minimum altitude in degrees (default: 40°)
+    # --- Calculate sun times and midnight ---
+    try:
+        sunset_ephem = observer.next_setting(sun)
+        sunrise_ephem = observer.next_rising(sun)
         
-    Returns:
-        Dictionary with 'ra_range' and 'dec_range' as tuples of (min, max) values
+        # Adjust if sunrise is on the next day
+        if sunrise_ephem < sunset_ephem:
+            sunset_ephem = observer.previous_setting(sun)
+            
+        # Get UTC datetime objects from ephem.Date
+        sunset_utc_dt = sunset_ephem.datetime()
+        sunrise_utc_dt = sunrise_ephem.datetime()
+
+        results['sunset_utc'] = sunset_utc_dt
+        results['sunrise_utc'] = sunrise_utc_dt
+        
+        # Convert to local time
+        results['sunset_local'] = pytz.utc.localize(sunset_utc_dt).astimezone(local_tz)
+        results['sunrise_local'] = pytz.utc.localize(sunrise_utc_dt).astimezone(local_tz)
+        
+        # Calculate midnight (midpoint of the night)
+        if sunrise_utc_dt < sunset_utc_dt: # If sunrise is effectively on the next calendar day
+             sunrise_utc_dt_adjusted = sunrise_utc_dt + timedelta(days=1)
+        else:
+             sunrise_utc_dt_adjusted = sunrise_utc_dt
+
+        midnight_utc_dt = sunset_utc_dt + (sunrise_utc_dt_adjusted - sunset_utc_dt) / 2
+        results['midnight_utc'] = midnight_utc_dt
+        results['midnight_local'] = pytz.utc.localize(midnight_utc_dt).astimezone(local_tz)
+        
+    except ephem.CircumpolarError:
+        # If sun is circumpolar, approximate midnight as 12 hours after the start of the day
+        midnight_utc_dt = datetime.datetime.combine(obs_date, datetime.time(12, 0)) # noon of obs_date
+        results['midnight_utc'] = midnight_utc_dt
+        results['midnight_local'] = pytz.utc.localize(midnight_utc_dt).astimezone(local_tz)
+        # sunset/sunrise remain None
+    
+    # --- Calculate Moon Info ---
+    # Reset observer date to the calculated midnight for moon position and phase
+    observer.date = ephem.Date(results['midnight_utc'])
+    moon.compute(observer)
+    results['moon_phase'] = moon.phase
+    results['moon_alt'] = np.degrees(float(moon.alt))
+    results['moon_az'] = np.degrees(float(moon.az))
+
+    # Reset observer date to start of observation day for moon rise/set calculations
+    observer.date = obs_date
+    try:
+        moonrise_ephem = observer.next_rising(moon)
+        moonset_ephem = observer.next_setting(moon)
+        
+        # Adjust if moonset is on the next day
+        if moonrise_ephem < moonset_ephem:
+            moonset_ephem = observer.previous_setting(moon)
+
+        moonrise_utc_dt = moonrise_ephem.datetime()
+        moonset_utc_dt = moonset_ephem.datetime()
+
+        results['moonrise_utc'] = moonrise_utc_dt
+        results['moonset_utc'] = moonset_utc_dt
+        results['moonrise_local'] = pytz.utc.localize(moonrise_utc_dt).astimezone(local_tz)
+        results['moonset_local'] = pytz.utc.localize(moonset_utc_dt).astimezone(local_tz)
+        
+    except ephem.CircumpolarError:
+        # moonrise/moonset remain None
+        pass
+    
+    return results
+
+def calculate_optimal_region(observer: ephem.Observer, obs_date: datetime.datetime,
+                           min_altitude: float = 40.0) -> Dict[str, Any]:
     """
-    # Calculate midnight
+    Calculates the optimal observation region based on moon position and zenith.
+    It also calculates and returns the formatted coordinates of the zenith at midnight.
+
+    Args:
+        observer: A PyEphem observer object, configured with lat/lon.
+        obs_date: The starting date of the observation night.
+        min_altitude: The minimum altitude below the zenith for the region, in degrees.
+
+    Returns:
+        A dictionary containing:
+        - 'ra_range': (min_hours, max_hours) for the optimal RA region.
+        - 'dec_range': (min_deg, max_deg) for the optimal Dec region.
+        - 'moon_visible': A boolean indicating if the moon is up at midnight.
+        - 'strategy': A string ('opposite_moon' or 'zenith') describing the logic used.
+        - 'zenith_ra_str': Formatted RA of the zenith.
+        - 'zenith_dec_str': Formatted Dec of the zenith.
+    """
+    # 1. Calculate the time of astronomical midnight for the given night
     observer.date = obs_date
     sun = ephem.Sun()
     
@@ -112,62 +131,92 @@ def calculate_optimal_region(observer: ephem.Observer, obs_date: datetime.dateti
         sunrise = observer.next_rising(sun)
         if sunrise < sunset:
             sunset = observer.previous_setting(sun)
-        midnight = sunset + (sunrise - sunset) / 2
+        
+        # Midnight is the midpoint between sunset and the next sunrise
+        midnight_utc = sunset.datetime() + (sunrise.datetime() - sunset.datetime()) / 2
+        midnight_ephem = ephem.Date(midnight_utc)
+
     except ephem.CircumpolarError:
-        midnight = ephem.Date(obs_date + timedelta(hours=12))
+        # For polar regions, approximate midnight as 12 hours after the start of the day
+        midnight_ephem = ephem.Date(obs_date + timedelta(hours=12))
     
-    # Set observer to midnight
-    observer.date = midnight
+    # 2. Set the observer to the calculated midnight time
+    observer.date = midnight_ephem
     
-    # Calculate moon position
+    # 3. Determine if the moon is a factor at midnight
     moon = ephem.Moon()
     moon.compute(observer)
     moon_visible = float(moon.alt) > 0
     
-    # Calculate zenith
-    zenith_ra = float(observer.sidereal_time())  # in radians
-    zenith_dec = float(observer.lat)  # in radians
+    # 4. Calculate the Zenith coordinates at midnight
+    # The Zenith's RA is the local sidereal time.
+    # The Zenith's Dec is the observer's latitude.
+    zenith_ra_rad = float(observer.sidereal_time())
+    zenith_dec_rad = float(observer.lat)
     
-    # Calculate declination range
-    min_altitude_rad = min_altitude * 3.14159 / 180
-    dec_min_rad = zenith_dec - min_altitude_rad
-    dec_max_rad = min(zenith_dec, 3.14159/2)  # Max 90°
+    # 5. Calculate the optimal declination range
+    # This is a band from the zenith down to a minimum altitude.
+    min_altitude_rad = np.radians(min_altitude)
+    dec_min_rad = zenith_dec_rad - (np.pi/2 - min_altitude_rad) # Corrected logic: zenith is 90 deg alt
+    dec_max_rad = zenith_dec_rad
     
-    # Calculate RA range
+    # Ensure Dec range is valid
+    dec_min_rad = max(dec_min_rad, -np.pi/2) # Clamp at -90 deg
+    dec_max_rad = min(dec_max_rad, np.pi/2)  # Clamp at +90 deg
+
+    # 6. Calculate the optimal Right Ascension range based on strategy
+    strategy = 'zenith'
     if moon_visible:
-        # Moon visible: observe opposite side
-        moon_ra = float(moon.ra)
-        ra_opposite = moon_ra + 3.14159  # 180° opposite
-        if ra_opposite > 2 * 3.14159:
-            ra_opposite -= 2 * 3.14159
-        
-        # ±3 hours around opposite point
-        ra_range_rad = 3 * 3.14159 / 12
-        ra_min_rad = ra_opposite - ra_range_rad
-        ra_max_rad = ra_opposite + ra_range_rad
+        # Strategy 1: Moon is up. Observe on the opposite side of the sky.
+        strategy = 'opposite_moon'
+        moon_ra_rad = float(moon.ra)
+        ra_center_rad = moon_ra_rad + np.pi  # 180 degrees opposite
     else:
-        # Moon not visible: use zenith region
-        ra_range_rad = 3 * 3.14159 / 12
-        ra_min_rad = zenith_ra - ra_range_rad
-        ra_max_rad = zenith_ra + ra_range_rad
+        # Strategy 2: No moon. Observe around the zenith.
+        ra_center_rad = zenith_ra_rad
+
+    # Define a search window of +/- 3 hours (45 degrees) around the center RA
+    ra_window_rad = np.radians(45.0) # 3 hours * 15 deg/hour
+    ra_min_rad = ra_center_rad - ra_window_rad
+    ra_max_rad = ra_center_rad + ra_window_rad
     
-    # Wrap RA values to [0, 2π]
-    if ra_min_rad < 0:
-        ra_min_rad += 2 * 3.14159
-    if ra_max_rad > 2 * 3.14159:
-        ra_max_rad -= 2 * 3.14159
+    # 7. Format all results for the return dictionary
+
+    # Format Zenith RA
+    ra_hours = np.degrees(zenith_ra_rad) / 15.0
+    ra_h = int(ra_hours)
+    ra_m = int((ra_hours - ra_h) * 60)
+    ra_s = ((ra_hours - ra_h) * 60 - ra_m) * 60
+    zenith_ra_str = f"{ra_h:02d}h {ra_m:02d}m {ra_s:04.1f}s"
     
-    # Convert to hours and degrees
-    ra_min_hours = ra_min_rad * 12 / 3.14159
-    ra_max_hours = ra_max_rad * 12 / 3.14159
-    dec_min_deg = dec_min_rad * 180 / 3.14159
-    dec_max_deg = dec_max_rad * 180 / 3.14159
-    
+    # Format Zenith Dec
+    dec_degrees = np.degrees(zenith_dec_rad)
+    dec_sign = "+" if dec_degrees >= 0 else "-"
+    dec_abs = abs(dec_degrees)
+    dec_d = int(dec_abs)
+    dec_m = int((dec_abs - dec_d) * 60)
+    dec_s = ((dec_abs - dec_d) * 60 - dec_m) * 60
+    zenith_dec_str = f"{dec_sign}{dec_d:02d}° {dec_m:02d}' {dec_s:04.1f}\""
+
+    # Convert RA/Dec ranges to hours and degrees for the return value
+    ra_min_hours = np.degrees(ra_min_rad % (2 * np.pi)) / 15.0
+    ra_max_hours = np.degrees(ra_max_rad % (2 * np.pi)) / 15.0
+    dec_min_deg = np.degrees(dec_min_rad)
+    dec_max_deg = np.degrees(dec_max_rad)
+
+    # Handle RA wrap-around for display (e.g., from 23h to 2h)
+    if ra_min_hours > ra_max_hours:
+        # This indicates the range crosses the 0h line.
+        # The logic downstream should handle this, but for now we return the values.
+        pass
+
     return {
         'ra_range': (ra_min_hours, ra_max_hours),
         'dec_range': (dec_min_deg, dec_max_deg),
         'moon_visible': moon_visible,
-        'strategy': 'opposite_moon' if moon_visible else 'zenith'
+        'strategy': strategy,
+        'zenith_ra_str': zenith_ra_str,
+        'zenith_dec_str': zenith_dec_str
     }
 
 def get_twilight_times(observer: ephem.Observer, obs_date: datetime.datetime, 
