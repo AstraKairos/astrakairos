@@ -5,8 +5,8 @@
     "region": "Great Basin National Park",
     "type": "O",
     "population": 0,
-    "latitude": "39.000000N",
-    "longitude": "114.000000W",
+    "latitude": "39.005585N",
+    "longitude": "114.219877W",
     "altitude_m": 2080.0,
     "light_pollution": null,
     "timezone": "America/Los_Angeles",
@@ -5544,7 +5544,7 @@
     "landscapeKey": null
   },
   {
-    "name": "Santiago",
+    "name": "Santiago de Chile",
     "state": "Santiago Metropolitan",
     "region": "08",
     "type": "C",
