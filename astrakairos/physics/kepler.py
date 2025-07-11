@@ -31,18 +31,18 @@ def solve_kepler(M_rad: float, e: float, tol: float = 1e-12) -> float:
         E = M_norm + e * np.sin(M_norm) * (1.0 + e * np.cos(M_norm))
     else:
         # For high eccentricities (e -> 1), this simpler guess is more stable.
-        # It ensures the initial guess E is on the correct side of pi.
+        # It ensures the initial guess E is on the "correct side of pi".
         E = M_norm + e * np.sign(np.sin(M_norm))
         # A small correction for M_norm near 0 or pi
         if abs(E) > np.pi * 0.9: 
              E = M_norm + e
 
-    # 3. Newton-Raphson iteration loop.
+    # 3. Newton-Raphson iteration loop - This is the core of the solver.
     # The function to find the root of is f(E) = E - e*sin(E) - M_norm = 0
     # Its derivative is f'(E) = 1 - e*cos(E)
     # The iteration step is E_next = E - f(E) / f'(E)
 
-    max_iter = 15  # Safety limit. With good initial guesses, it rarely needs more than 3-4.
+    max_iter = 15  # Safety limit. With good initial guesses, this will likely be more than enoguh.
     for _ in range(max_iter):
         f_E = E - e * np.sin(E) - M_norm
         f_prime_E = 1.0 - e * np.cos(E)
@@ -50,7 +50,7 @@ def solve_kepler(M_rad: float, e: float, tol: float = 1e-12) -> float:
         # The correction step
         delta = f_E / f_prime_E
         
-        E -= delta # Update E
+        E -= delta
 
         # Check for convergence: if the correction step is smaller than the tolerance.
         if abs(delta) < tol:
@@ -90,6 +90,12 @@ def predict_position(orbital_elements: Dict[str, float], date: float) -> Tuple[f
 
     if P <= 0:
         raise ValueError("Orbital period (P) must be positive.")
+    if not (0 <= e < 1): # Checking for non-physical eccentricities
+        raise ValueError("Eccentricity (e) must be in the range [0, 1).")
+    if a <= 0:
+        raise ValueError("Semi-major axis (a) must be positive.")
+    if not (0 <= i_deg <= 180):
+        raise ValueError("Inclination (i) must be in the range [0, 180] degrees.")
 
     # 2. Convert all input angles from degrees to radians for numpy functions
     i_rad = np.radians(i_deg)
