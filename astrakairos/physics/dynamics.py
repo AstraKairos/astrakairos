@@ -1,5 +1,6 @@
 import numpy as np
 from typing import Dict, Tuple, Optional
+from .kepler import predict_position
 
 def calculate_velocity_vector(data: Dict[str, float]) -> Tuple[float, float]:
     """
@@ -164,3 +165,83 @@ def calculate_orbit_coverage(data: Dict[str, float], period_years: Optional[floa
         return min(coverage, 1.0)  # Cap at 100%
     else:
         return observation_span  # Just return years if no period
+    
+    from .kepler import predict_position  # Ensure this import is present
+
+def calculate_observation_priority_index(
+    orbital_elements: Dict[str, float],
+    last_observation: Dict[str, float],
+    current_date: float
+) -> Optional[Tuple[float, float]]:
+    """
+    Calculates the Observation Priority Index (OPI).
+
+    This index quantifies the rate of deviation between the position predicted
+    by an orbital model and the last recorded observation. It serves as a powerful
+    indicator of how "outdated" or "incorrect" a published orbit might be,
+    prioritizing targets that require new measurements.
+
+    Args:
+        orbital_elements: Dictionary containing the 7 Keplerian orbital elements
+                          (P, T, e, a, i, Omega, omega).
+        last_observation: Dictionary containing data from the last observation:
+                          'date_last' (year), 'pa_last' (PA in degrees),
+                          'sep_last' (separation in arcseconds).
+        current_date: The current date (as a decimal year) for which the
+                      observation is being planned.
+
+    Returns:
+        A tuple containing (opi, deviation_arcsec), where:
+        - opi: The Observation Priority Index in arcseconds per year.
+        - deviation_arcsec: The total on-sky deviation in arcseconds at the
+                            time of the last observation.
+        Returns None if essential data for the calculation is missing.
+    """
+    # 1. Validate that all required data is present and valid
+    required_orbit_keys = {'P', 'T', 'e', 'a', 'i', 'Omega', 'omega'}
+    required_obs_keys = {'date_last', 'pa_last', 'sep_last'}
+
+    if not all(k in orbital_elements and orbital_elements[k] is not None for k in required_orbit_keys) or \
+       not all(k in last_observation and last_observation[k] is not None for k in required_obs_keys):
+        return None
+
+    t_last_obs = last_observation['date_last']
+    rho_last_obs = last_observation['sep_last']
+    theta_last_obs_deg = last_observation['pa_last']
+
+    # 2. Predict the THEORETICAL position for the exact date of the LAST observation
+    try:
+        theta_pred_deg, rho_pred = predict_position(orbital_elements, t_last_obs)
+    except (ValueError, KeyError) as e:
+        # If prediction fails (e.g., P=0), the OPI cannot be calculated.
+        print(f"  [Warning] Could not predict position for OPI calculation: {e}")
+        return None
+
+    # 3. Calculate the deviation vector (Δ) magnitude
+    # Convert angles to radians for trigonometric functions
+    theta_pred_rad = np.radians(theta_pred_deg)
+    theta_last_obs_rad = np.radians(theta_last_obs_deg)
+
+    # Convert both positions (predicted and observed) to Cartesian coordinates
+    # x corresponds to East (+), y corresponds to North (+)
+    x_pred = rho_pred * np.sin(theta_pred_rad)
+    y_pred = rho_pred * np.cos(theta_pred_rad)
+
+    x_obs = rho_last_obs * np.sin(theta_last_obs_rad)
+    y_obs = rho_last_obs * np.cos(theta_last_obs_rad)
+
+    # Calculate the magnitude of the deviation (Euclidean distance on the sky plane)
+    deviation_arcsec = np.sqrt((x_pred - x_obs)**2 + (y_pred - y_obs)**2)
+
+    # 4. Calculate the Observation Priority Index (OPI)
+    time_since_last_obs = current_date - t_last_obs
+
+    # Avoid division by zero or inflated values for very recent observations
+    if time_since_last_obs < 0.01:  # Approximately 4 days
+        # For a very recent observation, the rate is less meaningful than the deviation itself.
+        # We can assign a high OPI if the deviation is significant, otherwise it's low.
+        opi = deviation_arcsec / 0.01 if deviation_arcsec > 0 else 0.0
+    else:
+        opi = deviation_arcsec / time_since_last_obs
+
+    return opi, deviation_arcsec

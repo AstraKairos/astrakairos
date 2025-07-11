@@ -9,7 +9,10 @@ from astrakairos.physics.dynamics import (
     calculate_radial_velocity,
     estimate_period_from_motion,
     calculate_orbit_coverage,
+    calculate_observation_priority_index
 )
+
+from astrakairos.physics.kepler import predict_position
 
 # --- Pruebas para calculate_velocity_vector ---
 
@@ -148,3 +151,126 @@ def test_orbit_coverage_without_period():
     data = {'date_first': 1985.5, 'date_last': 2020.0}
     coverage = calculate_orbit_coverage(data, None)
     assert np.isclose(coverage, 34.5)
+
+# Implement tests for the OPI
+
+@pytest.fixture
+def sample_orbital_elements():
+    """Fixture que proporciona un conjunto de elementos orbitales realistas y completos."""
+    return {
+        'P': 100.0,      # Periodo: 100 años
+        'T': 2000.0,     # Periastron: año 2000.0
+        'e': 0.5,        # Excentricidad
+        'a': 2.0,        # Semieje mayor en arcosegundos
+        'i': 45.0,       # Inclinación en grados
+        'Omega': 90.0,   # Longitud del nodo ascendente en grados
+        'omega': 30.0    # Argumento del periastron en grados
+    }
+
+def test_opi_ideal_case(sample_orbital_elements):
+    """
+    Tests an ideal case with a clear, programmatically generated deviation.
+    This test is robust and does not rely on hard-coded intermediate values.
+    """
+    t_last_obs = 2010.0
+    current_date = 2020.0
+
+    # Step 1: Get the TRUE predicted position from the orbital model.
+    # This avoids any incorrect hard-coded assumptions.
+    theta_pred_deg, rho_pred = predict_position(sample_orbital_elements, t_last_obs)
+
+    # Step 2: Create a fictional "observed" position by introducing a known offset.
+    # This makes the deviation deterministic and testable.
+    observed_pa = theta_pred_deg + 5.0  # Simulate a +5 degree error in PA
+    observed_sep = rho_pred + 0.1      # Simulate a +0.1" error in separation
+    
+    last_observation = {
+        'date_last': t_last_obs, 
+        'pa_last': observed_pa, 
+        'sep_last': observed_sep
+    }
+
+    # Step 3: Calculate the expected deviation based on our known values.
+    # This calculation mimics the internal logic of the function we are testing.
+    theta_pred_rad = np.radians(theta_pred_deg)
+    observed_rad = np.radians(observed_pa)
+    
+    x_pred = rho_pred * np.sin(theta_pred_rad)
+    y_pred = rho_pred * np.cos(theta_pred_rad)
+    x_obs = observed_sep * np.sin(observed_rad)
+    y_obs = observed_sep * np.cos(observed_rad)
+    
+    expected_deviation = np.sqrt((x_pred - x_obs)**2 + (y_pred - y_obs)**2)
+    expected_opi = expected_deviation / (current_date - t_last_obs)
+
+    # Step 4: Call the function under test.
+    opi, deviation = calculate_observation_priority_index(
+        sample_orbital_elements, last_observation, current_date
+    )
+
+    # Step 5: Assert that the function's results match our robustly calculated expected values.
+    assert np.isclose(deviation, expected_deviation)
+    assert np.isclose(opi, expected_opi)
+
+def test_opi_no_deviation(sample_orbital_elements):
+    """
+    Verifica que el OPI es (casi) cero si la observación coincide perfectamente con la predicción.
+    """
+    # Predecimos la posición para 2015.0 para crear una observación "perfecta"
+    t_obs = 2015.0
+    predicted_pa, predicted_sep = predict_position(sample_orbital_elements, t_obs)
+    
+    last_observation = {'date_last': t_obs, 'pa_last': predicted_pa, 'sep_last': predicted_sep}
+    current_date = 2025.0
+    
+    opi, deviation = calculate_observation_priority_index(
+        sample_orbital_elements, last_observation, current_date
+    )
+    
+    assert np.isclose(deviation, 0.0, atol=1e-9)
+    assert np.isclose(opi, 0.0, atol=1e-9)
+
+def test_opi_returns_none_for_incomplete_orbit_data(sample_orbital_elements):
+    """
+    Verifica que la función devuelve None si faltan elementos orbitales clave.
+    """
+    incomplete_elements = sample_orbital_elements.copy()
+    del incomplete_elements['P']  # Eliminamos el período, un elemento esencial
+
+    last_observation = {'date_last': 2010.0, 'pa_last': 105.0, 'sep_last': 1.6}
+    current_date = 2020.0
+    
+    result = calculate_observation_priority_index(
+        incomplete_elements, last_observation, current_date
+    )
+    
+    assert result is None
+
+def test_opi_returns_none_for_incomplete_observation_data(sample_orbital_elements):
+    """
+    Verifica que la función devuelve None si faltan datos de la última observación.
+    """
+    last_observation = {'date_last': 2010.0, 'pa_last': None, 'sep_last': 1.6} # pa_last es None
+    current_date = 2020.0
+    
+    result = calculate_observation_priority_index(
+        sample_orbital_elements, last_observation, current_date
+    )
+    
+    assert result is None
+
+def test_opi_handles_prediction_failure(sample_orbital_elements):
+    """
+    Verifica que la función maneja correctamente un fallo en predict_position (ej. P=0).
+    """
+    bad_elements = sample_orbital_elements.copy()
+    bad_elements['P'] = 0 # El período cero causará un error de división en la predicción
+    
+    last_observation = {'date_last': 2010.0, 'pa_last': 105.0, 'sep_last': 1.6}
+    current_date = 2020.0
+    
+    result = calculate_observation_priority_index(
+        bad_elements, last_observation, current_date
+    )
+    
+    assert result is None

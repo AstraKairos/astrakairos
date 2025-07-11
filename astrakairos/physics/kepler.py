@@ -1,62 +1,63 @@
 import numpy as np
 from typing import Dict, Tuple
 
-def solve_kepler(M_rad: float, e: float, tol: float = 1e-10) -> float:
+def solve_kepler(M_rad: float, e: float, tol: float = 1e-12) -> float:
     """
     Solves Kepler's equation (M = E - e*sin(E)) for Eccentric Anomaly (E)
-    using the Newton-Raphson method with a robust initial guess.
+    using the Newton-Raphson method with a robust, hybrid initial guess strategy.
+
+    This implementation is optimized for stability and speed across all
+    elliptical eccentricities (0 <= e < 1).
 
     Args:
         M_rad: Mean anomaly in radians.
         e: Eccentricity of the orbit (0 <= e < 1).
-        tol: The desired precision for convergence.
+        tol: The desired precision for convergence (aka. "Tolerance").
 
     Returns:
         The Eccentric Anomaly (E) in radians.
     """
-    # 1. Normalize Mean Anomaly to be within [-pi, pi] for better initial guess and convergence.
-    # This ensures consistency for the iterative solver.
+    # 1. Normalize Mean Anomaly to be within [-pi, pi] for better convergence.
     M_norm = M_rad % (2 * np.pi)
     if M_norm > np.pi:
         M_norm -= 2 * np.pi
-    
-    # 2. Provide a robust initial guess for Eccentric Anomaly (E).
-    # This approximation (often found in advanced texts on orbital mechanics)
-    # significantly improves convergence speed and robustness across various eccentricities.
-    E = M_norm + e * np.sin(M_norm) * (1 + e * np.cos(M_norm))
-    
+    elif M_norm < -np.pi:
+        M_norm += 2 * np.pi
+
+    # 2. Provide a robust initial guess for Eccentric Anomaly (E) using a
+    #    hybrid strategy based on eccentricity.
+    if e < 0.8:
+        # For low to moderate eccentricities, a second-order approximation is very effective.
+        E = M_norm + e * np.sin(M_norm) * (1.0 + e * np.cos(M_norm))
+    else:
+        # For high eccentricities (e -> 1), this simpler guess is more stable.
+        # It ensures the initial guess E is on the correct side of pi.
+        E = M_norm + e * np.sign(np.sin(M_norm))
+        # A small correction for M_norm near 0 or pi
+        if abs(E) > np.pi * 0.9: 
+             E = M_norm + e
+
     # 3. Newton-Raphson iteration loop.
     # The function to find the root of is f(E) = E - e*sin(E) - M_norm = 0
     # Its derivative is f'(E) = 1 - e*cos(E)
     # The iteration step is E_next = E - f(E) / f'(E)
-    
-    max_iter = 100 # Safety limit to prevent infinite loops in edge cases.
+
+    max_iter = 15  # Safety limit. With good initial guesses, it rarely needs more than 3-4.
     for _ in range(max_iter):
         f_E = E - e * np.sin(E) - M_norm
-        f_prime_E = 1 - e * np.cos(E)
+        f_prime_E = 1.0 - e * np.cos(E)
 
-        # Handle very small f_prime_E (denominator) to prevent division by zero,
-        # especially for extreme eccentricities or when E is near pi.
-        if abs(f_prime_E) < 1e-15: 
-            # If the derivative is too small, the method may fail or diverge.
-            # In a production system, one might fallback to a safer (but slower) method like bisection here.
-            break # Exit loop, return current best estimate
-        
-        delta = f_E / f_prime_E # The correction step
-        
-        # Heuristic to detect potential divergence early and prevent wild steps.
-        # If the step is too large (e.g., larger than a full circle), something might be wrong.
-        if abs(delta) > np.pi * 2: 
-            break # Exit loop, return current best estimate
+        # The correction step
+        delta = f_E / f_prime_E
         
         E -= delta # Update E
-        
-        # Check for convergence: if the correction step (delta) is smaller than the tolerance.
+
+        # Check for convergence: if the correction step is smaller than the tolerance.
         if abs(delta) < tol:
             return E
-            
-    # If the solver does not converge within max_iter, return the last calculated estimate.
-    # For typical orbital elements (e < 1), this case should rarely be reached.
+
+    # If the solver does not converge (extremely rare for e < 1),
+    # return the last calculated estimate.
     return E
 
 def predict_position(orbital_elements: Dict[str, float], date: float) -> Tuple[float, float]:

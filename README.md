@@ -99,7 +99,7 @@ This roadmap outlines the planned features for the AstroKairos suite. The develo
     - [ ] Integrate **SIMBAD** name resolution (via `astroquery`) to find objects by common names (e.g., "Sirius").
 
 **Scientific Engine (`physics` module)**
-- [x] **Kepler's Equation Solver:** Implement a high-precision, robust numerical solver by combining different solving methods.
+- [x] **Kepler's Equation Solver:** Implement a high-precision, robust numerical solver by using an advanced initial guess combined with a fast Newton-Raphson refiner.
 - [ ] **Orbital Prediction Engine:**
     - [ ] Predict precise ephemerides (PA/Sep) for any date from known orbital elements.
     - [ ] Calculate all orbital anomalies (Mean, Eccentric, True) for analysis.
@@ -161,6 +161,7 @@ This roadmap outlines the planned features for the AstroKairos suite. The develo
     - [ ] A pipeline to search for stellar remnants by analyzing astrometric accelerations.
     - [ ] A pipeline to perform statistical analysis on the binary-metallicity-planet connection.
 - [ ] **Asteroid/Comet Module:** Implement tools for orbit determination and ephemeris prediction.
+- [ ] **Kepler's equation solver with universal variables:** Implement universal variables for a more general Kepler's equation solver (specifically, more robust, with objects like asteroids in mind).
 
 ## Contributing
 
