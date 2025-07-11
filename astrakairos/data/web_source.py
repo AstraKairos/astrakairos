@@ -9,13 +9,15 @@ from .source import DataSource
 class StelleDoppieDataSource(DataSource):
     """Data source implementation using Stelle Doppie web scraping."""
     
-    def __init__(self, session: aiohttp.ClientSession):
+    def __init__(self, session: aiohttp.ClientSession, max_retries: int = 3):
         """
         Initialize the web data source.
         
         Args:
             session: aiohttp ClientSession for making HTTP requests
+            max_retries: Maximum number of retries for fetching data, defaults to 3.
         """
+        self.max_retries = max_retries
         self.session = session
         self.base_url = "https://www.stelledoppie.it/"
     
@@ -28,7 +30,7 @@ class StelleDoppieDataSource(DataSource):
         wds_clean = str(wds_name).strip().replace(' ', '+')
         return wds_clean
     
-    async def _fetch_star_page(self, wds_name: str, max_retries: int = 3) -> Optional[str]:
+    async def _fetch_star_page(self, wds_name: str) -> Optional[str]:
         """Fetch the HTML content for a star's detail page."""
         wds_q = self._clean_wds_name(wds_name)
         if not wds_q:
@@ -36,7 +38,7 @@ class StelleDoppieDataSource(DataSource):
         
         search_url = f"{self.base_url}index2.php?cerca_database={wds_q}&azione=cerca_testo_database&nofilter=1&section=2&ricerca=+Search+"
         
-        for attempt in range(max_retries):
+        for attempt in range(self.max_retries):
             try:
                 async with self.session.get(search_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
                     response.raise_for_status()
@@ -75,7 +77,7 @@ class StelleDoppieDataSource(DataSource):
                     return None
                     
             except asyncio.TimeoutError:
-                if attempt < max_retries - 1:
+                if attempt < self.max_retries - 1:
                     await asyncio.sleep(2 ** attempt)
                 else:
                     return None
