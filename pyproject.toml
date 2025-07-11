@@ -26,7 +26,10 @@ dependencies = [
     "beautifulsoup4",
     "pyephem",
     "pytz",
-    "astroquery"
+    "astroquery",
+    "numpy",
+    "astropy",
+    "scipy"
 ]
 
 [project.scripts]
