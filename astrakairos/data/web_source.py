@@ -165,40 +165,58 @@ class StelleDoppieDataSource(DataSource):
         
         orbital_elements = {
             'P': None,      # Period
-            'a': None,      # Semi-major axis
+            'T': None,      # Time of periastron
             'e': None,      # Eccentricity
+            'a': None,      # Semi-major axis
             'i': None,      # Inclination
             'Omega': None,  # Longitude of ascending node
-            'omega': None,  # Argument of periastron
-            'T': None       # Time of periastron
+            'omega': None   # Argument of periastron
         }
         
         try:
-            # Look for orbital elements table or section
+            # Get all text content from the body, or a specific section if available
+            # (e.g., if elements are inside a specific div or table-like structure)
+            # For this format, getting all text content is often sufficient if patterns are unique.
             text = soup.get_text()
             
-            # Patterns for orbital elements
+            # Define refined patterns for orbital elements based on the image format.
+            # Using non-greedy matches (.*?) and capturing groups.
+            # Need to be careful with spaces, newlines, and unit characters (y, a, °)
             patterns = [
-                (r'Period[:\s]*([0-9.]+)\s*(?:years?|yr)?', 'P'),
-                (r'Semi-major axis[:\s]*([0-9.]+)', 'a'),
-                (r'Eccentricity[:\s]*([0-9.]+)', 'e'),
-                (r'Inclination[:\s]*([0-9.]+)', 'i'),
-                (r'Node[:\s]*([0-9.]+)', 'Omega'),
-                (r'Periastron[:\s]*([0-9.]+)', 'omega'),
-                (r'T[:\s]*([0-9.]+)', 'T'),
+                # Period (P) - Look for 'Period (P)' followed by a number and 'y'
+                (r'Period \(P\)\s*([\d.]+)\s*y', 'P'),
+                # Periastron (T) - Look for 'Periastron (T)' followed by a number and 'y'
+                (r'Periastron \(T\)\s*([\d.]+)\s*y', 'T'),
+                # Semi-major axis (a) - Look for 'Semi-major axis \(a\)' followed by a number and 'a'
+                (r'Semi-major axis \(a\)\s*([\d.]+)\s*a', 'a'),
+                # Eccentricity (e) - Look for 'Eccentricity \(e\)' followed by a number
+                (r'Eccentricity \(e\)\s*([\d.]+)', 'e'),
+                # Inclination (i) - Look for 'Inclination \(i\)' followed by a number and '°'
+                (r'Inclination \(i\)\s*([\d.]+)\s*°', 'i'),
+                # Longitude of periastron (omega) - Note: image shows omega (ω) labeled as "Longitude of periastron"
+                # This could be tricky as the code expects 'omega' but label says 'Longitude of periastron'.
+                # Make sure the key matches what is expected downstream.
+                # If the image implies 'omega' is the 'Longitude of periastron', we'll extract it as 'omega'.
+                (r'Longitude of periastron \(ω\)\s*([\d.]+)\s*°', 'omega'),
+                # Node (Omega) - Look for 'Node (Ω)' followed by a number and '°'
+                (r'Node \(Ω\)\s*([\d.]+)\s*°', 'Omega'),
             ]
             
-            for pattern, field in patterns:
-                match = re.search(pattern, text, re.IGNORECASE)
+            # Apply patterns
+            for pattern_str, field in patterns:
+                match = re.search(pattern_str, text, re.IGNORECASE)
                 if match:
                     try:
                         orbital_elements[field] = float(match.group(1))
                     except ValueError:
+                        # Continue if conversion to float fails for some reason
                         continue
             
             return orbital_elements
             
-        except Exception:
+        except Exception as e:
+            # Log the error for debugging if needed, but return current state
+            print(f"Error extracting orbital elements: {e}")
             return orbital_elements
     
     async def get_wds_data(self, wds_id: str) -> Dict[str, Any]:
