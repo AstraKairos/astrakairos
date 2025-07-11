@@ -1,35 +1,59 @@
 import pandas as pd
+import re
 from typing import List, Dict, Any, Optional
+import csv
 
-def load_csv_data(filepath: str, delimiter: str = ';') -> pd.DataFrame:
+def load_csv_data(filepath: str) -> pd.DataFrame:
     """
-    Load CSV file with star data.
+    Load CSV file with star data, attempting to auto-detect the delimiter.
+    If auto-detection fails, it falls back to common delimiters (semicolon, comma).
     
     Args:
-        filepath: Path to the CSV file
-        delimiter: CSV delimiter (default: ';')
+        filepath: Path to the CSV file.
         
     Returns:
-        DataFrame with the loaded data
+        DataFrame with the loaded data.
+    
+    Raises:
+        Exception: If the CSV file cannot be loaded with any tried delimiter.
     """
     try:
-        # Try with specified delimiter first
-        df = pd.read_csv(filepath, delimiter=delimiter, encoding='utf-8')
-        print(f"CSV loaded successfully. Rows: {len(df)}")
-        return df
-    except Exception as e:
-        print(f"Error loading CSV with delimiter '{delimiter}': {e}")
-        
-        # Try with comma delimiter
-        if delimiter != ',':
+        # Try to auto-detect the delimiter using csv.Sniffer
+        with open(filepath, 'r', encoding='utf-8') as f:
+            # Read a small sample to sniff the dialect
+            sample = f.read(2048) # Read the first 2KB
             try:
-                df = pd.read_csv(filepath, delimiter=',', encoding='utf-8')
-                print(f"CSV loaded with comma delimiter. Rows: {len(df)}")
-                return df
-            except Exception as e2:
-                print(f"Error with comma delimiter: {e2}")
+                dialect = csv.Sniffer().sniff(sample)
+                detected_delimiter = dialect.delimiter
+            except csv.Error:
+                # If sniffing fails (e.g., file too small, no common delimiters found),
+                # fall back to default behavior
+                detected_delimiter = None # Will trigger the fallback
+            
+            f.seek(0) # Rewind the file pointer to the beginning
         
-        raise Exception(f"Could not load CSV file: {filepath}")
+        if detected_delimiter:
+            df = pd.read_csv(filepath, delimiter=detected_delimiter, encoding='utf-8')
+            print(f"CSV loaded successfully with detected delimiter '{detected_delimiter}'. Rows: {len(df)}")
+            return df
+        
+        # Fallback if auto-detection didn't work or detected_delimiter is None
+        # Try semicolon first (common in some regions)
+        print("Auto-detection failed or no delimiter detected. Trying fallback delimiters...")
+        df = pd.read_csv(filepath, delimiter=';', encoding='utf-8')
+        print(f"CSV loaded successfully with semicolon delimiter. Rows: {len(df)}")
+        return df
+
+    except Exception as e_semicolon:
+        print(f"Error loading CSV with semicolon delimiter: {e_semicolon}")
+        try:
+            # Then try comma (most common globally)
+            df = pd.read_csv(filepath, delimiter=',', encoding='utf-8')
+            print(f"CSV loaded successfully with comma delimiter. Rows: {len(df)}")
+            return df
+        except Exception as e_comma:
+            print(f"Error loading CSV with comma delimiter: {e_comma}")
+            raise Exception(f"Could not load CSV file: {filepath}. Tried auto-detection, semicolon, and comma delimiters.")
 
 def save_results_to_csv(results: List[Dict[str, Any]], filepath: str) -> None:
     """
@@ -90,6 +114,9 @@ def parse_wds_designation(wds_id: str) -> Optional[Dict[str, float]]:
         # First 5 chars: RA (HHMMm where m is tenths of minutes)
         # Next 5 chars: Dec (±DDmm where mm is minutes)
         
+        if not re.match(r'^\d{5}[+-]\d{4}', wds_id[:10]):
+            return None # J2000 WDS format
+
         if len(wds_id) < 10:
             return None
         
