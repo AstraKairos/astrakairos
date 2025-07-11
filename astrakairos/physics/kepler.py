@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Dict, Tuple
 
-def solve_kepler(M_rad: float, e: float, tol: float = 1e-12) -> float:
+def solve_kepler(M_rad: float, e: float, tol: float = 1e-12, max_iter: int = 15) -> float:
     """
     Solves Kepler's equation (M = E - e*sin(E)) for Eccentric Anomaly (E)
     using the Newton-Raphson method with a robust, hybrid initial guess strategy.
@@ -13,6 +13,9 @@ def solve_kepler(M_rad: float, e: float, tol: float = 1e-12) -> float:
         M_rad: Mean anomaly in radians.
         e: Eccentricity of the orbit (0 <= e < 1).
         tol: The desired precision for convergence (aka. "Tolerance").
+            - float, default 1e-12
+        max_iter: Maximum number of iterations for the Newton-Raphson method.
+            - int, default 15
 
     Returns:
         The Eccentric Anomaly (E) in radians.
@@ -42,7 +45,7 @@ def solve_kepler(M_rad: float, e: float, tol: float = 1e-12) -> float:
     # Its derivative is f'(E) = 1 - e*cos(E)
     # The iteration step is E_next = E - f(E) / f'(E)
 
-    max_iter = 15  # Safety limit. With good initial guesses, this will likely be more than enoguh.
+    # max_iter = 15  # Safety limit. With good initial guesses, this will likely be more than enoguh.
     for _ in range(max_iter):
         f_E = E - e * np.sin(E) - M_norm
         f_prime_E = 1.0 - e * np.cos(E)

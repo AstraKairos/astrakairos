@@ -60,7 +60,8 @@ def calculate_velocity_vector(data: Dict[str, float]) -> Tuple[float, float]:
     v_total = np.sqrt(vx**2 + vy**2)
     
     # Calculate velocity position angle
-    # arctan2(vx, vy) because PA is from North through East
+    # arctan2(vx, vy) because PA is from North through East - Regular arctan wouldn't handle quadrant correctly
+    # Note: vx is East component, vy is North component
     pa_v_rad = np.arctan2(vx, vy)
     pa_v_deg = np.degrees(pa_v_rad)
     
@@ -126,17 +127,26 @@ def calculate_radial_velocity(data: Dict[str, float]) -> float:
     
     return radial_velocity
 
-def estimate_period_from_motion(angular_velocity_deg_per_year: float) -> Optional[float]:
+def estimate_period_from_motion(angular_velocity_deg_per_year: float, min_angular_velocity_threshold: float = 0.01) -> Optional[float]:
     """
     Estimate orbital period from angular velocity, assuming circular motion.
     
     Args:
         angular_velocity_deg_per_year: Angular velocity in degrees/year
+        min_angular_velocity_threshold: The minimum absolute angular velocity
+                                        (in degrees/year) below which an orbital
+                                        period estimation is considered unreliable
+                                        or not practically useful. Defaults to 0.01.
         
     Returns:
         Estimated period in years, or None if velocity is too small
     """
-    if abs(angular_velocity_deg_per_year) < 0.01:
+    if abs(angular_velocity_deg_per_year) < min_angular_velocity_threshold:
+        """
+        Small insight on this seemigly arbitrary threshold,
+        A value of 0.01 in the angular velocity corresponds to an orbital period
+        of 36.000 years, which makes it not very useful for practical purposes.
+        """
         return None  # Motion too slow to estimate
     
     # Period = 360° / angular_velocity
@@ -165,8 +175,6 @@ def calculate_orbit_coverage(data: Dict[str, float], period_years: Optional[floa
         return min(coverage, 1.0)  # Cap at 100%
     else:
         return observation_span  # Just return years if no period
-    
-    from .kepler import predict_position  # Ensure this import is present
 
 def calculate_observation_priority_index(
     orbital_elements: Dict[str, float],
@@ -236,12 +244,20 @@ def calculate_observation_priority_index(
     # 4. Calculate the Observation Priority Index (OPI)
     time_since_last_obs = current_date - t_last_obs
 
-    # Avoid division by zero or inflated values for very recent observations
-    if time_since_last_obs < 0.01:  # Approximately 4 days
-        # For a very recent observation, the rate is less meaningful than the deviation itself.
-        # We can assign a high OPI if the deviation is significant, otherwise it's low.
-        opi = deviation_arcsec / 0.01 if deviation_arcsec > 0 else 0.0
+    if time_since_last_obs == 0:
+        # If the observation date is exactly the current date, the rate is undefined.
+        # In this case, the deviation itself is the most direct measure of discrepancy.
+        # We assign an "infinite" OPI if there's a deviation, indicating immediate priority.
+        opi = np.inf if deviation_arcsec > 0 else 0.0
+    elif time_since_last_obs < 0:
+        # If current_date is BEFORE last_observation, this indicates a data anomaly
+        # or a misinterpretation of 'current_date'.
+        # The OPI as a 'rate since last observation' isn't meaningful here.
+        # It's better to return 0 or None, or raise a ValueError depending on strictness.
+        # For simplicity, we'll just return 0.0, indicating no future observation priority.
+        opi = 0.0
     else:
+        # For any positive time difference, calculate the rate directly.
         opi = deviation_arcsec / time_since_last_obs
-
+        
     return opi, deviation_arcsec
