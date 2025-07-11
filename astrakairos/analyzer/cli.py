@@ -157,10 +157,6 @@ Examples:
                        default=2,
                        help='Minimum number of observations (default: 2)')
     
-    parser.add_argument('--validate-gaia',
-                       action='store_true',
-                       help='Validate physicality using Gaia data')
-    
     # Output options
     parser.add_argument('--output', '-o',
                        help='Output CSV file for results')
