@@ -5,6 +5,8 @@ __pycache__/
 
 # Data
 *.csv
+*.bsp
+*.bsp.download
 
 # C extensions
 *.so

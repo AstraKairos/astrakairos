@@ -123,7 +123,7 @@ Special thanks to the creators and maintainers of **Stelle Doppie** for providin
 
 The locations found at /locations.json are derived from **Stellarium**'s location database. Thanks to them too!
 
-This project also stands on the shoulders of giants in the open-source scientific Python ecosystem, including **NumPy**, **Pandas**, **Astropy**, and **PyEphem**.
+This project also stands on the shoulders of giants in the open-source scientific Python ecosystem, including **NumPy**, **SciPy**, **Pandas**, **Astropy**, and **Skyfield**.
 
 Additionally, this project was developed with the assistance of AI-powered tools such as OpenAI's **ChatGPT**. These tools were used for tasks including generating boilerplate code, debugging algorithms, and writing/translating documentation. All AI-assisted output was carefully reviewed, tested, and adapted by the human author to ensure its viability and correctness for real-world research environments.
 

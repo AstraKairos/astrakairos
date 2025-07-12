@@ -1,302 +1,372 @@
-import ephem
-import datetime
-from datetime import timedelta
-import pytz
-from typing import Dict, Tuple, Optional, Any
-import numpy as np
+# astrakairos/planner/calculations.py
 
-def calculate_sun_moon_info(observer: ephem.Observer, obs_date: datetime.datetime, 
-                          timezone: str = 'UTC') -> Dict[str, Any]:
+import numpy as np
+from datetime import datetime, timedelta
+import pytz
+from typing import Dict, Any, Tuple
+
+from skyfield.api import load, wgs84
+from skyfield.almanac import find_discrete, risings_and_settings
+from skyfield import almanac
+
+# --- Global objects for Skyfield ---
+# These are loaded once when the module is imported for efficiency.
+# Skyfield will download the necessary ephemeris data on the first run.
+ts = load.timescale()
+eph = load('de421.bsp')
+earth = eph['earth']
+sun = eph['sun']
+moon = eph['moon']
+
+
+def get_observer_location(latitude_deg: float, longitude_deg: float, altitude_m: float):
     """
-    Calculate sun, moon, and zenith information for the given observer and date.
+    Creates a Skyfield geographic location object (topos).
+
+    Args:
+        latitude_deg: Latitude in decimal degrees (+N, -S).
+        longitude_deg: Longitude in decimal degrees (+E, -W).
+        altitude_m: Altitude in meters.
+
+    Returns:
+        A Skyfield topos object representing the observer's location.
+    """
+    return wgs84.latlon(latitude_deg, longitude_deg, elevation_m=altitude_m)
+
+
+def calculate_astronomical_midnight(observer_location, obs_date: datetime, timezone: str = 'UTC') -> Dict[str, Any]:
+    """
+    Calculates the astronomical midnight (when the Sun reaches its lowest point below the horizon).
     
     Args:
-        observer: PyEphem observer object
+        observer_location: Skyfield topos object
         obs_date: Observation date
-        timezone: Timezone string
+        timezone: Timezone string for local time conversion
         
     Returns:
-        Dictionary with sun/moon rise/set times (local and UTC), moon phase, and zenith coordinates.
+        Dictionary with astronomical midnight times in UTC and local time
     """
-    observer.date = obs_date
-    sun = ephem.Sun()
-    moon = ephem.Moon()
     local_tz = pytz.timezone(timezone)
+    
+    # Create a 48-hour window to ensure we capture sunset and sunrise
+    t0_utc = datetime(obs_date.year, obs_date.month, obs_date.day, 0, 0, 0)
+    t2_utc = t0_utc + timedelta(days=2)
+    
+    # Find Sun's minimum altitude (astronomical midnight)
+    observer = earth + observer_location
+    
+    # Create time range with higher resolution for accurate minimum finding
+    times = []
+    altitudes = []
+    
+    # Sample every 10 minutes over 48 hours
+    current_time = t0_utc
+    while current_time < t2_utc:
+        utc_time = pytz.utc.localize(current_time)
+        t = ts.from_datetime(utc_time)
+        
+        sun_apparent = observer.at(t).observe(sun).apparent()
+        sun_alt, _, _ = sun_apparent.altaz()
+        
+        times.append(current_time)
+        altitudes.append(sun_alt.degrees)
+        
+        current_time += timedelta(minutes=10)
+    
+    # Find the minimum altitude (astronomical midnight)
+    min_idx = np.argmin(altitudes)
+    astronomical_midnight_utc = times[min_idx]
+    
+    # Convert to local time
+    astronomical_midnight_local = pytz.utc.localize(astronomical_midnight_utc).astimezone(local_tz)
+    
+    return {
+        'astronomical_midnight_utc': astronomical_midnight_utc,
+        'astronomical_midnight_local': astronomical_midnight_local,
+        'sun_altitude_at_midnight': altitudes[min_idx]
+    }
+
+
+def get_nightly_events(observer_location, obs_date: datetime, timezone: str = 'UTC') -> Dict[str, Any]:
+    """
+    Calculates all relevant astronomical events for a given observation night.
+    
+    This robust version uses specific almanac functions for each event and correctly
+    calculates temporal midnight (the midpoint between sunset and sunrise).
+    """
+    local_tz = pytz.timezone(timezone)
+    
+    # Define a 24-hour window around the observation night, from noon to noon.
+    t0_utc = datetime(obs_date.year, obs_date.month, obs_date.day, 12, 0, 0)
+    t1_utc = t0_utc + timedelta(days=1)
+    t0 = ts.from_datetime(pytz.utc.localize(t0_utc))
+    t1 = ts.from_datetime(pytz.utc.localize(t1_utc))
+
+    # Helper to find the first 'set' (event code 0) and 'rise' (event code 1)
+    def find_set_rise(times, events):
+        set_time = None
+        rise_time = None
+        for t, e in zip(times, events):
+            if e == 0 and set_time is None:
+                set_time = t.utc_datetime()
+            elif e == 1 and rise_time is None:
+                rise_time = t.utc_datetime()
+        return set_time, rise_time
+
+    # --- Sun Events ---
+    f_sun = almanac.risings_and_settings(eph, sun, observer_location, horizon_degrees=-0.833)
+    sun_times, sun_events = find_discrete(t0, t1, f_sun)
+    sunset_time, sunrise_time = find_set_rise(sun_times, sun_events)
+
+    # --- Twilight Events ---
+    f_civil = almanac.risings_and_settings(eph, sun, observer_location, horizon_degrees=-6.0)
+    civil_times, civil_events = find_discrete(t0, t1, f_civil)
+    civil_twilight_end, civil_twilight_start = find_set_rise(civil_times, civil_events)
+
+    f_nautical = almanac.risings_and_settings(eph, sun, observer_location, horizon_degrees=-12.0)
+    nautical_times, nautical_events = find_discrete(t0, t1, f_nautical)
+    nautical_twilight_end, nautical_twilight_start = find_set_rise(nautical_times, nautical_events)
+    
+    f_astro = almanac.risings_and_settings(eph, sun, observer_location, horizon_degrees=-18.0)
+    astro_times, astro_events = find_discrete(t0, t1, f_astro)
+    astro_twilight_end, astro_twilight_start = find_set_rise(astro_times, astro_events)
+
+    # --- Moon Events ---
+    f_moon = risings_and_settings(eph, moon, observer_location)
+    moon_times, moon_events = find_discrete(t0, t1, f_moon)
+    moonset_time, moonrise_time = find_set_rise(moon_times, moon_events)
 
     results = {
-        'sunset_local': None, 'sunset_utc': None, 
-        'sunrise_local': None, 'sunrise_utc': None, 
-        'midnight_local': None, 'midnight_utc': None,
-        'moonrise_local': None, 'moonrise_utc': None, 
-        'moonset_local': None, 'moonset_utc': None, 
-        'moon_phase': 0, 'moon_alt': 0, 'moon_az': 0,
-        'zenith_ra_str': 'N/A', 'zenith_dec_str': 'N/A'
+        'sunset_utc': sunset_time,
+        'civil_twilight_end': civil_twilight_end,
+        'nautical_twilight_end': nautical_twilight_end,
+        'astronomical_twilight_end': astro_twilight_end,
+        'astronomical_twilight_start': astro_twilight_start,
+        'nautical_twilight_start': nautical_twilight_start,
+        'civil_twilight_start': civil_twilight_start,
+        'sunrise_utc': sunrise_time,
+        'moonrise_utc': moonrise_time,
+        'moonset_utc': moonset_time,
     }
 
-    # --- Calculate sun times and midnight ---
-    try:
-        sunset_ephem = observer.next_setting(sun)
-        sunrise_ephem = observer.next_rising(sun)
-        
-        # Adjust if sunrise is on the next day
-        if sunrise_ephem < sunset_ephem:
-            sunset_ephem = observer.previous_setting(sun)
-            
-        # Get UTC datetime objects from ephem.Date
-        sunset_utc_dt = sunset_ephem.datetime()
-        sunrise_utc_dt = sunrise_ephem.datetime()
-
-        results['sunset_utc'] = sunset_utc_dt
-        results['sunrise_utc'] = sunrise_utc_dt
-        
-        # Convert to local time
-        results['sunset_local'] = pytz.utc.localize(sunset_utc_dt).astimezone(local_tz)
-        results['sunrise_local'] = pytz.utc.localize(sunrise_utc_dt).astimezone(local_tz)
-        
-        # Calculate midnight (midpoint of the night)
-        if sunrise_utc_dt < sunset_utc_dt: # If sunrise is effectively on the next calendar day
-             sunrise_utc_dt_adjusted = sunrise_utc_dt + timedelta(days=1)
+    # --- **FIX**: Calculate Temporal Midnight here ---
+    temporal_midnight_utc = None
+    if sunset_time and sunrise_time:
+        # Handle the case where sunrise is the next calendar day
+        if sunrise_time < sunset_time:
+            sunrise_next_day = sunrise_time + timedelta(days=1)
+            temporal_midnight_utc = sunset_time + (sunrise_next_day - sunset_time) / 2
         else:
-             sunrise_utc_dt_adjusted = sunrise_utc_dt
-
-        midnight_utc_dt = sunset_utc_dt + (sunrise_utc_dt_adjusted - sunset_utc_dt) / 2
-        results['midnight_utc'] = midnight_utc_dt
-        results['midnight_local'] = pytz.utc.localize(midnight_utc_dt).astimezone(local_tz)
-        
-    except ephem.CircumpolarError:
-        # If sun is circumpolar, approximate midnight as 12 hours after the start of the day
-        midnight_utc_dt = datetime.datetime.combine(obs_date, datetime.time(12, 0)) # noon of obs_date
-        results['midnight_utc'] = midnight_utc_dt
-        results['midnight_local'] = pytz.utc.localize(midnight_utc_dt).astimezone(local_tz)
-        # sunset/sunrise remain None
+            temporal_midnight_utc = sunset_time + (sunrise_time - sunset_time) / 2
     
-    # --- Calculate Moon Info ---
-    # Reset observer date to the calculated midnight for moon position and phase
-    observer.date = ephem.Date(results['midnight_utc'])
-    moon.compute(observer)
-    results['moon_phase'] = moon.phase
-    results['moon_alt'] = np.degrees(float(moon.alt))
-    results['moon_az'] = np.degrees(float(moon.az))
+    results['temporal_midnight_utc'] = temporal_midnight_utc
+    # --- End of Fix ---
 
-    # Reset observer date to start of observation day for moon rise/set calculations
-    observer.date = obs_date
-    try:
-        moonrise_ephem = observer.next_rising(moon)
-        moonset_ephem = observer.next_setting(moon)
-        
-        # Adjust if moonset is on the next day
-        if moonrise_ephem < moonset_ephem:
-            moonset_ephem = observer.previous_setting(moon)
+    # Calculate astronomical midnight and add it to the results
+    midnight_data = calculate_astronomical_midnight(observer_location, obs_date, timezone)
+    results.update(midnight_data)
 
-        moonrise_utc_dt = moonrise_ephem.datetime()
-        moonset_utc_dt = moonset_ephem.datetime()
-
-        results['moonrise_utc'] = moonrise_utc_dt
-        results['moonset_utc'] = moonset_utc_dt
-        results['moonrise_local'] = pytz.utc.localize(moonrise_utc_dt).astimezone(local_tz)
-        results['moonset_local'] = pytz.utc.localize(moonset_utc_dt).astimezone(local_tz)
-        
-    except ephem.CircumpolarError:
-        # moonrise/moonset remain None
-        pass
-    
+    # Add local time versions for all found events
+    for key, val in list(results.items()):
+        if isinstance(val, datetime) and not key.endswith('_local') and key.endswith('_utc'):
+            results[key.replace('_utc', '_local')] = val.astimezone(local_tz)
+        elif not val and not key.endswith('_local') and key.endswith('_utc'):
+            results[key.replace('_utc', '_local')] = None
+            
     return results
 
-def calculate_optimal_region(observer: ephem.Observer, obs_date: datetime.datetime,
-                           min_altitude: float = 40.0) -> Dict[str, Any]:
-    """
-    Calculates the optimal observation region based on moon position and zenith.
-    It also calculates and returns the formatted coordinates of the zenith at midnight.
 
-    Args:
-        observer: A PyEphem observer object, configured with lat/lon.
-        obs_date: The starting date of the observation night.
-        min_altitude: The minimum altitude below the zenith for the region, in degrees.
-
-    Returns:
-        A dictionary containing:
-        - 'ra_range': (min_hours, max_hours) for the optimal RA region.
-        - 'dec_range': (min_deg, max_deg) for the optimal Dec region.
-        - 'moon_visible': A boolean indicating if the moon is up at midnight.
-        - 'strategy': A string ('opposite_moon' or 'zenith') describing the logic used.
-        - 'zenith_ra_str': Formatted RA of the zenith.
-        - 'zenith_dec_str': Formatted Dec of the zenith.
-    """
-    # 1. Calculate the time of astronomical midnight for the given night
-    observer.date = obs_date
-    sun = ephem.Sun()
-    
-    try:
-        sunset = observer.next_setting(sun)
-        sunrise = observer.next_rising(sun)
-        if sunrise < sunset:
-            sunset = observer.previous_setting(sun)
+def calculate_sky_conditions_at_time(observer_location, time_utc: datetime) -> Dict[str, Any]:
+    """Calculates moon and zenith properties for a specific moment in time."""
+    if not time_utc.tzinfo:
+        time_utc = pytz.utc.localize(time_utc)
         
-        # Midnight is the midpoint between sunset and the next sunrise
-        midnight_utc = sunset.datetime() + (sunrise.datetime() - sunset.datetime()) / 2
-        midnight_ephem = ephem.Date(midnight_utc)
-
-    except ephem.CircumpolarError:
-        # For polar regions, approximate midnight as 12 hours after the start of the day
-        midnight_ephem = ephem.Date(obs_date + timedelta(hours=12))
+    t = ts.from_datetime(time_utc)
+    observer = earth + observer_location
     
-    # 2. Set the observer to the calculated midnight time
-    observer.date = midnight_ephem
+    # Moon properties
+    moon_apparent = observer.at(t).observe(moon).apparent()
+    moon_alt, moon_az, _ = moon_apparent.altaz()
+    moon_ra, moon_dec, _ = moon_apparent.radec()
     
-    # 3. Determine if the moon is a factor at midnight
-    moon = ephem.Moon()
-    moon.compute(observer)
-    moon_visible = float(moon.alt) > 0
+    # Calculate moon phase
+    sun_apparent = observer.at(t).observe(sun).apparent()
+    moon_phase_percent = almanac.fraction_illuminated(eph, 'moon', t) * 100.0
+
+    # Zenith properties
+    zenith_apparent = observer.at(t).from_altaz(alt_degrees=90, az_degrees=0)
+    zenith_ra, zenith_dec, _ = zenith_apparent.radec()
     
-    # 4. Calculate the Zenith coordinates at midnight
-    # The Zenith's RA is the local sidereal time.
-    # The Zenith's Dec is the observer's latitude.
-    zenith_ra_rad = float(observer.sidereal_time())
-    zenith_dec_rad = float(observer.lat)
+    # Format RA and Dec strings manually
+    def format_ra_hours(hours):
+        h = int(hours)
+        m = int((hours - h) * 60)
+        s = int(((hours - h) * 60 - m) * 60)
+        return f"{h:02d}h{m:02d}m{s:02d}s"
     
-    # 5. Calculate the optimal declination range
-    # This is a band from the zenith down to a minimum altitude.
-    min_altitude_rad = np.radians(min_altitude)
-    dec_min_rad = zenith_dec_rad - (np.pi/2 - min_altitude_rad) # Corrected logic: zenith is 90 deg alt
-    dec_max_rad = zenith_dec_rad
+    def format_dec_degrees(degrees):
+        sign = "+" if degrees >= 0 else "-"
+        abs_deg = abs(degrees)
+        d = int(abs_deg)
+        m = int((abs_deg - d) * 60)
+        s = int(((abs_deg - d) * 60 - m) * 60)
+        return f"{sign}{d:02d}°{m:02d}'{s:02d}\""
     
-    # Ensure Dec range is valid
-    dec_min_rad = max(dec_min_rad, -np.pi/2) # Clamp at -90 deg
-    dec_max_rad = min(dec_max_rad, np.pi/2)  # Clamp at +90 deg
-
-    # 6. Calculate the optimal Right Ascension range based on strategy
-    strategy = 'zenith'
-    if moon_visible:
-        # Strategy 1: Moon is up. Observe on the opposite side of the sky.
-        strategy = 'opposite_moon'
-        moon_ra_rad = float(moon.ra)
-        ra_center_rad = moon_ra_rad + np.pi  # 180 degrees opposite
-    else:
-        # Strategy 2: No moon. Observe around the zenith.
-        ra_center_rad = zenith_ra_rad
-
-    # Define a search window of +/- 3 hours (45 degrees) around the center RA
-    ra_window_rad = np.radians(45.0) # 3 hours * 15 deg/hour
-    ra_min_rad = ra_center_rad - ra_window_rad
-    ra_max_rad = ra_center_rad + ra_window_rad
-    
-    # 7. Format all results for the return dictionary
-
-    # Format Zenith RA
-    ra_hours = np.degrees(zenith_ra_rad) / 15.0
-    ra_h = int(ra_hours)
-    ra_m = int((ra_hours - ra_h) * 60)
-    ra_s = ((ra_hours - ra_h) * 60 - ra_m) * 60
-    zenith_ra_str = f"{ra_h:02d}h {ra_m:02d}m {ra_s:04.1f}s"
-    
-    # Format Zenith Dec
-    dec_degrees = np.degrees(zenith_dec_rad)
-    dec_sign = "+" if dec_degrees >= 0 else "-"
-    dec_abs = abs(dec_degrees)
-    dec_d = int(dec_abs)
-    dec_m = int((dec_abs - dec_d) * 60)
-    dec_s = ((dec_abs - dec_d) * 60 - dec_m) * 60
-    zenith_dec_str = f"{dec_sign}{dec_d:02d}° {dec_m:02d}' {dec_s:04.1f}\""
-
-    # Convert RA/Dec ranges to hours and degrees for the return value
-    ra_min_hours = np.degrees(ra_min_rad % (2 * np.pi)) / 15.0
-    ra_max_hours = np.degrees(ra_max_rad % (2 * np.pi)) / 15.0
-    dec_min_deg = np.degrees(dec_min_rad)
-    dec_max_deg = np.degrees(dec_max_rad)
-
-    # Handle RA wrap-around for display (e.g., from 23h to 2h)
-    if ra_min_hours > ra_max_hours:
-        # This indicates the range crosses the 0h line.
-        # The logic downstream should handle this, but for now we return the values.
-        pass
-
     return {
-        'ra_range': (ra_min_hours, ra_max_hours),
-        'dec_range': (dec_min_deg, dec_max_deg),
-        'moon_visible': moon_visible,
-        'strategy': strategy,
-        'zenith_ra_str': zenith_ra_str,
-        'zenith_dec_str': zenith_dec_str
+        'moon_alt_deg': moon_alt.degrees,
+        'moon_az_deg': moon_az.degrees,
+        'moon_ra_hours': moon_ra.hours,
+        'moon_dec_deg': moon_dec.degrees,
+        'moon_phase_percent': moon_phase_percent,
+        'zenith_ra_hours': zenith_ra.hours,
+        'zenith_dec_deg': zenith_dec.degrees,
+        'zenith_ra_str': format_ra_hours(zenith_ra.hours),
+        'zenith_dec_str': format_dec_degrees(zenith_dec.degrees)
     }
 
-def get_twilight_times(observer: ephem.Observer, obs_date: datetime.datetime, 
-                      timezone: str = 'UTC') -> Dict[str, Any]:
-    """
-    Calculate civil, nautical, and astronomical twilight times.
-    
-    Args:
-        observer: PyEphem observer object
-        obs_date: Observation date
-        timezone: Timezone string
-        
-    Returns:
-        Dictionary with twilight times
-    """
-    # Set observer date
-    observer.date = obs_date
-    sun = ephem.Sun()
-    local_tz = pytz.timezone(timezone)
-    
-    # Store original horizon
-    original_horizon = observer.horizon
-    
-    results = {}
-    
-    # Civil twilight (-6°)
-    observer.horizon = '-6'
-    try:
-        civil_end = observer.next_setting(sun, use_center=True)
-        civil_start = observer.next_rising(sun, use_center=True)
-        results['civil_twilight_end'] = pytz.utc.localize(civil_end.datetime()).astimezone(local_tz)
-        results['civil_twilight_start'] = pytz.utc.localize(civil_start.datetime()).astimezone(local_tz)
-    except ephem.CircumpolarError:
-        results['civil_twilight_end'] = None
-        results['civil_twilight_start'] = None
-    
-    # Nautical twilight (-12°)
-    observer.horizon = '-12'
-    try:
-        nautical_end = observer.next_setting(sun, use_center=True)
-        nautical_start = observer.next_rising(sun, use_center=True)
-        results['nautical_twilight_end'] = pytz.utc.localize(nautical_end.datetime()).astimezone(local_tz)
-        results['nautical_twilight_start'] = pytz.utc.localize(nautical_start.datetime()).astimezone(local_tz)
-    except ephem.CircumpolarError:
-        results['nautical_twilight_end'] = None
-        results['nautical_twilight_start'] = None
-    
-    # Astronomical twilight (-18°)
-    observer.horizon = '-18'
-    try:
-        astro_end = observer.next_setting(sun, use_center=True)
-        astro_start = observer.next_rising(sun, use_center=True)
-        results['astronomical_twilight_end'] = pytz.utc.localize(astro_end.datetime()).astimezone(local_tz)
-        results['astronomical_twilight_start'] = pytz.utc.localize(astro_start.datetime()).astimezone(local_tz)
-    except ephem.CircumpolarError:
-        results['astronomical_twilight_end'] = None
-        results['astronomical_twilight_start'] = None
-    
-    # Restore original horizon
-    observer.horizon = original_horizon
-    
-    return results
 
-def calculate_airmass(altitude_deg: float) -> float:
+def get_extinction_coefficient(band: str = 'V') -> float:
     """
-    Calculate airmass for a given altitude.
-    
+    Returns a typical atmospheric extinction coefficient for a given band.
+    Value in magnitudes per airmass.
+    """
+    extinction_coeffs = {'U': 0.6, 'B': 0.4, 'V': 0.2, 'R': 0.1, 'I': 0.08}
+    return extinction_coeffs.get(band.upper(), 0.2)
+
+
+def calculate_airmass(altitude_deg):
+    """
+    Calculates airmass using a robust formula. 
+    Returns inf for altitudes <= 0.
+    Works with both scalar values and numpy arrays.
+    """
+    # Handle both scalar and array inputs
+    if np.isscalar(altitude_deg):
+        if altitude_deg <= 0:
+            return np.inf
+        zenith_angle_rad = np.radians(90.0 - altitude_deg)
+        return 1.0 / np.cos(zenith_angle_rad)
+    else:
+        # Array input
+        zenith_angle_rad = np.radians(90.0 - altitude_deg)
+        airmass = 1.0 / np.cos(zenith_angle_rad)
+        return np.where(altitude_deg <= 0, np.inf, airmass)
+
+
+def generate_sky_quality_map(observer_location, time_utc: datetime, 
+                               min_altitude_deg: float = 30.0,
+                               light_pollution_mag: float = 21.0,
+                               grid_resolution_deg: int = 5) -> Dict[str, Any]:
+    """
+    Generates a full-sky quality map for a given moment in time.
+
+    This advanced function models:
+    - Airmass and atmospheric extinction.
+    - Sky brightness from the Moon.
+    - A base level of light pollution.
+    The goal is to find the patch of sky with the highest observational quality.
+
     Args:
-        altitude_deg: Altitude in degrees above horizon
-        
+        observer_location: Skyfield topos object.
+        time_utc: The specific moment to calculate the map for.
+        min_altitude_deg: The minimum altitude to consider in the map.
+        light_pollution_mag: The base sky brightness in mag/arcsec^2 (zenith, no moon).
+                             (e.g., 22.0 for a pristine site, 18.0 for a city).
+        grid_resolution_deg: The resolution of the sky grid in degrees.
+
     Returns:
-        Airmass value
+        A dictionary containing the RA/Dec of the best patch and the full map data.
     """
-    if altitude_deg <= 0:
-        return float('inf')
+    if not time_utc.tzinfo:
+        time_utc = pytz.utc.localize(time_utc)
     
-    # Pickering (2002) formula
-    altitude_rad = altitude_deg * 3.14159 / 180
-    h = altitude_deg  # height in degrees
+    t = ts.from_datetime(time_utc)
+    observer = earth + observer_location
+    conditions = calculate_sky_conditions_at_time(observer_location, time_utc)
     
-    airmass = 1 / (np.sin(altitude_rad) + 0.50572 * (h + 6.07995) ** -1.6364)
+    # 1. Create a grid of points in the sky (in Alt/Az coordinates)
+    alt_range = np.arange(min_altitude_deg, 90, grid_resolution_deg)
+    az_range = np.arange(0, 360, grid_resolution_deg)
+    az_grid, alt_grid = np.meshgrid(az_range, alt_range)
     
-    return airmass
+    # 2. Model the total sky brightness at each grid point
+    
+    # Start with the base brightness from light pollution
+    sky_brightness = np.full(alt_grid.shape, light_pollution_mag)
+    
+    # Add extinction effect: sky appears darker away from the zenith
+    airmass = np.where(alt_grid <= 0, np.inf, 1.0 / np.cos(np.radians(90.0 - alt_grid)))
+    extinction_v = get_extinction_coefficient('V')
+    sky_brightness += extinction_v * (airmass - 1)
+    
+    # Add moon brightness contribution
+    if conditions['moon_alt_deg'] > 0:
+        moon_alt_rad = np.radians(conditions['moon_alt_deg'])
+        moon_az_rad = np.radians(conditions['moon_az_deg'])
+        alt_rad = np.radians(alt_grid)
+        az_rad = np.radians(az_grid)
+        
+        # Spherical law of cosines for angular separation from moon
+        cos_sep = np.sin(moon_alt_rad) * np.sin(alt_rad) + \
+                  np.cos(moon_alt_rad) * np.cos(alt_rad) * np.cos(moon_az_rad - az_rad)
+        cos_sep = np.clip(cos_sep, -1.0, 1.0)
+        sep_from_moon_deg = np.degrees(np.arccos(cos_sep))
+        
+        # A simplified scattering model (e.g., from Krisciunas & Schaefer 1991)
+        # This models how the moon's light scatters through the atmosphere.
+        phase = conditions['moon_phase_percent']
+        
+        # Protect against numerical issues
+        with np.errstate(divide='ignore', invalid='ignore'):
+            moon_brightening = (
+                10**(-0.4 * (3.84 + 0.026 * phase + 4e-9 * phase**4)) *
+                (0.631 * (1.06 + np.cos(np.radians(sep_from_moon_deg))**2) + 10**(5.36 - sep_from_moon_deg/40.0))
+            )
+            moon_contribution_mag = -2.5 * np.log10(moon_brightening)
+            
+            # Handle potential infinities or NaNs
+            moon_contribution_mag = np.where(np.isfinite(moon_contribution_mag), 
+                                           moon_contribution_mag, 
+                                           sky_brightness)
+        
+        # Combine fluxes (magnitudes are logarithmic, so we must convert to linear flux, add, and convert back)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            sky_flux = 10**(-0.4 * sky_brightness) + 10**(-0.4 * moon_contribution_mag)
+            combined_brightness = -2.5 * np.log10(sky_flux)
+            
+            # Use combined brightness where valid, otherwise use original sky brightness
+            sky_brightness = np.where(np.isfinite(combined_brightness), 
+                                    combined_brightness, 
+                                    sky_brightness)
+        
+    # 3. Calculate a final "Observation Quality" score
+    # We want a dark sky (high sky_brightness value) and low airmass (high altitude).
+    # A good proxy for quality is proportional to (1 / sky_background_flux) / airmass.
+    # Higher score is better.
+    with np.errstate(divide='ignore', invalid='ignore'):
+        quality_score = (10**(0.4 * sky_brightness)) / airmass
+        
+        # Set invalid values to 0 (they won't be selected as best)
+        quality_score = np.where(np.isfinite(quality_score), quality_score, 0)
+    
+    # Find the grid point with the maximum quality score
+    best_idx = np.unravel_index(np.argmax(quality_score), quality_score.shape)
+    best_alt, best_az = alt_grid[best_idx], az_grid[best_idx]
+    
+    # Convert the best Alt/Az back to RA/Dec for astronomical targeting
+    best_patch_apparent = observer.at(t).from_altaz(alt_degrees=float(best_alt), az_degrees=float(best_az))
+    best_ra_obj, best_dec_obj, _ = best_patch_apparent.radec()
+    
+    return {
+        'best_ra_hours': best_ra_obj.hours,
+        'best_dec_deg': best_dec_obj.degrees,
+        'best_alt_deg': float(best_alt),
+        'best_az_deg': float(best_az),
+        'best_quality_score': float(np.max(quality_score)),
+        'sky_map_data': {
+            'alt_grid': alt_grid,
+            'az_grid': az_grid,
+            'quality_map': quality_score,
+            'brightness_map': sky_brightness
+        }
+    }

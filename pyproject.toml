@@ -24,7 +24,7 @@ dependencies = [
     "pandas",
     "aiohttp",
     "beautifulsoup4",
-    "pyephem",
+    "skyfield",
     "pytz",
     "astroquery",
     "numpy",

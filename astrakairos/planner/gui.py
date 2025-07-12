@@ -1,533 +1,348 @@
+# astrakairos/planner/gui.py
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 from tkinter.scrolledtext import ScrolledText
 import json
-import datetime
-from datetime import date
-import ephem
+from datetime import datetime, timedelta
 import webbrowser
-from typing import Optional, Dict, Any
+from typing import Dict, Any
+import pytz
 
+# Importamos el módulo de cálculos actualizado que ahora usa Skyfield
 from ..planner import calculations
-from ..utils import io
 
 class AstraKairosPlannerApp:
     """Main GUI application for the AstraKairos observation planner."""
     
     def __init__(self, root):
         self.root = root
-        self.root.title("AstraKairos - Binary Star Observation Planner")
-        self.root.geometry("800x750")
+        self.root.title("AstraKairos - Observation Planner")
+        self.root.geometry("800x900") # Aumentamos un poco la altura
         self.root.configure(bg='#f0f0f0')
         
-        # Variables
+        # --- Variables de Estado ---
         self.locations = []
         self.filtered_locations = []
         self.selected_location = None
-        self.observer = None
+        self.observer_location = None  # Para el objeto de ubicación de Skyfield
+        
         self.optimal_ra_range = None
         self.optimal_dec_range = None
-        self.moon_position = None
         
-        # Load data
         self.load_locations()
-        
-        # Create interface
         self.create_widgets()
-        
-        # Update initial list
         self.update_location_list()
     
     def load_locations(self):
-        """Load locations from JSON file."""
+        """Load observatory locations from the JSON file."""
         try:
             with open('locations.json', 'r', encoding='utf-8') as f:
                 self.locations = json.load(f)
-            print(f"Loaded {len(self.locations)} locations")
         except FileNotFoundError:
-            messagebox.showerror("Error", "File 'locations.json' not found")
+            messagebox.showerror("Error", "File 'locations.json' not found.")
             self.locations = []
         except json.JSONDecodeError:
-            messagebox.showerror("Error", "Error reading JSON file")
+            messagebox.showerror("Error", "Failed to parse 'locations.json'.")
             self.locations = []
     
     def create_widgets(self):
-        """Create all GUI widgets."""
-        # Main frame
+        """Create all GUI widgets and layout."""
         main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_frame.grid(row=0, column=0, sticky="nsew")
         
-        # Configure grid
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
+        main_frame.columnconfigure(0, weight=1)
         
-        # Title
-        title_label = ttk.Label(main_frame, text="AstraKairos Observation Planner", 
-                               font=('Arial', 16, 'bold'))
-        title_label.grid(row=0, column=0, columnspan=2, pady=(0, 20))
+        title_label = ttk.Label(main_frame, text="AstraKairos Observation Planner", font=('Arial', 16, 'bold'))
+        title_label.grid(row=0, column=0, pady=(0, 20), sticky='n')
         
-        # Location search section
         self._create_location_search_section(main_frame)
-        
-        # Selected location info section
         self._create_location_info_section(main_frame)
-        
-        # Date selection section
         self._create_date_section(main_frame)
-        
-        # Astronomical information section
+        self._create_params_section(main_frame)
         self._create_astro_info_section(main_frame)
-        
-        # Binary star search section
         self._create_binary_search_section(main_frame)
         
-        # Configure row weights
-        main_frame.rowconfigure(4, weight=1)  # Astro info expands
-    
+        main_frame.rowconfigure(5, weight=1)
+
     def _create_location_search_section(self, parent):
-        """Create location search widgets."""
-        search_frame = ttk.LabelFrame(parent, text="Location Search", padding="10")
-        search_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        search_frame.columnconfigure(1, weight=1)
+        frame = ttk.LabelFrame(parent, text="1. Select Observatory Location", padding="10")
+        frame.grid(row=1, column=0, sticky="ew", pady=5)
+        frame.columnconfigure(1, weight=1)
         
-        ttk.Label(search_frame, text="Search:").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(frame, text="Search:").grid(row=0, column=0, sticky=tk.W)
         self.search_var = tk.StringVar()
-        self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=50)
-        self.search_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(5, 0))
-        self.search_var.trace('w', self.on_search_change)
+        self.search_entry = ttk.Entry(frame, textvariable=self.search_var)
+        self.search_entry.grid(row=0, column=1, sticky="ew", padx=5)
+        self.search_var.trace('w', lambda *args: self.update_location_list())
         
-        # Location listbox
-        self.location_listbox = tk.Listbox(search_frame, height=8, width=70)
-        self.location_listbox.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        self.location_listbox = tk.Listbox(frame, height=6)
+        self.location_listbox.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.location_listbox.bind('<<ListboxSelect>>', self.on_location_select)
         
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(search_frame, orient=tk.VERTICAL, command=self.location_listbox.yview)
-        scrollbar.grid(row=1, column=2, sticky=(tk.N, tk.S))
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.location_listbox.yview)
+        scrollbar.grid(row=1, column=2, sticky="ns")
         self.location_listbox.config(yscrollcommand=scrollbar.set)
     
     def _create_location_info_section(self, parent):
-        """Create selected location info widgets."""
-        info_frame = ttk.LabelFrame(parent, text="Selected Location", padding="10")
-        info_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        info_frame.columnconfigure(1, weight=1)
+        frame = ttk.LabelFrame(parent, text="Selected Location Details", padding="10")
+        frame.grid(row=2, column=0, sticky="ew", pady=5)
+        frame.columnconfigure(1, weight=1)
         
-        labels = ["Name:", "Type:", "Coordinates:", "Altitude:"]
+        labels = ["Name:", "Coordinates:", "Altitude:"]
         self.info_labels = {}
-        
         for i, label_text in enumerate(labels):
-            ttk.Label(info_frame, text=label_text).grid(row=i, column=0, sticky=tk.W)
-            label = ttk.Label(info_frame, text="", font=('Arial', 10, 'bold') if i == 0 else None)
-            label.grid(row=i, column=1, sticky=tk.W, padx=(5, 0))
+            ttk.Label(frame, text=label_text).grid(row=i, column=0, sticky=tk.W, pady=2)
+            label = ttk.Label(frame, text="N/A", font=('Arial', 10, 'bold'))
+            label.grid(row=i, column=1, sticky=tk.W, padx=5)
             self.info_labels[label_text.rstrip(':')] = label
-    
+
     def _create_date_section(self, parent):
-        """Create date selection widgets."""
-        date_frame = ttk.LabelFrame(parent, text="Observation Date", padding="10")
-        date_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        frame = ttk.LabelFrame(parent, text="2. Select Observation Date", padding="10")
+        frame.grid(row=3, column=0, sticky="ew", pady=5)
         
-        ttk.Label(date_frame, text="Date:").grid(row=0, column=0, sticky=tk.W)
-        self.date_var = tk.StringVar(value=date.today().strftime("%Y-%m-%d"))
-        self.date_entry = ttk.Entry(date_frame, textvariable=self.date_var, width=15)
-        self.date_entry.grid(row=0, column=1, sticky=tk.W, padx=(5, 0))
+        ttk.Label(frame, text="Date (YYYY-MM-DD):").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        self.date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+        ttk.Entry(frame, textvariable=self.date_var, width=15).grid(row=0, column=1, sticky=tk.W)
+        ttk.Button(frame, text="Tonight", command=lambda: self.date_var.set(datetime.now().strftime("%Y-%m-%d"))).grid(row=0, column=2, padx=10)
+
+    def _create_params_section(self, parent):
+        frame = ttk.LabelFrame(parent, text="3. Set Observation Parameters", padding="10")
+        frame.grid(row=4, column=0, sticky="ew", pady=5)
         
-        ttk.Button(date_frame, text="Tonight", command=self.set_tonight).grid(row=0, column=2, padx=(10, 0))
-        ttk.Button(date_frame, text="Calculate Conditions", 
-                  command=self.calculate_conditions).grid(row=0, column=3, padx=(10, 0))
-    
+        ttk.Label(frame, text="Min Altitude (deg):").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        self.min_alt_var = tk.DoubleVar(value=40.0)
+        ttk.Entry(frame, textvariable=self.min_alt_var, width=10).grid(row=0, column=1)
+        
+        ttk.Label(frame, text="RA Window (± hours):").grid(row=0, column=2, sticky=tk.W, padx=(20, 5))
+        self.ra_win_var = tk.DoubleVar(value=3.0)
+        ttk.Entry(frame, textvariable=self.ra_win_var, width=10).grid(row=0, column=3)
+        
+        ttk.Label(frame, text="Light Pollution (mag/arcsec²):").grid(row=1, column=0, sticky=tk.W, pady=(5,0), padx=(0,5))
+        self.lp_var = tk.DoubleVar(value=21.0) # Default for a reasonably dark site
+        ttk.Entry(frame, textvariable=self.lp_var, width=10).grid(row=1, column=1, pady=(5,0))
+
     def _create_astro_info_section(self, parent):
-        """Create astronomical information display."""
-        astro_frame = ttk.LabelFrame(parent, text="Astronomical Information", padding="10")
-        astro_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        astro_frame.columnconfigure(0, weight=1)
-        astro_frame.rowconfigure(0, weight=1)
+        frame = ttk.LabelFrame(parent, text="4. Calculate & Review Conditions", padding="10")
+        frame.grid(row=5, column=0, sticky="nsew", pady=5)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
         
-        self.astro_text = ScrolledText(astro_frame, height=12, width=70, wrap=tk.WORD)
-        self.astro_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-    
+        ttk.Button(frame, text="Calculate Optimal Conditions", 
+                   command=self.run_full_calculation).grid(row=0, column=0, pady=(0, 10))
+        
+        self.astro_text = ScrolledText(frame, height=12, width=70, wrap=tk.WORD, state=tk.DISABLED)
+        self.astro_text.grid(row=1, column=0, sticky="nsew")
+
     def _create_binary_search_section(self, parent):
-        """Create binary star search widgets."""
-        binary_frame = ttk.LabelFrame(parent, text="Binary Star Search", padding="10")
-        binary_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        binary_frame.columnconfigure(1, weight=1)
+        frame = ttk.LabelFrame(parent, text="5. Generate Target Search", padding="10")
+        frame.grid(row=6, column=0, sticky="ew", pady=5)
+        frame.columnconfigure(0, weight=1)
+
+        ttk.Button(frame, text="Generate Search on Stelle Doppie", 
+                   command=self.generate_stelle_doppie_search).grid(row=0, column=0, pady=5)
         
-        ttk.Button(binary_frame, text="Calculate Optimal Region", 
-                  command=self.calculate_optimal_region).grid(row=0, column=0, sticky=tk.W)
-        
-        # Region info labels
-        ttk.Label(binary_frame, text="Optimal RA Region:").grid(row=1, column=0, sticky=tk.W)
-        self.ra_region_label = ttk.Label(binary_frame, text="", font=('Arial', 10, 'bold'))
-        self.ra_region_label.grid(row=1, column=1, sticky=tk.W, padx=(5, 0))
-        
-        ttk.Label(binary_frame, text="Optimal Dec Region:").grid(row=2, column=0, sticky=tk.W)
-        self.dec_region_label = ttk.Label(binary_frame, text="", font=('Arial', 10, 'bold'))
-        self.dec_region_label.grid(row=2, column=1, sticky=tk.W, padx=(5, 0))
-        
-        # Search generation
-        ttk.Button(binary_frame, text="Generate Search on Stelle Doppie", 
-                  command=self.generate_stelle_doppie_search).grid(row=3, column=0, columnspan=2, pady=(10, 0))
-        
-        # URL display
-        self.url_text = ScrolledText(binary_frame, height=3, width=70, wrap=tk.WORD)
-        self.url_text.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
-    
-    def get_location_type_name(self, type_code):
-        """Convert location type code to descriptive name."""
-        type_map = {
-            'C': 'Capital',
-            'B': 'Capital',
-            'R': 'Regional Capital',
-            'O': 'Observatory',
-            'H': 'Archaeoastronomical Site'
-        }
-        return type_map.get(type_code, 'Unknown')
-    
-    def on_search_change(self, *args):
-        """Handle search text changes."""
-        self.update_location_list()
-    
-    def update_location_list(self):
-        """Update the location list based on search filter."""
-        search_term = self.search_var.get().lower()
-        
-        # Filter locations
-        self.filtered_locations = []
-        for location in self.locations:
-            if (search_term in location['name'].lower() or
-                search_term in location.get('state', '').lower() or
-                search_term in location.get('region', '').lower()):
-                self.filtered_locations.append(location)
-        
-        # Update listbox
-        self.location_listbox.delete(0, tk.END)
-        for location in self.filtered_locations:
-            display_text = f"{location['name']} ({self.get_location_type_name(location['type'])}) - {location.get('state', '')}"
-            self.location_listbox.insert(tk.END, display_text)
-    
+        # Add a text widget to show the generated URL
+        self.url_text = ScrolledText(frame, height=3, width=70, wrap=tk.WORD, state=tk.DISABLED)
+        self.url_text.grid(row=1, column=0, sticky="ew", pady=(5, 0))
+
     def on_location_select(self, event):
-        """Handle location selection."""
-        selection = self.location_listbox.curselection()
-        if selection:
-            index = selection[0]
-            if index < len(self.filtered_locations):
-                self.selected_location = self.filtered_locations[index]
-                self.update_location_info()
-    
+        if not self.location_listbox.curselection(): return
+        index = self.location_listbox.curselection()[0]
+        self.selected_location = self.filtered_locations[index]
+        self.update_location_info()
+        self.create_observer_location()
+
+    def update_location_list(self):
+        search_term = self.search_var.get().lower()
+        self.filtered_locations = [loc for loc in self.locations if search_term in loc['name'].lower()]
+        self.location_listbox.delete(0, tk.END)
+        for loc in self.filtered_locations:
+            self.location_listbox.insert(tk.END, f"{loc['name']} ({loc.get('state', 'N/A')})")
+
     def update_location_info(self):
-        """Update displayed location information."""
-        if not self.selected_location:
-            return
-        
+        if not self.selected_location: return
         loc = self.selected_location
-        
-        # Update labels
         self.info_labels['Name'].config(text=loc['name'])
-        self.info_labels['Type'].config(text=self.get_location_type_name(loc['type']))
         self.info_labels['Coordinates'].config(text=f"{loc['latitude']}, {loc['longitude']}")
-        self.info_labels['Altitude'].config(text=f"{loc['altitude_m']} m" if loc['altitude_m'] else "N/A")
-        
-        # Create observer
-        self.create_observer()
-    
-    def create_observer(self):
-        """Create PyEphem observer for selected location."""
-        if not self.selected_location:
-            return
-        
-        self.observer = ephem.Observer()
-        
-        # Parse coordinates
-        lat_str = self.selected_location['latitude']
-        lon_str = self.selected_location['longitude']
-        
-        # Parse latitude
-        if lat_str.endswith('N'):
-            lat_deg = float(lat_str[:-1])
-        else:  # S
-            lat_deg = -float(lat_str[:-1])
-        
-        # Parse longitude
-        if lon_str.endswith('E'):
-            lon_deg = float(lon_str[:-1])
-        else:  # W
-            lon_deg = -float(lon_str[:-1])
-        
-        self.observer.lat = str(lat_deg)
-        self.observer.lon = str(lon_deg)
-        
-        # Altitude
-        if self.selected_location['altitude_m']:
-            self.observer.elevation = self.selected_location['altitude_m']
-    
-    def set_tonight(self):
-        """Set date to today."""
-        self.date_var.set(date.today().strftime("%Y-%m-%d"))
-    
-    def calculate_conditions(self):
-        """
-        Calculates and displays all astronomical conditions by calling the
-        refactored calculation modules. This method acts as an orchestrator.
-        """
-        if not self.observer or not self.selected_location:
-            messagebox.showwarning("Selection Required", "Please select a location first.")
-            return
-        
+        self.info_labels['Altitude'].config(text=f"{loc.get('altitude_m', 'N/A')} m")
+
+    def create_observer_location(self):
+        if not self.selected_location: return
+        loc = self.selected_location
         try:
-            obs_date = datetime.datetime.strptime(self.date_var.get(), "%Y-%m-%d")
+            lat = float(loc['latitude'][:-1]) * (-1 if loc['latitude'].endswith('S') else 1)
+            lon = float(loc['longitude'][:-1]) * (-1 if loc['longitude'].endswith('W') else 1)
+            alt = float(loc.get('altitude_m', 0))
+            self.observer_location = calculations.get_observer_location(lat, lon, alt)
+        except (ValueError, TypeError) as e:
+            messagebox.showerror("Location Error", f"Could not parse location coordinates: {e}")
+            self.observer_location = None
+
+    def run_full_calculation(self):
+        if not self.observer_location:
+            messagebox.showwarning("Input Required", "Please select a location first.")
+            return
+            
+        try:
+            obs_date = datetime.strptime(self.date_var.get(), "%Y-%m-%d")
+            min_alt = self.min_alt_var.get()
+            ra_win = self.ra_win_var.get()
+            lp_mag = self.lp_var.get()
             timezone = self.selected_location.get('timezone', 'UTC')
             
-            # 1. Get Sun and Moon information from its dedicated function.
-            sun_moon_info = calculations.calculate_sun_moon_info(self.observer, obs_date, timezone)
+            # --- Perform All Calculations ---
+            events = calculations.get_nightly_events(self.observer_location, obs_date, timezone)
             
-            # 2. Get Optimal Region information, which now includes the Zenith.
-            region_info = calculations.calculate_optimal_region(self.observer, obs_date)
+            # Define the primary calculation time as the end of astronomical twilight
+            calc_time = events.get('astronomical_twilight_end')
+            if not calc_time:
+                # Fallback logic if twilight time is not available
+                sunset_time = events.get('sunset_utc')
+                calc_time = (sunset_time + timedelta(hours=2)) if sunset_time else datetime.combine(obs_date.date(), datetime.min.time().replace(hour=22))
             
-            # 3. Combine the two result dictionaries into a single one.
-            # This is crucial for passing all data to the display function.
-            full_info = {**sun_moon_info, **region_info}
+            # 1. Calculate conditions for the START of the optimal observing window
+            conditions_twilight = calculations.calculate_sky_conditions_at_time(self.observer_location, calc_time)
             
-            # 4. Call the display function with all the combined information.
-            self.display_astronomical_info(full_info, timezone)
-            
-            # (Optional) Store the ranges for later use, e.g., for the search button.
-            self.optimal_ra_range = region_info.get('ra_range')
-            self.optimal_dec_range = region_info.get('dec_range')
+            # 2. Calculate conditions for TEMPORAL MIDNIGHT, if available
+            conditions_midnight = None
+            temporal_midnight_utc = events.get('temporal_midnight_utc')
+            if temporal_midnight_utc:
+                conditions_midnight = calculations.calculate_sky_conditions_at_time(self.observer_location, temporal_midnight_utc)
 
-        except ValueError:
-            messagebox.showerror("Invalid Date", "Please use YYYY-MM-DD format.")
+            # Generate the optimal patch recommendation based on the START of the night
+            optimal_patch = calculations.generate_sky_quality_map(
+                self.observer_location, calc_time, 
+                min_altitude_deg=min_alt, light_pollution_mag=lp_mag
+            )
+            
+            ra_center = optimal_patch['best_ra_hours']
+            self.optimal_ra_range = ((ra_center - ra_win + 24) % 24, (ra_center + ra_win) % 24)
+            
+            dec_center = optimal_patch['best_dec_deg']
+            self.optimal_dec_range = (max(dec_center - 20, -90), min(dec_center + 20, 90))
+            
+            # Pass both sets of conditions to the display function
+            self.display_results(events, conditions_twilight, conditions_midnight, optimal_patch, calc_time)
+
+        except ValueError as e:
+            messagebox.showerror("Invalid Input", f"Please ensure Date and Parameters are valid numbers: {e}")
         except Exception as e:
             messagebox.showerror("Calculation Error", f"An unexpected error occurred: {e}")
-    
-    def display_astronomical_info(self, info: Dict[str, Any], timezone: str):
-        """
-        Formats and displays the full set of astronomical information in the text widget.
-        """
+
+    def display_results(self, events: Dict, conditions_twilight: Dict, conditions_midnight: Dict, optimal_patch: Dict, calc_time: datetime):
         self.astro_text.config(state=tk.NORMAL)
         self.astro_text.delete(1.0, tk.END)
         
-        def format_dual_time(local_dt_obj, utc_dt_obj):
-            """
-            Helper function to format local and UTC datetime objects.
-            Includes timezone name for local time.
-            """
-            if local_dt_obj is None or utc_dt_obj is None:
-                return "Circumpolar / Not Visible"
-            
-            # Format local time with its timezone
-            local_str = local_dt_obj.strftime('%H:%M:%S %Z') 
-            
-            # Format UTC time (always UTC)
-            utc_str = utc_dt_obj.strftime('%H:%M:%S UTC')
-            
-            return f"{local_str} ({utc_str})"
-
-        def get_phase_desc(phase_percent):
-            """Helper function to get a description for the moon phase."""
-            if phase_percent < 1: return "New Moon"
-            if phase_percent < 49: return "Waxing (Crescent/Quarter)"
-            if phase_percent <= 51: return "Full Moon" # Using a tighter range for Full Moon
-            return "Waning (Gibbous/Quarter)"
-
-        # Build the full text string with the Zenith and dual-time information.
-        info_text = f"""--- CONDITIONS FOR {self.date_var.get()} AT {self.selected_location['name']} ---
-
-ZENITH AT MIDNIGHT:
-  - Right Ascension: {info.get('zenith_ra_str', 'N/A')}
-  - Declination:     {info.get('zenith_dec_str', 'N/A')}
-
-EVENT TIMES:
-  - Sunset:  {format_dual_time(info.get('sunset_local'), info.get('sunset_utc'))}
-  - Sunrise: {format_dual_time(info.get('sunrise_local'), info.get('sunrise_utc'))}
-  - Midnight: {format_dual_time(info.get('midnight_local'), info.get('midnight_utc'))}
-
-LUNAR INFORMATION:
-  - Moonrise: {format_dual_time(info.get('moonrise_local'), info.get('moonrise_utc'))}
-  - Moonset:  {format_dual_time(info.get('moonset_local'), info.get('moonset_utc'))}
-  - Phase:    {get_phase_desc(info.get('moon_phase', 0))} ({info.get('moon_phase', 0):.1f}%)
-  - Position at midnight: {info.get('moon_alt', 0):.1f}° Alt, {info.get('moon_az', 0):.1f}° Az
-"""
+        def fmt_time(dt_obj): 
+            return dt_obj.strftime('%H:%M %Z') if dt_obj else "N/A"
         
-        self.astro_text.insert(tk.END, info_text)
+        def fmt_time_utc(dt_obj):
+            if dt_obj and hasattr(dt_obj, 'astimezone'):
+                return dt_obj.astimezone(pytz.UTC).strftime('%H:%M UTC')
+            return "N/A"
+
+        # --- Base Timeline (unchanged) ---
+        timeline_text = (
+            f"--- OBSERVATION TIMELINE FOR {self.date_var.get()} ---\n"
+            f"Sunset (Local):         {fmt_time(events.get('sunset_local'))}\n"
+            f"Sunset (UTC):           {fmt_time_utc(events.get('sunset_utc'))}\n"
+            f"Civil Twilight End:     {fmt_time(events.get('civil_twilight_end'))}\n"
+            f"Nautical Twilight End:  {fmt_time(events.get('nautical_twilight_end'))}\n"
+            f"Astro. Twilight End:    {fmt_time(events.get('astronomical_twilight_end'))} (Start of Darkness)\n"
+            f"Astronomical Midnight:  {fmt_time(events.get('astronomical_midnight_local'))}\n"
+            f"Astronomical Midnight:  {fmt_time_utc(events.get('astronomical_midnight_utc'))}\n"
+            f"Temporal Midnight:      {fmt_time(events.get('temporal_midnight_local'))} (Midpoint of Night)\n"
+            f"Temporal Midnight:      {fmt_time_utc(events.get('temporal_midnight_utc'))}\n"
+            f"Astro. Twilight Start:  {fmt_time(events.get('astronomical_twilight_start'))}\n"
+            f"Nautical Twilight Start:{fmt_time(events.get('nautical_twilight_start'))}\n"
+            f"Civil Twilight Start:   {fmt_time(events.get('civil_twilight_start'))}\n"
+            f"Sunrise (Local):        {fmt_time(events.get('sunrise_local'))}\n"
+            f"Sunrise (UTC):          {fmt_time_utc(events.get('sunrise_utc'))}\n"
+            f"Moonrise:               {fmt_time(events.get('moonrise_local'))}\n"
+            f"Moonset:                {fmt_time(events.get('moonset_local'))}\n"
+        )
+        
+        # --- Conditions at Start of Darkness ---
+        conditions_text = (
+            f"\n--- CONDITIONS AT START OF DARKNESS ({fmt_time(calc_time)}) ---\n"
+            f"Moon Phase:             {conditions_twilight.get('moon_phase_percent', 0):.1f}%\n"
+            f"Moon Altitude:          {conditions_twilight.get('moon_alt_deg', 0):.1f}°\n"
+            f"Moon Azimuth:           {conditions_twilight.get('moon_az_deg', 0):.1f}°\n"
+            f"Zenith RA:              {conditions_twilight.get('zenith_ra_str', 'N/A')}\n"
+            f"Zenith Dec:             {conditions_twilight.get('zenith_dec_str', 'N/A')}\n"
+        )
+        
+        # --- Conditions at Temporal Midnight (if available) ---
+        if conditions_midnight:
+            conditions_text += (
+                f"\n--- CONDITIONS AT TEMPORAL MIDNIGHT ({fmt_time(events.get('temporal_midnight_local'))}) ---\n"
+                f"Moon Phase:             {conditions_midnight.get('moon_phase_percent', 0):.1f}%\n"
+                f"Moon Altitude:          {conditions_midnight.get('moon_alt_deg', 0):.1f}°\n"
+                f"Moon Azimuth:           {conditions_midnight.get('moon_az_deg', 0):.1f}°\n"
+                f"Zenith RA:              {conditions_midnight.get('zenith_ra_str', 'N/A')}\n"
+                f"Zenith Dec:             {conditions_midnight.get('zenith_dec_str', 'N/A')}\n"
+            )
+
+        # --- Recommended Observing Region (based on start of darkness) ---
+        recommendation_text = (
+            f"\n--- RECOMMENDED OBSERVING REGION (Calculated for Start of Darkness) ---\n"
+            f"Best Patch Center (RA): {self.format_ra_hours(optimal_patch['best_ra_hours'])}\n"
+            f"Best Patch Center (Dec):{self.format_dec_degrees(optimal_patch['best_dec_deg'])}\n"
+            f"Best Patch Alt/Az:      {optimal_patch['best_alt_deg']:.1f}° / {optimal_patch['best_az_deg']:.1f}°\n"
+            f"Quality Score:          {optimal_patch['best_quality_score']:.3f}\n"
+            f"RA Search Range:        {self.format_ra_hours(self.optimal_ra_range[0])} to {self.format_ra_hours(self.optimal_ra_range[1])}\n"
+            f"Dec Search Range:       {self.format_dec_degrees(self.optimal_dec_range[0])} to {self.format_dec_degrees(self.optimal_dec_range[1])}\n"
+        )
+        
+        self.astro_text.insert(tk.END, timeline_text + conditions_text + recommendation_text)
         self.astro_text.config(state=tk.DISABLED)
-    
-    def calculate_optimal_region(self):
-        """Calculate optimal observation region."""
-        if not self.selected_location or not self.observer:
-            messagebox.showwarning("Warning", "First select a location and calculate conditions")
+
+    def generate_stelle_doppie_search(self):
+        if not self.optimal_ra_range:
+            messagebox.showwarning("Calculation Required", "Please calculate conditions first.")
             return
         
-        try:
-            # Parse date
-            obs_date = datetime.datetime.strptime(self.date_var.get(), "%Y-%m-%d")
-            
-            # Calculate optimal region
-            region_info = calculations.calculate_optimal_region(self.observer, obs_date)
-            
-            # Store ranges
-            self.optimal_ra_range = region_info['ra_range']
-            self.optimal_dec_range = region_info['dec_range']
-            
-            # Format for display
-            ra_min_str = self.format_ra_hours(self.optimal_ra_range[0])
-            ra_max_str = self.format_ra_hours(self.optimal_ra_range[1])
-            dec_min_str = self.format_dec_degrees(self.optimal_dec_range[0])
-            dec_max_str = self.format_dec_degrees(self.optimal_dec_range[1])
-            
-            # Update labels
-            self.ra_region_label.config(text=f"{ra_min_str} - {ra_max_str}")
-            self.dec_region_label.config(text=f"{dec_min_str} - {dec_max_str}")
-            
-            # Show info
-            strategy = "Opposite side of the moon" if region_info['moon_visible'] else "Zenithal region"
-            messagebox.showinfo("Region Calculated", 
-                              f"Optimal region calculated for {self.date_var.get()}\n"
-                              f"Strategy: {strategy}")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Error calculating optimal region: {str(e)}")
-    
-    def format_ra_hours(self, hours):
-        """Format RA in hours:minutes."""
-        if hours < 0:
-            hours += 24
-        if hours >= 24:
-            hours -= 24
+        ra_min_h, ra_max_h = self.optimal_ra_range
+        dec_min_d, dec_max_d = self.optimal_dec_range
         
+        ra_min_str = f"{int(ra_min_h):02d},{int((ra_min_h % 1) * 60):02d}"
+        ra_max_str = f"{int(ra_max_h):02d},{int((ra_max_h % 1) * 60):02d}"
+        dec_min_str = f"{int(dec_min_d):+03d},{int(abs(dec_min_d) % 1 * 60):02d}" if dec_min_d is not None else ""
+        dec_max_str = f"{int(dec_max_d):+03d},{int(abs(dec_max_d) % 1 * 60):02d}" if dec_max_d is not None else ""
+        
+        # A simplified set of parameters for the search URL
+        base_url = "https://www.stelledoppie.it/index2.php"
+        params = {
+            'menu': 21, 'azione': 'cerca_nel_database', 'gocerca': 'Search+the+database',
+            'metodo-cat_wds-ra': 7, 'dato-cat_wds-ra': f'{ra_min_str}%2C{ra_max_str}',
+            'metodo-cat_wds-de': 7, 'dato-cat_wds-de': f'{dec_min_str}%2C{dec_max_str}',
+        }
+        full_url = base_url + "?" + "&".join([f"{k}={v}" for k, v in params.items()])
+
+        self.url_text.config(state=tk.NORMAL)
+        self.url_text.delete(1.0, tk.END)
+        self.url_text.insert(tk.END, full_url)
+        self.url_text.config(state=tk.DISABLED)
+        
+        if messagebox.askyesno("Open Search", "Search URL generated. Open in browser?"):
+            webbrowser.open(full_url)
+            
+    def format_ra_hours(self, hours: float) -> str:
         h = int(hours)
         m = int((hours - h) * 60)
         return f"{h:02d}h{m:02d}m"
-    
-    def format_dec_degrees(self, degrees):
-        """Format Dec in degrees:minutes."""
+
+    def format_dec_degrees(self, degrees: float) -> str:
         sign = "+" if degrees >= 0 else "-"
         abs_deg = abs(degrees)
         d = int(abs_deg)
         m = int((abs_deg - d) * 60)
         return f"{sign}{d:02d}°{m:02d}'"
-    
-    def generate_stelle_doppie_search(self):
-        """Generate Stelle Doppie search URL."""
-        if not self.optimal_ra_range or not self.optimal_dec_range:
-            messagebox.showwarning("Warning", "First calculate the optimal region")
-            return
-        
-        try:
-            # Convert ranges to format required by Stelle Doppie
-            ra_min_hours, ra_max_hours = self.optimal_ra_range
-            dec_min_deg, dec_max_deg = self.optimal_dec_range
-            
-            # Format for URL
-            ra_min_formatted = f"{int(ra_min_hours):02d},{int((ra_min_hours - int(ra_min_hours)) * 60):02d}"
-            ra_max_formatted = f"{int(ra_max_hours):02d},{int((ra_max_hours - int(ra_max_hours)) * 60):02d}"
-            
-            dec_min_sign = "" if dec_min_deg >= 0 else "-"
-            dec_max_sign = "" if dec_max_deg >= 0 else "-"
-            dec_min_formatted = f"{dec_min_sign}{int(abs(dec_min_deg)):02d},{int((abs(dec_min_deg) - int(abs(dec_min_deg))) * 60):02d}"
-            dec_max_formatted = f"{dec_max_sign}{int(abs(dec_max_deg)):02d},{int((abs(dec_max_deg) - int(abs(dec_max_deg))) * 60):02d}"
-            
-            # Build URL
-            base_url = "https://www.stelledoppie.it/index2.php"
-            params = {
-                'metodo-cat_wds-ra': '7',
-                'dato-cat_wds-ra': f'{ra_min_formatted}%2C{ra_max_formatted}',
-                'metodo-cat_wds-de': '7',
-                'dato-cat_wds-de': f'{dec_min_formatted}%2C{dec_max_formatted}',
-                'metodo-cat_wds-raggio': '6',
-                'dato-cat_wds-raggio': '',
-                'metodo-cat_wds-coord_2000': '1',
-                'dato-cat_wds-coord_2000': '',
-                'metodo-cat_wds-discov_num': '1',
-                'dato-cat_wds-discov_num': '',
-                'metodo-cat_wds-comp': '1',
-                'dato-cat_wds-comp': '',
-                'metodo-cat_wds-name': '9',
-                'dato-cat_wds-name': '',
-                'metodo-cat_wds-date_first': '6',
-                'dato-cat_wds-date_first': '2000',
-                'metodo-cat_wds-date_last': '6',
-                'dato-cat_wds-date_last': '2020',
-                'metodo-cat_wds-mag_pri': '7',
-                'dato-cat_wds-mag_pri': '10%2C15',
-                'metodo-cat_wds-mag_sec': '7',
-                'dato-cat_wds-mag_sec': '10%2C15',
-                'metodo-cat_wds-calc_delta_mag': '6',
-                'dato-cat_wds-calc_delta_mag': '2',
-                'metodo-cat_wds-sep_last': '4',
-                'dato-cat_wds-sep_last': '10',
-                'metodo-cat_wds-spectr': '11',
-                'dato-cat_wds-spectr': '',
-                'metodo-calc_wds_other-Bayer': '9',
-                'dato-calc_wds_other-Bayer': '',
-                'metodo-calc_wds_other-Flamsteed': '1',
-                'dato-calc_wds_other-Flamsteed': '',
-                'metodo-cat_wds-cst': '1',
-                'dato-cat_wds-cst': '',
-                'metodo-calc_wds_other-ADS': '1',
-                'dato-calc_wds_other-ADS': '',
-                'metodo-calc_wds_other-HD': '1',
-                'dato-calc_wds_other-HD': '',
-                'metodo-calc_wds_other-HR': '1',
-                'dato-calc_wds_other-HR': '',
-                'metodo-calc_wds_other-HIP': '1',
-                'dato-calc_wds_other-HIP': '',
-                'metodo-calc_wds_other-SAO': '1',
-                'dato-calc_wds_other-SAO': '',
-                'metodo-calc_wds_other-Tycho2': '1',
-                'dato-calc_wds_other-Tycho2': '',
-                'metodo-calc_wds_other-Gaia': '18',
-                'dato-calc_wds_other-Gaia': '',
-                'metodo-cat_wds-dm_number': '1',
-                'dato-cat_wds-dm_number': '',
-                'metodo-cat_wds-obs': '4',
-                'dato-cat_wds-obs': '10',
-                'metodo-cat_wds-notes': '9',
-                'dato-cat_wds-notes': '',
-                'metodo-cat_wds-notes-notes': '9',
-                'dato-cat_wds-notes-notes': '',
-                'metodo-cat_wds-reports': '3',
-                'dato-cat_wds-reports': '',
-                'metodo-cat_wds-filtro_visuale': '1',
-                'metodo-cat_wds-filtro_strumento': '1',
-                'metodo-cat_wds-filtro_coord': '1',
-                'metodo-cat_wds-filtro_orbita': '1',
-                'metodo-cat_wds-filtro_nome': '1',
-                'metodo-cat_wds-filtro_principale': '1',
-                'metodo-cat_wds-filtro_fisica': '1',
-                'metodo-cat_wds-filtro_incerta': '1',
-                'dato-cat_wds-filtro_incerta': 'S',
-                'metodo-cat_wds-calc_tot_comp': '1',
-                'dato-cat_wds-calc_tot_comp': '',
-                'menu': '21',
-                'section': '2',
-                'azione': 'cerca_nel_database',
-                'limite': '',
-                'righe': '50',
-                'orderby': '',
-                'type': '3',
-                'set_filtri': 'S',
-                'gocerca': 'Search+the+database'
-            }
-
-            # Construct full URL
-            url_parts = [f"{k}={v}" for k, v in params.items()]
-            full_url = f"{base_url}?" + "&".join(url_parts)
-            
-            # Display URL
-            self.url_text.delete(1.0, tk.END)
-            self.url_text.insert(tk.END, full_url)
-            
-            # Option to open in browser
-            result = messagebox.askyesno("Open Search", 
-                                       "Do you want to open the search in your browser?")
-            if result:
-                webbrowser.open(full_url)
-                
-        except Exception as e:
-            messagebox.showerror("Error", f"Error generating search: {str(e)}")
 
 def main():
-    """Main entry point for the planner GUI."""
     root = tk.Tk()
     app = AstraKairosPlannerApp(root)
     root.mainloop()
