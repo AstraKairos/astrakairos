@@ -1,171 +1,119 @@
 import pandas as pd
 import re
-from typing import List, Dict, Any, Optional
 import csv
+import logging
+from typing import List, Dict, Any, Optional
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 
-def load_csv_data(filepath: str) -> pd.DataFrame:
+log = logging.getLogger(__name__)
+
+def load_csv_data(filepath: str) -> Optional[pd.DataFrame]:
     """
-    Load CSV file with star data, attempting to auto-detect the delimiter.
-    If auto-detection fails, it falls back to common delimiters (semicolon, comma).
-    
+    Loads star data from a CSV file, robustly detecting the delimiter.
+
+    This function attempts to use csv.Sniffer to auto-detect the delimiter,
+    then falls back to a list of common delimiters (comma, semicolon).
+
     Args:
         filepath: Path to the CSV file.
-        
-    Returns:
-        DataFrame with the loaded data.
-    
-    Raises:
-        Exception: If the CSV file cannot be loaded with any tried delimiter.
-    """
-    try:
-        # Try to auto-detect the delimiter using csv.Sniffer
-        with open(filepath, 'r', encoding='utf-8') as f:
-            # Read a small sample to sniff the dialect
-            sample = f.read(2048) # Read the first 2KB
-            try:
-                dialect = csv.Sniffer().sniff(sample)
-                detected_delimiter = dialect.delimiter
-            except csv.Error:
-                # If sniffing fails (e.g., file too small, no common delimiters found),
-                # fall back to default behavior
-                detected_delimiter = None # Will trigger the fallback
-            
-            f.seek(0) # Rewind the file pointer to the beginning
-        
-        if detected_delimiter:
-            df = pd.read_csv(filepath, delimiter=detected_delimiter, encoding='utf-8')
-            print(f"CSV loaded successfully with detected delimiter '{detected_delimiter}'. Rows: {len(df)}")
-            return df
-        
-        # Fallback if auto-detection didn't work or detected_delimiter is None
-        # Try semicolon first (common in some regions)
-        print("Auto-detection failed or no delimiter detected. Trying fallback delimiters...")
-        df = pd.read_csv(filepath, delimiter=';', encoding='utf-8')
-        print(f"CSV loaded successfully with semicolon delimiter. Rows: {len(df)}")
-        return df
 
-    except Exception as e_semicolon:
-        print(f"Error loading CSV with semicolon delimiter: {e_semicolon}")
+    Returns:
+        A pandas DataFrame with the loaded data, or None if loading fails.
+    """
+    delimiters_to_try = [None, ',', ';'] # None will trigger csv.Sniffer
+
+    for i, delimiter in enumerate(delimiters_to_try):
         try:
-            # Then try comma (most common globally)
-            df = pd.read_csv(filepath, delimiter=',', encoding='utf-8')
-            print(f"CSV loaded successfully with comma delimiter. Rows: {len(df)}")
+            current_delimiter = delimiter
+            if i == 0: # First attempt with Sniffer
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    try:
+                        sample = f.read(2048) # Read a sample
+                        dialect = csv.Sniffer().sniff(sample)
+                        current_delimiter = dialect.delimiter
+                    except csv.Error:
+                        log.debug("CSV Sniffer failed, proceeding to fallback delimiters.")
+                        continue # Sniffer failed, try next delimiter in list
+            
+            log.info(f"Attempting to read CSV with delimiter: '{current_delimiter}'")
+            df = pd.read_csv(filepath, delimiter=current_delimiter, encoding='utf-8')
+            log.info(f"CSV loaded successfully. Rows: {len(df)}")
             return df
-        except Exception as e_comma:
-            print(f"Error loading CSV with comma delimiter: {e_comma}")
-            raise Exception(f"Could not load CSV file: {filepath}. Tried auto-detection, semicolon, and comma delimiters.")
+            
+        except Exception as e:
+            log.warning(f"Failed to load CSV with delimiter '{current_delimiter}': {e}")
+            
+    log.error(f"Could not load CSV file: {filepath}. All parsing attempts failed.")
+    raise IOError(f"Could not load or parse the input file '{filepath}'.")
+
 
 def save_results_to_csv(results: List[Dict[str, Any]], filepath: str) -> None:
     """
-    Save analysis results to a CSV file.
-    
+    Saves analysis results to a CSV file.
+
     Args:
-        results: List of dictionaries containing analysis results
-        filepath: Output file path
+        results: A list of dictionaries, where each dictionary is a row.
+        filepath: The path for the output CSV file.
     """
     if not results:
-        print("No results to save")
+        log.warning("No results to save.")
         return
     
-    # Convert to DataFrame
-    df = pd.DataFrame(results)
-    
-    # Save to CSV
-    df.to_csv(filepath, index=False, encoding='utf-8')
-    print(f"Results saved to {filepath} ({len(df)} rows)")
+    try:
+        df = pd.DataFrame(results)
+        df.to_csv(filepath, index=False, encoding='utf-8')
+        log.info(f"Results successfully saved to {filepath} ({len(df)} rows)")
+    except Exception as e:
+        log.error(f"Failed to save results to {filepath}: {e}")
+        raise
 
-def format_coordinates(ra_hours: float, dec_degrees: float) -> str:
+def format_coordinates_astropy(ra_hours: float, dec_degrees: float, precision: int = 1) -> str:
     """
-    Format celestial coordinates for display.
-    
-    Args:
-        ra_hours: Right ascension in hours
-        dec_degrees: Declination in degrees
+    Formats celestial coordinates for display using the astropy library.
+    """
+    if ra_hours is None or dec_degrees is None:
+        return "N/A"
+    try:
+        coords = SkyCoord(ra=ra_hours * u.hourangle, dec=dec_degrees * u.deg, frame='icrs')
+        return coords.to_string('hmsdms', sep=' ', precision=precision, pad=True)
         
-    Returns:
-        Formatted string like "12h34m56s +12°34'56"
-    """
-    # Format RA
-    ra_h = int(ra_hours)
-    ra_m = int((ra_hours - ra_h) * 60)
-    ra_s = ((ra_hours - ra_h) * 60 - ra_m) * 60
-    
-    # Format Dec
-    dec_sign = "+" if dec_degrees >= 0 else "-"
-    dec_abs = abs(dec_degrees)
-    dec_d = int(dec_abs)
-    dec_m = int((dec_abs - dec_d) * 60)
-    dec_s = ((dec_abs - dec_d) * 60 - dec_m) * 60
-    
-    return f"{ra_h:02d}h{ra_m:02d}m{ra_s:05.2f}s {dec_sign}{dec_d:02d}°{dec_m:02d}'{dec_s:05.2f}\""
+    except (ValueError, TypeError) as e:
+        log.error(f"Astropy coordinate formatting failed: {e}")
+        return "Invalid Coords"
+
 
 def parse_wds_designation(wds_id: str) -> Optional[Dict[str, float]]:
     """
-    Parse WDS designation to extract approximate coordinates.
-    
-    Args:
-        wds_id: WDS identifier like "00013+1234"
-        
-    Returns:
-        Dictionary with 'ra_hours' and 'dec_degrees', or None if parsing fails
-    """
-    try:
-        # WDS format: HHMMM±DDMM
-        # First 5 chars: RA (HHMMm where m is tenths of minutes)
-        # Next 5 chars: Dec (±DDmm where mm is minutes)
-        
-        if not re.match(r'^\d{5}[+-]\d{4}', wds_id[:10]):
-            return None # J2000 WDS format
+    Parses a WDS designation string (e.g., "00013+1234") to extract
+    approximate J2000 coordinates.
 
-        if len(wds_id) < 10:
-            return None
+    Args:
+        wds_id: The WDS identifier string.
+
+    Returns:
+        A dictionary with 'ra_deg' and 'dec_deg', or None if parsing fails.
+    """
+    if not isinstance(wds_id, str) or len(wds_id) < 10:
+        return None
         
-        # Extract RA
+    # The regex ensures the format is HHMMM[+-]DDMM
+    if not re.match(r'^\d{5}[+-]\d{4}', wds_id[:10]):
+        log.debug(f"WDS ID '{wds_id}' does not match the coordinate format.")
+        return None
+        
+    try:
         ra_h = int(wds_id[0:2])
-        ra_m = int(wds_id[2:4])
-        ra_m_decimal = int(wds_id[4]) / 10.0
-        ra_hours = ra_h + (ra_m + ra_m_decimal) / 60.0
-        
-        # Extract Dec
+        ra_m = int(wds_id[2:5]) / 10.0 # HHMM.m
+        ra_deg = (ra_h + ra_m / 60.0) * 15.0
+
         dec_sign = 1 if wds_id[5] == '+' else -1
         dec_d = int(wds_id[6:8])
         dec_m = int(wds_id[8:10])
-        dec_degrees = dec_sign * (dec_d + dec_m / 60.0)
+        dec_deg = dec_sign * (dec_d + dec_m / 60.0)
         
-        return {
-            'ra_hours': ra_hours,
-            'dec_degrees': dec_degrees
-        }
-        
-    except (ValueError, IndexError):
-        return None
+        return {'ra_deg': ra_deg, 'dec_deg': dec_deg}
 
-def filter_valid_observations(df: pd.DataFrame, 
-                            min_obs: int = 2,
-                            min_timespan: float = 1.0) -> pd.DataFrame:
-    """
-    Filter DataFrame to include only valid observations.
-    
-    Args:
-        df: Input DataFrame
-        min_obs: Minimum number of observations
-        min_timespan: Minimum timespan in years
-        
-    Returns:
-        Filtered DataFrame
-    """
-    # Filter by number of observations
-    if 'obs' in df.columns:
-        df = df[df['obs'] >= min_obs]
-    
-    # Filter by timespan if date columns exist
-    if 'date_first' in df.columns and 'date_last' in df.columns:
-        df = df[(df['date_last'] - df['date_first']) >= min_timespan]
-    
-    # Remove rows with missing critical data
-    critical_columns = ['wds_name', 'pa_first', 'sep_first', 'pa_last', 'sep_last']
-    for col in critical_columns:
-        if col in df.columns:
-            df = df[df[col].notna()]
-    
-    return df.reset_index(drop=True)
+    except (ValueError, IndexError) as e:
+        log.warning(f"Failed to parse WDS designation '{wds_id}': {e}")
+        return None
