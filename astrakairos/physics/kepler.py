@@ -1,67 +1,84 @@
 import numpy as np
 from typing import Dict, Tuple
 
-def solve_kepler(M_rad: float, e: float, tol: float = 1e-12, max_iter: int = 15) -> float:
+def solve_kepler(M_rad: np.ndarray,
+                 e: float,
+                 tol: float = 1e-12,
+                 max_iter: int = 15,
+                 e_threshold: float = 0.8,
+                 coeff_high_e: float = 0.71) -> np.ndarray:
     """
     Solves Kepler's equation (M = E - e*sin(E)) for Eccentric Anomaly (E)
     using the Newton-Raphson method with a robust, hybrid initial guess strategy.
 
     This implementation is optimized for stability and speed across all
-    elliptical eccentricities (0 <= e < 1).
+    elliptical eccentricities (0 <= e < 1) and operates vectorized on arrays.
 
     Args:
-        M_rad: Mean anomaly in radians.
+        M_rad: Mean anomaly in radians. Can be a scalar or numpy array.
         e: Eccentricity of the orbit (0 <= e < 1).
         tol: The desired precision for convergence (aka. "Tolerance").
             - float, default 1e-12
         max_iter: Maximum number of iterations for the Newton-Raphson method.
             - int, default 15
+        e_threshold: Eccentricity threshold above which to switch to a more robust
+            high-eccentricity initial guess. Backed by Napier (2024).
+            - float, default 0.8
+        coeff_high_e: Coefficient used in the high-eccentricity initial guess:
+            E ≈ M + coeff_high_e * e, where 0.71 was suggested by Napier (2024).
+            - float, default 0.71
 
     Returns:
-        The Eccentric Anomaly (E) in radians.
+        The Eccentric Anomaly (E) in radians. Same shape as input M_rad.
     """
+    # Ensure M_rad is a numpy array for vectorized operations
+    M_rad = np.asarray(M_rad)
+    original_shape = M_rad.shape
+    M_rad = M_rad.flatten()
+    
     # 1. Normalize Mean Anomaly to be within [-pi, pi] for better convergence.
     M_norm = M_rad % (2 * np.pi)
-    if M_norm > np.pi:
-        M_norm -= 2 * np.pi
-    elif M_norm < -np.pi:
-        M_norm += 2 * np.pi
+    M_norm = np.where(M_norm > np.pi, M_norm - 2 * np.pi, M_norm)
+    M_norm = np.where(M_norm < -np.pi, M_norm + 2 * np.pi, M_norm)
 
     # 2. Provide a robust initial guess for Eccentric Anomaly (E) using a
     #    hybrid strategy based on eccentricity.
-    if e < 0.8:
+    if e < e_threshold:
         # For low to moderate eccentricities, a second-order approximation is very effective.
         E = M_norm + e * np.sin(M_norm) * (1.0 + e * np.cos(M_norm))
     else:
         # For high eccentricities (e -> 1), this simpler guess is more stable.
-        # It ensures the initial guess E is on the "correct side of pi".
-        E = M_norm + e * np.sign(np.sin(M_norm))
-        # A small correction for M_norm near 0 or pi
-        if abs(E) > np.pi * 0.9: 
-             E = M_norm + e
+        # Based on Napier (2024): E ≈ M + 0.71 * e
+        E = M_norm + coeff_high_e * e
 
     # 3. Newton-Raphson iteration loop - This is the core of the solver.
     # The function to find the root of is f(E) = E - e*sin(E) - M_norm = 0
     # Its derivative is f'(E) = 1 - e*cos(E)
     # The iteration step is E_next = E - f(E) / f'(E)
 
-    # max_iter = 15  # Safety limit. With good initial guesses, this will likely be more than enoguh.
+    # Track convergence for each element
+    converged = np.zeros(E.shape, dtype=bool)
+    
     for _ in range(max_iter):
-        f_E = E - e * np.sin(E) - M_norm
-        f_prime_E = 1.0 - e * np.cos(E)
+        # Only compute for elements that haven't converged yet
+        mask = ~converged
+        
+        if not np.any(mask):
+            break
+            
+        f_E = E[mask] - e * np.sin(E[mask]) - M_norm[mask]
+        f_prime_E = 1.0 - e * np.cos(E[mask])
 
         # The correction step
         delta = f_E / f_prime_E
         
-        E -= delta
+        E[mask] -= delta
 
         # Check for convergence: if the correction step is smaller than the tolerance.
-        if abs(delta) < tol:
-            return E
+        converged[mask] = np.abs(delta) < tol
 
-    # If the solver does not converge (extremely rare for e < 1),
-    # return the last calculated estimate.
-    return E
+    # Reshape back to original shape
+    return E.reshape(original_shape)
 
 def predict_position(orbital_elements: Dict[str, float], date: float) -> Tuple[float, float]:
     """
