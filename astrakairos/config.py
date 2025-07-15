@@ -159,6 +159,18 @@ DANGEROUS_ECCENTRICITY_WARNING = 0.95       # Issue warnings above this eccentri
 # Orbital Element Validation Ranges
 MAX_ECCENTRICITY_STABLE = 0.99              # Maximum stable eccentricity
 
+# Kepler Solver Quality Control
+KEPLER_CONVERGENCE_WARNING_THRESHOLD = 95.0  # Percentage threshold for convergence warnings
+KEPLER_LOGGING_PRECISION = 6                # Decimal places for scientific logging
+
+# Orbital Element Validation Ranges (Additional)
+MIN_LONGITUDE_ASCENDING_NODE_DEG = 0.0      # Minimum Omega (degrees)
+MAX_LONGITUDE_ASCENDING_NODE_DEG = 360.0    # Maximum Omega (degrees)
+MIN_ARGUMENT_PERIASTRON_DEG = 0.0           # Minimum omega (degrees)
+MAX_ARGUMENT_PERIASTRON_DEG = 360.0         # Maximum omega (degrees)
+MIN_EPOCH_PERIASTRON_YEAR = 1900.0          # Minimum reasonable epoch
+MAX_EPOCH_PERIASTRON_YEAR = 2100.0          # Maximum reasonable epoch
+
 # === PHYSICS Configuration - Dynamics & OPI ===
 
 # Observation Priority Index (OPI) Configuration

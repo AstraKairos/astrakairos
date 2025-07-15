@@ -96,7 +96,15 @@ from astrakairos.config import (
     MIN_SEMIMAJOR_AXIS_ARCSEC,
     MAX_SEMIMAJOR_AXIS_ARCSEC,
     MIN_INCLINATION_DEG,
-    MAX_INCLINATION_DEG
+    MAX_INCLINATION_DEG,
+    KEPLER_CONVERGENCE_WARNING_THRESHOLD,
+    KEPLER_LOGGING_PRECISION,
+    MIN_LONGITUDE_ASCENDING_NODE_DEG,
+    MAX_LONGITUDE_ASCENDING_NODE_DEG,
+    MIN_ARGUMENT_PERIASTRON_DEG,
+    MAX_ARGUMENT_PERIASTRON_DEG,
+    MIN_EPOCH_PERIASTRON_YEAR,
+    MAX_EPOCH_PERIASTRON_YEAR
 )
 
 # Configure scientific logging
@@ -146,7 +154,7 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
     
     # Warning for potentially problematic eccentricities
     if e > DANGEROUS_ECCENTRICITY_WARNING:
-        logger.warning(f"High eccentricity {e:.6f} may cause numerical instability in Kepler solver")
+        logger.warning(f"High eccentricity {e:.{KEPLER_LOGGING_PRECISION}f} may cause numerical instability in Kepler solver")
     
     # Determine if input is scalar
     input_is_scalar = np.isscalar(M_rad)
@@ -199,8 +207,8 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
 
     # Log convergence statistics for scientific debugging
     convergence_rate = np.sum(converged) / len(converged) * 100
-    if convergence_rate < 95:
-        logger.warning(f"Kepler solver convergence rate: {convergence_rate:.1f}% (e={e:.6f})")
+    if convergence_rate < KEPLER_CONVERGENCE_WARNING_THRESHOLD:
+        logger.warning(f"Kepler solver convergence rate: {convergence_rate:.1f}% (e={e:.{KEPLER_LOGGING_PRECISION}f})")
     
     # Reshape result and handle scalar vs array return type
     result = E.reshape(original_shape)
@@ -245,12 +253,12 @@ def predict_position(orbital_elements: Dict[str, float], date: float) -> Tuple[f
     except KeyError as exc:
         raise ValueError(f"Missing required orbital element in dictionary: {exc}")
 
-    # 2. Scientific validation using centralized configuration
+    # Scientific validation using centralized configuration
     if not (MIN_PERIOD_YEARS <= P <= MAX_PERIOD_YEARS):
         raise ValueError(f"Orbital period {P:.3f} years outside valid range [{MIN_PERIOD_YEARS}, {MAX_PERIOD_YEARS}]")
     
     if not (MIN_ECCENTRICITY <= e <= MAX_ECCENTRICITY):
-        raise ValueError(f"Eccentricity {e:.6f} outside valid range [{MIN_ECCENTRICITY}, {MAX_ECCENTRICITY}]")
+        raise ValueError(f"Eccentricity {e:.{KEPLER_LOGGING_PRECISION}f} outside valid range [{MIN_ECCENTRICITY}, {MAX_ECCENTRICITY}]")
     
     if not (MIN_SEMIMAJOR_AXIS_ARCSEC <= a <= MAX_SEMIMAJOR_AXIS_ARCSEC):
         raise ValueError(f"Semi-major axis {a:.3f} arcsec outside valid range [{MIN_SEMIMAJOR_AXIS_ARCSEC}, {MAX_SEMIMAJOR_AXIS_ARCSEC}]")
@@ -258,9 +266,19 @@ def predict_position(orbital_elements: Dict[str, float], date: float) -> Tuple[f
     if not (MIN_INCLINATION_DEG <= i_deg <= MAX_INCLINATION_DEG):
         raise ValueError(f"Inclination {i_deg:.1f}° outside valid range [{MIN_INCLINATION_DEG}°, {MAX_INCLINATION_DEG}°]")
 
+    # Additional validation for angular elements
+    if not (MIN_LONGITUDE_ASCENDING_NODE_DEG <= Omega_deg <= MAX_LONGITUDE_ASCENDING_NODE_DEG):
+        raise ValueError(f"Longitude of ascending node {Omega_deg:.1f}° outside valid range [{MIN_LONGITUDE_ASCENDING_NODE_DEG}°, {MAX_LONGITUDE_ASCENDING_NODE_DEG}°]")
+    
+    if not (MIN_ARGUMENT_PERIASTRON_DEG <= omega_deg <= MAX_ARGUMENT_PERIASTRON_DEG):
+        raise ValueError(f"Argument of periastron {omega_deg:.1f}° outside valid range [{MIN_ARGUMENT_PERIASTRON_DEG}°, {MAX_ARGUMENT_PERIASTRON_DEG}°]")
+    
+    if not (MIN_EPOCH_PERIASTRON_YEAR <= T <= MAX_EPOCH_PERIASTRON_YEAR):
+        raise ValueError(f"Epoch of periastron {T:.1f} outside reasonable range [{MIN_EPOCH_PERIASTRON_YEAR}, {MAX_EPOCH_PERIASTRON_YEAR}]")
+
     # Log potentially problematic cases for scientific awareness
     if e > DANGEROUS_ECCENTRICITY_WARNING:
-        logger.info(f"Computing position for high-eccentricity orbit: e={e:.6f}")
+        logger.info(f"Computing position for high-eccentricity orbit: e={e:.{KEPLER_LOGGING_PRECISION}f}")
     
     if P > 1000:
         logger.debug(f"Computing position for very long-period orbit: P={P:.1f} years")
@@ -320,8 +338,8 @@ def predict_position(orbital_elements: Dict[str, float], date: float) -> Tuple[f
     position_angle_deg = np.degrees(position_angle_rad)
     
     # 9. Normalize the Position Angle to the conventional [0, 360) degree range.
-    if position_angle_deg < 0:
-        position_angle_deg += 360
+    # Using modulo operation ensures proper handling of all angles (negative and > 360)
+    position_angle_deg = position_angle_deg % 360.0
     
     return (position_angle_deg, separation_arcsec)
 
@@ -372,7 +390,7 @@ def compute_orbital_anomalies(orbital_elements: Dict[str, float], dates: np.ndar
     tan_nu_half_array = np.sqrt((1 + e) / (1 - e)) * np.tan(E_array / 2)
     nu_array = 2 * np.arctan(tan_nu_half_array)
     
-    logger.debug(f"Computed anomalies for {len(dates)} epochs with e={e:.6f}")
+    logger.debug(f"Computed anomalies for {len(dates)} epochs with e={e:.{KEPLER_LOGGING_PRECISION}f}")
     
     return {
         'M': M_array % (2 * np.pi), # Normalize M to [0, 2π]
