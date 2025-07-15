@@ -3,14 +3,11 @@ from typing import Dict, Any, Optional
 from astropy.table import Table
 
 # --- Data Structures for Type Hinting ---
-# Using specific TypedDicts instead of Dict[str, Any] makes the code
-# much clearer and allows static analysis tools to catch errors.
-
 from typing import TypedDict
 
 class WdsSummary(TypedDict, total=False):
     """Data structure for a single-line entry from the WDS summary catalog."""
-    wds_id: str
+    wds_name: str
     ra_deg: float
     dec_deg: float
     date_first: float
@@ -24,14 +21,19 @@ class WdsSummary(TypedDict, total=False):
     mag_sec: float
 
 class OrbitalElements(TypedDict, total=False):
-    """Data structure for the 7 Keplerian orbital elements."""
-    P: float
-    T: float
-    e: float
-    a: float
-    i: float
-    Omega: float
-    omega: float
+    """Data structure for the 7 Keplerian orbital elements with uncertainties."""
+    wds_name: str
+    P: float      # Period (years)
+    T: float      # Epoch of periastron (years)
+    e: float      # Eccentricity
+    a: float      # Semi-major axis (arcsec)
+    i: float      # Inclination (degrees)
+    Omega: float  # Longitude of ascending node (degrees)
+    omega: float  # Argument of periastron (degrees)
+    
+    # Uncertainties for scientific completeness
+    e_P: float    # Period uncertainty (years)
+    e_a: float    # Semi-major axis uncertainty (arcsec)
 
 class PhysicalityAssessment(TypedDict, total=False):
     """Data structure for the result of a physicality validation."""
@@ -74,7 +76,11 @@ class DataSource(ABC):
             wds_id: The WDS identifier for the star.
 
         Returns:
-            An astropy Table with all measurements, or None if not found.
+            An astropy Table with all measurements containing at minimum:
+            - 'epoch': Observation epoch (decimal years)
+            - 'theta': Position angle (degrees)
+            - 'rho': Separation (arcseconds)
+            Returns None if not found or if data source doesn't support this operation.
         """
         pass
 

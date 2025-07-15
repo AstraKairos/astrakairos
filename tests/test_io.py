@@ -119,3 +119,92 @@ def test_parse_wds_designation_valid(wds_id, expected_ra_deg, expected_dec_deg):
 def test_parse_wds_designation_invalid(invalid_wds_id):
     """Prueba que la función devuelve None para entradas inválidas."""
     assert io.parse_wds_designation(invalid_wds_id) is None
+
+# Test enhanced coordinate validation
+def test_parse_wds_designation_coordinate_validation():
+    """Test that parse_wds_designation validates astronomical coordinate ranges."""
+    # Test RA out of range (> 360°)
+    assert io.parse_wds_designation("25000+1234") is None  # RA = 375°
+    
+    # Test Dec out of range (> 90°)  
+    assert io.parse_wds_designation("00000+9100") is None  # Dec = 91°
+    
+    # Test Dec out of range (< -90°)
+    assert io.parse_wds_designation("00000-9100") is None  # Dec = -91°
+    
+    # Test valid coordinates at boundaries
+    result = io.parse_wds_designation("00000+9000")  # Dec = 90° (valid)
+    assert result is not None
+    assert result['dec_deg'] == 90.0
+    
+    result = io.parse_wds_designation("23599+0000")  # RA = 359.98° (valid)
+    assert result is not None
+    assert pytest.approx(result['ra_deg'], abs=0.1) == 359.98
+
+def test_format_coordinates_astropy_precision_config():
+    """Test that format_coordinates_astropy uses configuration for default precision."""
+    ra_hours = 1.0
+    dec_degrees = 5.0
+    
+    # Test with default precision (should use config value)
+    result_default = io.format_coordinates_astropy(ra_hours, dec_degrees)
+    
+    # Test with explicit precision
+    result_explicit = io.format_coordinates_astropy(ra_hours, dec_degrees, precision=2)
+    
+    # Both should be valid coordinate strings in astropy format
+    assert " " in result_default  # Should have spaces as separators
+    assert "+" in result_default or "-" in result_default  # Should have sign for declination
+    assert " " in result_explicit
+    assert "+" in result_explicit or "-" in result_explicit
+    assert result_explicit == io.format_coordinates_astropy(ra_hours, dec_degrees, precision=2)
+
+# Test unified coordinate formatting functions
+def test_format_coordinates_unified():
+    """Test the unified coordinate formatting function."""
+    ra_hours = 1.5
+    dec_degrees = 45.5
+    
+    result = io.format_coordinates(ra_hours, dec_degrees)
+    
+    # Should be same as astropy function
+    expected = io.format_coordinates_astropy(ra_hours, dec_degrees)
+    assert result == expected
+
+def test_format_ra_hours_unified():
+    """Test unified RA formatting."""
+    # Normal case
+    assert io.format_ra_hours_unified(12.5) == "12h30m00.00s"
+    
+    # Boundary cases
+    assert io.format_ra_hours_unified(0.0) == "00h00m00.00s"
+    assert io.format_ra_hours_unified(23.999) == "23h59m56.40s"
+    
+    # Hour normalization (>24)
+    assert io.format_ra_hours_unified(25.0) == "01h00m00.00s"
+    
+    # None handling
+    assert io.format_ra_hours_unified(None) == "N/A"
+
+def test_format_dec_degrees_unified():
+    """Test unified Dec formatting."""
+    # Positive case
+    assert io.format_dec_degrees_unified(45.75) == "+45°45'00.00\""
+    
+    # Negative case  
+    assert io.format_dec_degrees_unified(-30.25) == "-30°15'00.00\""
+    
+    # Zero case
+    assert io.format_dec_degrees_unified(0.0) == "+00°00'00.00\""
+    
+    # None handling
+    assert io.format_dec_degrees_unified(None) == "N/A"
+
+def test_coordinate_error_behavior():
+    """Test configurable error handling behavior."""
+    # This test should pass regardless of current config
+    result = io.format_coordinates_astropy("invalid", "invalid")
+    
+    # Should return something meaningful (not crash)
+    assert result is not None
+    assert isinstance(result, str)

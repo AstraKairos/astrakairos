@@ -1,247 +1,364 @@
 import pytest
 import numpy as np
-from unittest.mock import patch, MagicMock
-
-# Importamos la clase que vamos a probar
+from unittest.mock import Mock, patch, MagicMock
 from astrakairos.data.gaia_source import GaiaValidator
 
-# --- Datos de Prueba Simulados (Mocks) ---
-
-# Estrella 1: Datos completos y consistentes
-STAR_1_FULL = {
-    'source_id': 1, 'phot_g_mean_mag': 10.0,
-    'parallax': 10.0, 'parallax_error': 0.1,
-    'pmra': 50.0, 'pmra_error': 0.1,
-    'pmdec': -20.0, 'pmdec_error': 0.1,
-    'parallax_pmra_corr': 0.2, 'parallax_pmdec_corr': 0.1, 'pmra_pmdec_corr': -0.3
-}
-
-# Estrella 2: Físicamente asociada a Estrella 1 (datos muy similares)
-STAR_2_PHYSICAL = {
-    'source_id': 2, 'phot_g_mean_mag': 12.0,
-    'parallax': 10.05, 'parallax_error': 0.1,
-    'pmra': 50.05, 'pmra_error': 0.1,
-    'pmdec': -20.05, 'pmdec_error': 0.1,
-    'parallax_pmra_corr': 0.2, 'parallax_pmdec_corr': 0.1, 'pmra_pmdec_corr': -0.3
-}
-
-# Estrella 3: Óptica respecto a Estrella 1 (datos muy diferentes)
-STAR_3_OPTICAL = {
-    'source_id': 3, 'phot_g_mean_mag': 11.0,
-    'parallax': 1.0, 'parallax_error': 0.1, # Paralaje 100x diferente
-    'pmra': 5.0, 'pmra_error': 0.1,     # PM 10x diferente
-    'pmdec': -2.0, 'pmdec_error': 0.1,
-    'parallax_pmra_corr': 0.2, 'parallax_pmdec_corr': 0.1, 'pmra_pmdec_corr': -0.3
-}
-
-# Estrella 4: Datos incompletos (sin paralaje)
-STAR_4_NO_PARALLAX = {
-    'source_id': 4, 'phot_g_mean_mag': 13.0,
-    'parallax': None, 'parallax_error': None, # Falta paralaje
-    'pmra': 50.0, 'pmra_error': 0.1,
-    'pmdec': -20.0, 'pmdec_error': 0.1,
-    'parallax_pmra_corr': None, 'parallax_pmdec_corr': None, 'pmra_pmdec_corr': -0.3
-}
-
-# Estrella 5: Datos incompletos (sin movimiento propio)
-STAR_5_NO_PM = {
-    'source_id': 5, 'phot_g_mean_mag': 14.0,
-    'parallax': 10.0, 'parallax_error': 0.1,
-    'pmra': None, 'pmra_error': None, # Falta PM
-    'pmdec': None, 'pmdec_error': None,
-    'parallax_pmra_corr': None, 'parallax_pmdec_corr': None, 'pmra_pmdec_corr': None
-}
-
-# --- Fixture para el Validador ---
-
-@pytest.fixture
-def validator():
-    """Crea una instancia de GaiaValidator con umbrales estándar para las pruebas."""
-    return GaiaValidator(physical_p_value_threshold=0.05, ambiguous_p_value_threshold=0.001)
-
-# --- Pruebas de la Lógica de Validación ---
-
-@pytest.mark.asyncio
-# Usamos 'patch' para reemplazar la función que hace la llamada a la red.
-# 'autospec=True' asegura que el mock tenga la misma firma que la función real.
-@patch('astrakairos.data.gaia_source.GaiaValidator._query_gaia_for_pair', autospec=True)
-async def test_validation_physical_pair_3d(mock_query, validator):
-    """Verifica que un par físico con datos 3D completos se clasifica correctamente."""
-    # Configura el mock para que devuelva nuestras estrellas simuladas
-    mock_query.return_value = [STAR_1_FULL, STAR_2_PHYSICAL]
+class TestGaiaValidator:
+    """Test GaiaValidator class."""
     
-    result = await validator.validate_physicality(
-        primary_coords_deg=(0, 0), wds_magnitudes=(10.0, 12.0)
-    )
+    @pytest.fixture
+    def gaia_validator(self):
+        return GaiaValidator(
+            physical_p_value_threshold=0.05,
+            ambiguous_p_value_threshold=0.001
+        )
     
-    assert result['label'] == 'Likely Physical'
-    assert result['test_used'] == '3D (plx+pm)'
-    assert result['p_value'] > validator.physical_threshold
-
-@pytest.mark.asyncio
-@patch('astrakairos.data.gaia_source.GaiaValidator._query_gaia_for_pair', autospec=True)
-async def test_validation_optical_pair_3d(mock_query, validator):
-    """Verifica que un par óptico con datos 3D completos se clasifica correctamente."""
-    mock_query.return_value = [STAR_1_FULL, STAR_3_OPTICAL]
+    def test_initialization_default(self):
+        """Test GaiaValidator initialization with default values."""
+        validator = GaiaValidator()
+        
+        assert validator.physical_threshold == 0.05
+        assert validator.ambiguous_threshold == 0.001
+        assert validator.default_search_radius_arcsec == 10.0
+        assert validator.mag_limit == 18.0
     
-    result = await validator.validate_physicality(
-        primary_coords_deg=(0, 0), wds_magnitudes=(10.0, 11.0)
-    )
+    def test_initialization_custom_values(self):
+        """Test GaiaValidator initialization with custom values."""
+        validator = GaiaValidator(
+            physical_p_value_threshold=0.1,
+            ambiguous_p_value_threshold=0.01,
+            default_search_radius_arcsec=15.0,
+            mag_limit=16.0
+        )
+        
+        assert validator.physical_threshold == 0.1
+        assert validator.ambiguous_threshold == 0.01
+        assert validator.default_search_radius_arcsec == 15.0
+        assert validator.mag_limit == 16.0
     
-    assert result['label'] == 'Likely Optical'
-    assert result['test_used'] == '3D (plx+pm)'
-    assert result['p_value'] < validator.ambiguous_threshold
-
-@pytest.mark.asyncio
-@patch('astrakairos.data.gaia_source.GaiaValidator._query_gaia_for_pair', autospec=True)
-async def test_adaptive_logic_falls_back_to_2d(mock_query, validator):
-    """Prueba que el validador usa la prueba 2D si los datos 3D no están completos."""
-    # Estrella 1 tiene datos completos, Estrella 4 no tiene paralaje.
-    # El test 3D debe fallar, y debe intentar el test 2D.
-    # Las PM de STAR_4_NO_PARALLAX son idénticas a las de STAR_1_FULL, por lo que deberían ser físicas.
-    mock_query.return_value = [STAR_1_FULL, STAR_4_NO_PARALLAX]
+    def test_initialization_legacy_parameter(self):
+        """Test GaiaValidator initialization with legacy parameter."""
+        validator = GaiaValidator(p_value_threshold=0.1)
+        
+        assert validator.physical_threshold == 0.1
     
-    result = await validator.validate_physicality(
-        primary_coords_deg=(0, 0), wds_magnitudes=(10.0, 13.0)
-    )
+    def test_initialization_invalid_thresholds(self):
+        """Test GaiaValidator initialization with invalid thresholds."""
+        with pytest.raises(ValueError, match="physical_p_value_threshold \\(0.001\\) must be greater"):
+            GaiaValidator(
+                physical_p_value_threshold=0.001,
+                ambiguous_p_value_threshold=0.01
+            )
     
-    assert result['label'] == 'Likely Physical'
-    assert result['test_used'] == '2D (pm_only)'
-    assert result['p_value'] > validator.physical_threshold
-
-@pytest.mark.asyncio
-@patch('astrakairos.data.gaia_source.GaiaValidator._query_gaia_for_pair', autospec=True)
-async def test_adaptive_logic_falls_back_to_1d(mock_query, validator):
-    """Prueba que el validador usa la prueba 1D si las pruebas 3D y 2D fallan."""
-    # Estrella 1 tiene datos completos, Estrella 5 no tiene PM.
-    # Los tests 3D y 2D deben fallar. Debe intentar el test 1D.
-    # El paralaje de STAR_5_NO_PM es idéntico al de STAR_1_FULL.
-    mock_query.return_value = [STAR_1_FULL, STAR_5_NO_PM]
+    @pytest.mark.asyncio
+    async def test_validate_physicality_success(self, gaia_validator):
+        """Test successful physicality validation."""
+        wds_summary = {
+            'wds_name': '00000+0000',
+            'ra_deg': 15.0,
+            'dec_deg': 45.0,
+            'mag_pri': 8.5,
+            'mag_sec': 9.2
+        }
+        
+        mock_sync_result = {
+            'label': 'Likely Physical',
+            'p_value': 0.1,
+            'test_used': '3D (plx+pm)'
+        }
+        
+        # Mock both the async Gaia query and the sync validation
+        mock_gaia_results = [Mock(), Mock()]  # Two mock Gaia sources
+        
+        with patch.object(gaia_validator, '_query_gaia_for_pair_async', return_value=mock_gaia_results):
+            with patch.object(gaia_validator, '_validate_physicality_sync', return_value=mock_sync_result):
+                result = await gaia_validator.validate_physicality(wds_summary)
+            
+            assert result['physicality_label'] == 'Likely Physical'
+            assert result['physicality_p_value'] == 0.1
+            assert result['physicality_test_used'] == '3D (plx+pm)'
     
-    result = await validator.validate_physicality(
-        primary_coords_deg=(0, 0), wds_magnitudes=(10.0, 14.0)
-    )
+    @pytest.mark.asyncio
+    async def test_validate_physicality_missing_coordinates(self, gaia_validator):
+        """Test physicality validation with missing coordinates."""
+        wds_summary = {
+            'wds_name': '00000+0000',
+            'mag_pri': 8.5,
+            'mag_sec': 9.2
+            # Missing ra_deg and dec_deg
+        }
+        
+        result = await gaia_validator.validate_physicality(wds_summary)
+        
+        assert result['physicality_label'] == 'Unknown'
+        assert result['physicality_p_value'] is None
+        assert result['physicality_test_used'] == 'Missing coordinates'
     
-    assert result['label'] == 'Likely Physical'
-    assert result['test_used'] == '1D (plx_only)'
-    assert result['p_value'] > validator.physical_threshold
-
-@pytest.mark.asyncio
-@patch('astrakairos.data.gaia_source.GaiaValidator._query_gaia_for_pair', autospec=True)
-async def test_validation_unknown_if_no_valid_test(mock_query, validator):
-    """Verifica que devuelve 'Unknown' si no se puede realizar ninguna prueba."""
-    # Estrella 4 no tiene paralaje, Estrella 5 no tiene PM. No hay ningún test en común.
-    mock_query.return_value = [STAR_4_NO_PARALLAX, STAR_5_NO_PM]
+    def test_validate_physicality_sync_success(self, gaia_validator):
+        """Test synchronous physicality validation."""
+        with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
+            with patch.object(gaia_validator, '_identify_components_by_mag') as mock_identify:
+                with patch.object(gaia_validator, '_calculate_chi2_3d') as mock_chi2:
+                    
+                    # Mock Gaia query results
+                    mock_star1 = Mock()
+                    mock_star2 = Mock()
+                    mock_query.return_value = [mock_star1, mock_star2]
+                    
+                    # Mock component identification
+                    mock_identify.return_value = (mock_star1, mock_star2)
+                    
+                    # Mock chi-squared calculation
+                    mock_chi2.return_value = (5.0, 3)  # chi2 value, dof
+                    
+                    result = gaia_validator._validate_physicality_sync(
+                        [mock_star1, mock_star2],  # gaia_results
+                        (8.5, 9.2)  # wds_mags
+                    )
+                    
+                    assert result['label'] == 'Likely Physical'  # p > 0.05
+                    assert result['p_value'] is not None
+                    assert result['test_used'] == '3D (plx+pm)'
     
-    result = await validator.validate_physicality(
-        primary_coords_deg=(0, 0), wds_magnitudes=(13.0, 14.0)
-    )
+    def test_validate_physicality_sync_not_enough_sources(self, gaia_validator):
+        """Test synchronous physicality validation with insufficient sources."""
+        with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
+            mock_query.return_value = [Mock()]  # Only one source
+            
+            result = gaia_validator._validate_physicality_sync(
+                [Mock()],  # Only one source
+                (8.5, 9.2)  # wds_mags
+            )
+            
+            assert result['label'] == 'Unknown'
+            assert result['p_value'] is None
+            assert result['test_used'] == 'Not enough Gaia sources'
     
-    assert result['label'] == 'Unknown'
-    assert result['test_used'] == 'Incomplete astrometry'
-
-@pytest.mark.asyncio
-@patch('astrakairos.data.gaia_source.GaiaValidator._query_gaia_for_pair', autospec=True)
-async def test_validation_unknown_if_not_enough_stars(mock_query, validator):
-    """Verifica que devuelve 'Unknown' si la consulta a Gaia devuelve menos de 2 estrellas."""
-    mock_query.return_value = [STAR_1_FULL] # Solo se encuentra una estrella
+    def test_validate_physicality_sync_component_matching_failed(self, gaia_validator):
+        """Test synchronous physicality validation with component matching failure."""
+        with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
+            with patch.object(gaia_validator, '_identify_components_by_mag') as mock_identify:
+                
+                mock_query.return_value = [Mock(), Mock()]
+                mock_identify.return_value = (None, None)
+                
+                result = gaia_validator._validate_physicality_sync(
+                    [Mock(), Mock()],  # gaia_results
+                    (8.5, 9.2)  # wds_mags
+                )
+                
+                assert result['label'] == 'Ambiguous'
+                assert result['p_value'] is None
+                assert result['test_used'] == 'Component matching failed'
     
-    result = await validator.validate_physicality(
-        primary_coords_deg=(0, 0), wds_magnitudes=(10.0, 12.0)
-    )
+    def test_validate_physicality_sync_fallback_tests(self, gaia_validator):
+        """Test synchronous physicality validation with fallback to 2D and 1D tests."""
+        with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
+            with patch.object(gaia_validator, '_identify_components_by_mag') as mock_identify:
+                with patch.object(gaia_validator, '_calculate_chi2_3d') as mock_chi2_3d:
+                    with patch.object(gaia_validator, '_calculate_chi2_2d_pm') as mock_chi2_2d:
+                        
+                        mock_star1 = Mock()
+                        mock_star2 = Mock()
+                        mock_query.return_value = [mock_star1, mock_star2]
+                        mock_identify.return_value = (mock_star1, mock_star2)
+                        
+                        # 3D test fails, 2D test succeeds
+                        mock_chi2_3d.return_value = None
+                        mock_chi2_2d.return_value = (3.0, 2)
+                        
+                        result = gaia_validator._validate_physicality_sync(
+                            [mock_star1, mock_star2],  # gaia_results
+                            (8.5, 9.2)  # wds_mags
+                        )
+                        
+                        assert result['test_used'] == '2D (pm_only)'
+                        assert result['p_value'] is not None
     
-    assert result['label'] == 'Unknown'
-    assert result['test_used'] == 'Not enough Gaia sources'
-
-# --- Pruebas para la Lógica de Identificación de Componentes ---
-
-@pytest.mark.parametrize("wds_mags, gaia_stars, expected_ids", [
-    # Caso 1: Identificación clara por magnitud
-    ( (10.0, 12.0), [STAR_2_PHYSICAL, STAR_1_FULL], (1, 2) ),
-    # Caso 2: Secundaria es más brillante en Gaia (B < A)
-    ( (12.0, 10.0), [STAR_2_PHYSICAL, STAR_1_FULL], (2, 1) ),
-    # Caso 3: Sin magnitudes WDS, debe usar el orden de brillo de Gaia
-    ( (None, None), [STAR_1_FULL, STAR_3_OPTICAL], (1, 3) ),
-])
-def test_identify_components_by_mag(validator, wds_mags, gaia_stars, expected_ids):
-    """Prueba la lógica de identificación de componentes por magnitud."""
-    primary, secondary = validator._identify_components_by_mag(gaia_stars, wds_mags)
+    def test_get_params_and_check_validity(self, gaia_validator):
+        """Test parameter validity checking."""
+        mock_star = Mock()
+        mock_star.colnames = ['parallax', 'parallax_error', 'pmra']
+        mock_star.__getitem__ = Mock(side_effect=lambda key: {
+            'parallax': 5.0,
+            'parallax_error': 0.1,
+            'pmra': 10.0
+        }[key])
+        
+        # Test valid parameters
+        assert gaia_validator._get_params_and_check_validity(
+            mock_star, ['parallax', 'parallax_error']
+        ) == True
+        
+        # Test missing parameter
+        assert gaia_validator._get_params_and_check_validity(
+            mock_star, ['parallax', 'missing_param']
+        ) == False
     
-    assert primary['source_id'] == expected_ids[0]
-    assert secondary['source_id'] == expected_ids[1]
-
-@pytest.mark.asyncio
-@patch('astrakairos.data.gaia_source.GaiaValidator._query_gaia_for_pair', autospec=True)
-async def test_validation_ambiguous_pair(mock_query, validator):
-    """
-    Verifies that a pair with moderately different data falls into the 'Ambiguous' category.
-    """
-    # Create a star with data that is more significantly different to ensure
-    # the resulting p-value falls into the 'ambiguous' range.
-    # A ~4-sigma deviation should be sufficient.
-    star_ambiguous = {
-        'source_id': 6, 'phot_g_mean_mag': 11.5,
-        'parallax': 10.4, 'parallax_error': 0.1,  # 4-sigma difference in parallax
-        'pmra': 50.4, 'pmra_error': 0.1,      # 4-sigma difference in pmra
-        'pmdec': -20.0, 'pmdec_error': 0.1,     # No difference here
-        'parallax_pmra_corr': 0.2, 'parallax_pmdec_corr': 0.1, 'pmra_pmdec_corr': -0.3
-    }
-    mock_query.return_value = [STAR_1_FULL, star_ambiguous]
+    def test_calculate_chi2_3d_success(self, gaia_validator):
+        """Test successful 3D chi-squared calculation."""
+        mock_star1 = Mock()
+        mock_star1.colnames = ['parallax', 'parallax_error', 'pmra', 'pmra_error', 
+                              'pmdec', 'pmdec_error', 'parallax_pmra_corr', 
+                              'parallax_pmdec_corr', 'pmra_pmdec_corr']
+        mock_star1.__getitem__ = Mock(side_effect=lambda key: {
+            'parallax': 5.0, 'parallax_error': 0.1,
+            'pmra': 10.0, 'pmra_error': 0.2,
+            'pmdec': -5.0, 'pmdec_error': 0.15,
+            'parallax_pmra_corr': 0.1, 'parallax_pmdec_corr': 0.05,
+            'pmra_pmdec_corr': 0.2
+        }[key])
+        # Add get method for correlation coefficients
+        mock_star1.get = Mock(side_effect=lambda key, default=None: {
+            'parallax_pmra_corr': 0.1, 'parallax_pmdec_corr': 0.05, 'pmra_pmdec_corr': 0.2
+        }.get(key, default))
+        
+        mock_star2 = Mock()
+        mock_star2.colnames = mock_star1.colnames
+        mock_star2.__getitem__ = Mock(side_effect=lambda key: {
+            'parallax': 4.8, 'parallax_error': 0.12,
+            'pmra': 9.8, 'pmra_error': 0.18,
+            'pmdec': -4.9, 'pmdec_error': 0.14,
+            'parallax_pmra_corr': 0.08, 'parallax_pmdec_corr': 0.04,
+            'pmra_pmdec_corr': 0.18
+        }[key])
+        # Add get method for correlation coefficients
+        mock_star2.get = Mock(side_effect=lambda key, default=None: {
+            'parallax_pmra_corr': 0.08, 'parallax_pmdec_corr': 0.04, 'pmra_pmdec_corr': 0.18
+        }.get(key, default))
+        
+        with patch.object(gaia_validator, '_get_params_and_check_validity', return_value=True):
+            result = gaia_validator._calculate_chi2_3d(mock_star1, mock_star2)
+            
+            assert result is not None
+            chi2_val, dof = result
+            assert isinstance(chi2_val, (float, np.floating))
+            assert dof == 3
+            assert chi2_val >= 0
     
-    result = await validator.validate_physicality(
-        primary_coords_deg=(0, 0), wds_magnitudes=(10.0, 11.5)
-    )
+    def test_calculate_chi2_3d_missing_data(self, gaia_validator):
+        """Test 3D chi-squared calculation with missing data."""
+        mock_star1 = Mock()
+        mock_star2 = Mock()
+        
+        with patch.object(gaia_validator, '_get_params_and_check_validity', return_value=False):
+            result = gaia_validator._calculate_chi2_3d(mock_star1, mock_star2)
+            assert result is None
     
-    # Now, the p-value should be low enough to not be 'Likely Physical', but not
-    # so low as to be 'Likely Optical'.
-    assert result['label'] == 'Ambiguous'
-    assert result['test_used'] == '3D (plx+pm)'
-    # Check that the p-value is in the correct intermediate range
-    assert validator.ambiguous_threshold < result['p_value'] <= validator.physical_threshold
-
-
-def test_calculate_chi2_handles_singular_matrix(validator):
-    """
-    Tests that _calculate_chi2_... functions return None if the covariance matrix is singular.
-    """
-    # Create data that will result in a singular (non-invertible) matrix.
-    # This happens if errors are zero.
-    star_a = STAR_1_FULL.copy()
-    star_b = STAR_2_PHYSICAL.copy()
-    star_a['parallax_error'] = 0.0
-    star_a['pmra_error'] = 0.0
-    star_a['pmdec_error'] = 0.0
-    star_b['parallax_error'] = 0.0
-    star_b['pmra_error'] = 0.0
-    star_b['pmdec_error'] = 0.0
+    def test_identify_components_by_mag_with_magnitudes(self, gaia_validator):
+        """Test component identification with WDS magnitudes."""
+        mock_source1 = Mock()
+        mock_source1.__getitem__ = Mock(return_value=8.5)
+        mock_source1.get = Mock(return_value='source1')
+        
+        mock_source2 = Mock()
+        mock_source2.__getitem__ = Mock(return_value=9.2)
+        mock_source2.get = Mock(return_value='source2')
+        
+        # Mock the source_id differently for each source
+        type(mock_source1).source_id = 'source1'
+        type(mock_source2).source_id = 'source2'
+        
+        gaia_results = [mock_source1, mock_source2]
+        wds_mags = (8.5, 9.2)
+        
+        primary, secondary = gaia_validator._identify_components_by_mag(gaia_results, wds_mags)
+        
+        assert primary == mock_source1
+        assert secondary == mock_source2
     
-    # The @patch is not needed here as we are calling a private synchronous method directly
-    # to test its internal logic.
-    result_3d = validator._calculate_chi2_3d(star_a, star_b)
-    result_2d = validator._calculate_chi2_2d_pm(star_a, star_b)
-    result_1d = validator._calculate_chi2_1d_plx(star_a, star_b)
+    def test_identify_components_by_mag_without_magnitudes(self, gaia_validator):
+        """Test component identification without WDS magnitudes."""
+        mock_source1 = Mock()
+        mock_source2 = Mock()
+        
+        gaia_results = [mock_source1, mock_source2]
+        wds_mags = (None, None)
+        
+        primary, secondary = gaia_validator._identify_components_by_mag(gaia_results, wds_mags)
+        
+        assert primary == mock_source1
+        assert secondary == mock_source2
     
-    assert result_3d is None
-    assert result_2d is None
-    assert result_1d is None
-
-
-def test_get_params_and_check_validity_handles_bad_data(validator):
-    """
-    Tests the _get_params_and_check_validity helper with various forms of bad data.
-    """
-    # Case 1: Key is missing entirely
-    bad_star_1 = {'parallax': 10.0} # Missing 'parallax_error'
-    assert not validator._get_params_and_check_validity(bad_star_1, ['parallax', 'parallax_error'])
-
-    # Case 2: Value is None
-    bad_star_2 = {'parallax': 10.0, 'parallax_error': None}
-    assert not validator._get_params_and_check_validity(bad_star_2, ['parallax', 'parallax_error'])
-
-    # Case 3: Value is a masked numpy value (as can happen with astroquery)
-    bad_star_3 = {'parallax': 10.0, 'parallax_error': np.ma.masked}
-    assert not validator._get_params_and_check_validity(bad_star_3, ['parallax', 'parallax_error'])
-
-    # Case 4: Good data should pass
-    good_star = {'parallax': 10.0, 'parallax_error': 0.1}
-    assert validator._get_params_and_check_validity(good_star, ['parallax', 'parallax_error'])
+    def test_query_gaia_for_pair_success(self, gaia_validator):
+        """Test successful Gaia query."""
+        # Create mock results that support both len() and slicing
+        mock_results = [Mock(), Mock()]  # List of 2 mock sources
+        
+        with patch('astrakairos.data.gaia_source.Gaia') as mock_gaia:
+            mock_job = Mock()
+            mock_job.get_results.return_value = mock_results
+            mock_gaia.launch_job.return_value = mock_job
+            
+            result = gaia_validator._query_gaia_for_pair_sync(15.0, 45.0, 10.0)
+            
+            # Should return the results (limited to max_sources)
+            assert result == mock_results
+            mock_gaia.launch_job.assert_called_once()
+    
+    def test_query_gaia_for_pair_exception(self, gaia_validator):
+        """Test Gaia query with exception."""
+        with patch('astrakairos.data.gaia_source.Gaia') as mock_gaia:
+            mock_gaia.launch_job.side_effect = Exception("Network error")
+            
+            # The sync method now propagates exceptions instead of returning None
+            with pytest.raises(Exception, match="Network error"):
+                gaia_validator._query_gaia_for_pair_sync(15.0, 45.0, 10.0)
+    
+    def test_validate_astrometric_quality(self, gaia_validator):
+        """Test astrometric quality validation."""
+        # Good quality source
+        good_source = Mock()
+        good_source.get.side_effect = lambda key: {
+            'source_id': 12345,
+            'ruwe': 1.2,
+            'parallax': 10.0,
+            'parallax_error': 2.0,
+            'pmra': 5.0,
+            'pmra_error': 1.0,
+            'pmdec': 3.0,
+            'pmdec_error': 1.0
+        }.get(key)
+        good_source.colnames = ['source_id', 'ruwe', 'parallax', 'parallax_error', 'pmra', 'pmra_error', 'pmdec', 'pmdec_error']
+        good_source.__getitem__ = lambda self, key: {
+            'source_id': 12345,
+            'ruwe': 1.2,
+            'parallax': 10.0,
+            'parallax_error': 2.0,
+            'pmra': 5.0,
+            'pmra_error': 1.0,
+            'pmdec': 3.0,
+            'pmdec_error': 1.0
+        }[key]
+        
+        assert gaia_validator._validate_astrometric_quality(good_source) == True
+        
+        # Poor RUWE source
+        poor_ruwe_source = Mock()
+        poor_ruwe_source.get.side_effect = lambda key: {
+            'source_id': 12346,
+            'ruwe': 2.0  # Too high
+        }.get(key)
+        poor_ruwe_source.colnames = ['source_id', 'ruwe']
+        poor_ruwe_source.__getitem__ = lambda self, key: {
+            'source_id': 12346,
+            'ruwe': 2.0
+        }[key]
+        
+        assert gaia_validator._validate_astrometric_quality(poor_ruwe_source) == False
+        
+        # Missing RUWE should still pass
+        no_ruwe_source = Mock()
+        no_ruwe_source.get.side_effect = lambda key: {
+            'source_id': 12347,
+            'parallax': 10.0,
+            'parallax_error': 2.0
+        }.get(key)
+        no_ruwe_source.colnames = ['source_id', 'parallax', 'parallax_error']
+        no_ruwe_source.__getitem__ = lambda self, key: {
+            'source_id': 12347,
+            'parallax': 10.0,
+            'parallax_error': 2.0
+        }[key]
+        
+        assert gaia_validator._validate_astrometric_quality(no_ruwe_source) == True

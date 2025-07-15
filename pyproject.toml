@@ -29,7 +29,9 @@ dependencies = [
     "astroquery",
     "numpy",
     "astropy",
-    "scipy"
+    "scipy",
+    "vizier",
+    "scikit-learn"
 ]
 
 [project.scripts]
@@ -37,3 +39,8 @@ astrakairos-analyze = "astrakairos.analyzer.cli:main"
 
 [project.gui-scripts]
 astrakairos-plan = "astrakairos.planner.gui:main"
+
+[tool.pytest.ini_options]
+markers = [
+    "network: marks tests as requiring a network connection"
+]
