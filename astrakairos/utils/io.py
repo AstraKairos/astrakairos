@@ -31,7 +31,7 @@ def load_csv_data(filepath: str) -> Optional[pd.DataFrame]:
 
     Args:
         filepath: Absolute path to the CSV file containing stellar data
-                 Expected to have at minimum a 'wds_name' column for star identification
+                 Expected to have at minimum a 'wds_id' column for star identification
 
     Returns:
         pandas.DataFrame: Loaded astronomical data with proper column types
@@ -62,11 +62,27 @@ def load_csv_data(filepath: str) -> Optional[pd.DataFrame]:
             
             log.info(f"Attempting to read CSV with delimiter: '{current_delimiter}'")
             df = pd.read_csv(filepath, delimiter=current_delimiter, encoding='utf-8')
+            
+            # Validate that required 'wds_id' column exists
+            if 'wds_id' not in df.columns:
+                raise ValueError(f"Required 'wds_id' column not found in {filepath}")
+            
             log.info(f"CSV loaded successfully. Rows: {len(df)}")
             return df
             
+        except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
+            log.warning(f"Failed to parse CSV with delimiter '{current_delimiter}': {e}")
+        except (FileNotFoundError, PermissionError) as e:
+            log.error(f"File access error with '{filepath}': {e}")
+            raise  # Re-raise file access errors immediately
+        except UnicodeDecodeError as e:
+            log.warning(f"Encoding error with delimiter '{current_delimiter}': {e}")
+        except ValueError as e:
+            log.error(f"Data validation error with '{filepath}': {e}")
+            raise  # Re-raise validation errors immediately
         except Exception as e:
-            log.warning(f"Failed to load CSV with delimiter '{current_delimiter}': {e}")
+            log.error(f"Unexpected error with delimiter '{current_delimiter}': {e}")
+            # Continue to next delimiter for unexpected errors
             
     log.error(f"Could not load CSV file: {filepath}. All parsing attempts failed.")
     raise IOError(f"Could not load or parse the input file '{filepath}'.")
@@ -89,7 +105,7 @@ def save_results_to_csv(results: List[Dict[str, Any]], filepath: str) -> None:
     Args:
         results: List of analysis dictionaries, where each dictionary represents
                 one stellar system with standardized keys:
-                - 'wds_name': WDS identifier (required)
+                - 'wds_id': WDS identifier (required)
                 - 'opi': Observation Priority Index (for orbital mode)
                 - 'rmse': Motion fit quality (for characterize mode)  
                 - 'physicality_p_value': Gaia validation (for discovery mode)
@@ -111,8 +127,14 @@ def save_results_to_csv(results: List[Dict[str, Any]], filepath: str) -> None:
         df = pd.DataFrame(results)
         df.to_csv(filepath, index=False, encoding='utf-8')
         log.info(f"Results successfully saved to {filepath} ({len(df)} rows)")
+    except (FileNotFoundError, PermissionError) as e:
+        log.error(f"File access error when saving to {filepath}: {e}")
+        raise
+    except UnicodeEncodeError as e:
+        log.error(f"Encoding error when saving to {filepath}: {e}")
+        raise
     except Exception as e:
-        log.error(f"Failed to save results to {filepath}: {e}")
+        log.error(f"Unexpected error when saving to {filepath}: {e}")
         raise
 
 def format_coordinates_astropy(ra_hours: float, dec_degrees: float, precision: Optional[int] = None) -> str:
@@ -171,8 +193,9 @@ def parse_wds_designation(wds_id: str) -> Optional[Dict[str, float]]:
     if not isinstance(wds_id, str) or len(wds_id) < 10:
         return None
         
-    # The regex ensures the format is HHMMM[+-]DDMM
-    if not re.match(r'^\d{5}[+-]\d{4}', wds_id[:10]):
+    # Improved regex for WDS designation format validation
+    # Matches: HHMMM[+-]DDMM with optional component (e.g., AB, AC)
+    if not re.match(r'^\d{5}[+-]\d{4}([A-Z]{1,2})?', wds_id[:12]):
         log.debug(f"WDS ID '{wds_id}' does not match the coordinate format.")
         return None
         
