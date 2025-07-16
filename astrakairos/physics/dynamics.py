@@ -96,7 +96,13 @@ from ..config import (
     MAX_PREDICTION_DATE_OFFSET_YEARS,
     MAX_RMSE_FOR_LINEAR_FIT_ARCSEC,
     MIN_RESIDUAL_SIGNIFICANCE,
-    MAX_EXTRAPOLATION_FACTOR
+    MAX_EXTRAPOLATION_FACTOR,
+    MIN_EPOCH_YEAR,
+    MAX_EPOCH_YEAR,
+    MIN_SEPARATION_ARCSEC,
+    MAX_SEPARATION_ARCSEC,
+    MAX_DEVIATION_WARNING_ARCSEC,
+    MAX_OLD_OBSERVATION_WARNING_YEARS
 )
 
 # Configure scientific logging
@@ -148,15 +154,18 @@ def calculate_observation_priority_index(
         logger.debug("OPI calculation failed: Missing required WDS summary data")
         return None
 
-    # Scientific validation of input ranges
-    if not (1800.0 <= t_last_obs <= 2100.0):  # Reasonable historical range
-        logger.warning(f"Last observation date {t_last_obs} outside typical range [1800, 2100]")
-    
-    if not (0.0 <= theta_last_obs_deg <= 360.0):
-        logger.warning(f"Position angle {theta_last_obs_deg}° outside valid range [0°, 360°]")
-    
-    if not (0.001 <= rho_last_obs <= 100.0):  # Reasonable separation range
-        logger.warning(f"Separation {rho_last_obs}\" outside typical range [0.001\", 100\"]")
+        # Scientific validation of input ranges using centralized configuration
+        if not (MIN_EPOCH_YEAR <= t_last_obs <= MAX_EPOCH_YEAR):
+            logger.error(f"Last observation date {t_last_obs} outside valid range [{MIN_EPOCH_YEAR}, {MAX_EPOCH_YEAR}]")
+            return None
+        
+        if not (0.0 <= theta_last_obs_deg <= 360.0):
+            logger.error(f"Position angle {theta_last_obs_deg}° outside valid range [0°, 360°]")
+            return None
+        
+        if not (MIN_SEPARATION_ARCSEC <= rho_last_obs <= MAX_SEPARATION_ARCSEC):
+            logger.error(f"Separation {rho_last_obs}\" outside valid range [{MIN_SEPARATION_ARCSEC}, {MAX_SEPARATION_ARCSEC}]")
+            return None
 
     # Predict the THEORETICAL position for the exact date of the LAST observation
     try:
@@ -189,12 +198,12 @@ def calculate_observation_priority_index(
         opi = deviation_arcsec / time_since_last_obs
         logger.debug(f"OPI calculation: deviation={deviation_arcsec:.4f}\", time_baseline={time_since_last_obs:.2f}yr, OPI={opi:.6f}")
         
-    # Scientific validation of results
-    if deviation_arcsec > 10.0:  # Unusually large deviation
-        logger.warning(f"Large positional deviation detected: {deviation_arcsec:.3f}\" - orbit may be incorrect")
+    # Scientific validation of results using centralized configuration
+    if deviation_arcsec > MAX_DEVIATION_WARNING_ARCSEC:
+        logger.warning(f"Large positional deviation detected: {deviation_arcsec:.3f}\" > {MAX_DEVIATION_WARNING_ARCSEC}\" - orbit may be incorrect")
     
-    if time_since_last_obs > 50.0:  # Very old observation
-        logger.warning(f"Very old last observation: {time_since_last_obs:.1f} years - high observation priority")
+    if time_since_last_obs > MAX_OLD_OBSERVATION_WARNING_YEARS:
+        logger.warning(f"Very old last observation: {time_since_last_obs:.1f} years > {MAX_OLD_OBSERVATION_WARNING_YEARS} - high observation priority")
         
     return opi, deviation_arcsec
 
@@ -370,17 +379,20 @@ def calculate_curvature_index(
         intercept_y = linear_fit_results['intercept_y']
         mean_epoch = linear_fit_results['mean_epoch_fit']
         
-        # Scientific validation of prediction date
+        # Scientific validation of prediction date using centralized configuration
         time_offset = current_date - mean_epoch
         if not (MIN_PREDICTION_DATE_OFFSET_YEARS <= time_offset <= MAX_PREDICTION_DATE_OFFSET_YEARS):
-            logger.warning(f"Prediction date offset {time_offset:.1f} years outside safe range [{MIN_PREDICTION_DATE_OFFSET_YEARS}, {MAX_PREDICTION_DATE_OFFSET_YEARS}]")
+            logger.error(f"Prediction date offset {time_offset:.1f} years outside safe range [{MIN_PREDICTION_DATE_OFFSET_YEARS}, {MAX_PREDICTION_DATE_OFFSET_YEARS}]")
+            return None
         
-        # Check for safe extrapolation if baseline data available
+        # Critical: Check for safe extrapolation using centralized configuration
         if 'time_baseline_years' in linear_fit_results:
             baseline = linear_fit_results['time_baseline_years']
-            extrapolation_factor = abs(time_offset) / baseline if baseline > 0 else float('inf')
-            if extrapolation_factor > MAX_EXTRAPOLATION_FACTOR:
-                logger.warning(f"Large extrapolation factor {extrapolation_factor:.2f} > {MAX_EXTRAPOLATION_FACTOR} - results may be unreliable")
+            if baseline > 0:
+                extrapolation_factor = abs(time_offset) / baseline
+                if extrapolation_factor > MAX_EXTRAPOLATION_FACTOR:
+                    logger.error(f"Unsafe extrapolation factor {extrapolation_factor:.2f} > {MAX_EXTRAPOLATION_FACTOR} - prediction would be unreliable")
+                    return None
 
         # Predict position using the orbital model
         orbital_pos = predict_position(orbital_elements, current_date)
@@ -389,9 +401,10 @@ def calculate_curvature_index(
             return None
         theta_orb_deg, rho_orb = orbital_pos
 
-        # Scientific validation of orbital prediction
-        if not (0.001 <= rho_orb <= 100.0):
-            logger.warning(f"Orbital separation prediction {rho_orb:.4f}\" outside typical range [0.001\", 100\"]")
+        # Scientific validation of orbital prediction using centralized configuration
+        if not (MIN_SEPARATION_ARCSEC <= rho_orb <= MAX_SEPARATION_ARCSEC):
+            logger.error(f"Orbital separation prediction {rho_orb:.4f}\" outside valid range [{MIN_SEPARATION_ARCSEC}, {MAX_SEPARATION_ARCSEC}]")
+            return None
 
         # Calculate the position from the linear model using CORRECT centered intercepts
         # Linear prediction using centered time: position = intercept + slope * (time - mean_epoch)
@@ -475,12 +488,15 @@ def calculate_mean_velocity_from_endpoints(
         if dt < MIN_TIME_BASELINE_YEARS:
             logger.warning(f"Short time baseline for endpoint calculation: {dt:.2f} years < {MIN_TIME_BASELINE_YEARS}")
         
-        # Scientific validation of input ranges
+        # Scientific validation of input ranges using centralized configuration
+        if not (MIN_EPOCH_YEAR <= t1 <= MAX_EPOCH_YEAR) or not (MIN_EPOCH_YEAR <= t2 <= MAX_EPOCH_YEAR):
+            logger.warning(f"Observation dates outside typical range [{MIN_EPOCH_YEAR}, {MAX_EPOCH_YEAR}]")
+        
         if not (0.0 <= theta1_deg <= 360.0) or not (0.0 <= theta2_deg <= 360.0):
             logger.warning("Position angles outside [0°, 360°] range in endpoint calculation")
         
-        if rho1 <= 0 or rho2 <= 0:
-            logger.warning("Non-positive separations in endpoint calculation")
+        if not (MIN_SEPARATION_ARCSEC <= rho1 <= MAX_SEPARATION_ARCSEC) or not (MIN_SEPARATION_ARCSEC <= rho2 <= MAX_SEPARATION_ARCSEC):
+            logger.warning(f"Separations outside typical range [{MIN_SEPARATION_ARCSEC}, {MAX_SEPARATION_ARCSEC}] in endpoint calculation")
             
         # Convert to Cartesian coordinates
         theta1_rad, theta2_rad = np.radians(theta1_deg), np.radians(theta2_deg)

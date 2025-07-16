@@ -176,11 +176,11 @@ MAX_EPOCH_PERIASTRON_YEAR = 2100.0          # Maximum reasonable epoch
 # === PHYSICS Configuration - Dynamics & OPI ===
 
 # Observation Priority Index (OPI) Configuration
-OPI_DEVIATION_THRESHOLD_ARCSEC = 0.1        # Threshold for deviation-based OPI calculation
+OPI_DEVIATION_THRESHOLD_ARCSEC = 0.1        # Threshold for zero-time-baseline OPI calculation
 OPI_INFINITE_THRESHOLD = 1000.0             # Value representing infinite priority
 
 # Robust Linear Fit Configuration
-MIN_POINTS_FOR_ROBUST_FIT = 4               # Minimum observations for robust regression
+MIN_POINTS_FOR_ROBUST_FIT = 5               # Minimum measurements required for robust Theil-Sen analysis
 ROBUST_REGRESSION_RANDOM_STATE = 42         # Random state for reproducible results
 
 # Astrometric Motion Validation
@@ -188,14 +188,14 @@ MAX_ASTROMETRIC_VELOCITY_ARCSEC_PER_YEAR = 10.0  # Maximum realistic proper moti
 MIN_TIME_BASELINE_YEARS = 1.0               # Minimum time baseline for meaningful analysis
 
 # Curvature Analysis Configuration
-MAX_CURVATURE_INDEX_ARCSEC = 5.0            # Maximum expected curvature deviation
-MIN_PREDICTION_DATE_OFFSET_YEARS = -200.0  # Historical limit for reliable predictions
-MAX_PREDICTION_DATE_OFFSET_YEARS = 50.0    # Future limit for reliable predictions
+MAX_CURVATURE_INDEX_ARCSEC = 50.0            # Maximum expected curvature deviation
+MIN_PREDICTION_DATE_OFFSET_YEARS = -100.0  # Historical limit for reliable predictions
+MAX_PREDICTION_DATE_OFFSET_YEARS = 100.0    # Future limit for reliable predictions
 
 # Statistical Validation Thresholds
-MAX_RMSE_FOR_LINEAR_FIT_ARCSEC = 5.0  # RMSE threshold for acceptable linear fits
+MAX_RMSE_FOR_LINEAR_FIT_ARCSEC = 1.0  # RMSE threshold for acceptable linear fits
 MIN_RESIDUAL_SIGNIFICANCE = 0.001  # Minimum residual for statistical significance
-MAX_EXTRAPOLATION_FACTOR = 3.0     # Maximum safe extrapolation beyond observation baseline
+MAX_EXTRAPOLATION_FACTOR = 2.0     # Maximum safe extrapolation beyond observation baseline
 
 # Default sort keys for each analysis mode
 DEFAULT_SORT_KEYS = {
@@ -245,3 +245,36 @@ DEFAULT_PROCESSING_TIMEOUT_SECONDS = 3600  # 1 hour timeout for large analyses
 CLI_MAX_RETRY_ATTEMPTS = 3  # Maximum retries for failed operations
 CLI_RETRY_DELAY_SECONDS = 2.0  # Delay between retry attempts
 CLI_ERROR_LOG_DETAIL_LEVEL = "DETAILED"  # Options: "BASIC", "DETAILED", "DEBUG"
+
+# === Dynamics Module Configuration ===
+# Observation Priority Index (OPI) Configuration
+OPI_DEVIATION_THRESHOLD_ARCSEC = 0.1  # Threshold for zero-time-baseline OPI calculation
+OPI_INFINITE_THRESHOLD = 1000.0  # Maximum reasonable OPI value before considering infinite
+
+# Robust Fitting Configuration
+MIN_POINTS_FOR_ROBUST_FIT = 5  # Minimum measurements required for robust Theil-Sen analysis
+ROBUST_REGRESSION_RANDOM_STATE = 42  # Fixed seed for reproducible robust regression results
+
+# Astrometric Motion Limits - Physical Constraints
+MAX_ASTROMETRIC_VELOCITY_ARCSEC_PER_YEAR = 10.0  # Maximum reasonable astrometric velocity
+MIN_TIME_BASELINE_YEARS = 1.0  # Minimum meaningful time baseline for motion analysis
+MAX_CURVATURE_INDEX_ARCSEC = 50.0  # Maximum reasonable curvature index value
+
+# Prediction and Extrapolation Safety Limits
+MIN_PREDICTION_DATE_OFFSET_YEARS = -100.0  # Historical prediction limit (relative to fit epoch)
+MAX_PREDICTION_DATE_OFFSET_YEARS = 100.0   # Future prediction limit (relative to fit epoch)
+MAX_EXTRAPOLATION_FACTOR = 2.0  # Maximum safe extrapolation factor (prediction/baseline ratio)
+
+# Fit Quality Thresholds
+MAX_RMSE_FOR_LINEAR_FIT_ARCSEC = 1.0  # Maximum RMSE for acceptable linear fit quality
+MIN_RESIDUAL_SIGNIFICANCE = 0.001  # Minimum significant residual value (arcsec)
+
+# Validation Ranges for Input Data
+MIN_EPOCH_YEAR = 1800.0  # Minimum reasonable historical epoch
+MAX_EPOCH_YEAR = 2100.0  # Maximum reasonable future epoch
+MIN_SEPARATION_ARCSEC = 0.001  # Minimum measurable angular separation
+MAX_SEPARATION_ARCSEC = 100.0  # Maximum reasonable angular separation for binary stars
+
+# Warning Thresholds for Scientific Validation
+MAX_DEVIATION_WARNING_ARCSEC = 10.0  # Threshold for large positional deviation warning
+MAX_OLD_OBSERVATION_WARNING_YEARS = 50.0  # Threshold for very old observation warning
