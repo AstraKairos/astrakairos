@@ -146,6 +146,8 @@ GAIA_RETRY_DELAY_SECONDS = 2.0              # Delay between retry attempts
 # Gaia Data Quality Thresholds
 MIN_PARALLAX_SIGNIFICANCE = 3.0             # Minimum parallax/error ratio for reliability
 MIN_PM_SIGNIFICANCE = 3.0                   # Minimum proper motion significance
+GAIA_MAX_RUWE = 1.4                         # Maximum RUWE for good astrometric solution (Lindegren et al. 2018)
+GAIA_DEFAULT_CORRELATION_MISSING = 0.0      # Default correlation coefficient when missing
 
 # === PHYSICS Configuration - Kepler Solver ===
 
