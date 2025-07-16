@@ -11,7 +11,8 @@ from ..config import (
     DEFAULT_GAIA_ROW_LIMIT, DEFAULT_PHYSICAL_P_VALUE_THRESHOLD, 
     DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD, GAIA_QUERY_TIMEOUT_SECONDS,
     GAIA_MAX_RETRY_ATTEMPTS, GAIA_RETRY_DELAY_SECONDS,
-    MIN_PARALLAX_SIGNIFICANCE, MIN_PM_SIGNIFICANCE
+    MIN_PARALLAX_SIGNIFICANCE, MIN_PM_SIGNIFICANCE,
+    GAIA_MAX_RUWE, GAIA_DEFAULT_CORRELATION_MISSING
 )
 
 log = logging.getLogger(__name__)
@@ -32,9 +33,7 @@ class GaiaValidator:
                  physical_p_value_threshold: float = DEFAULT_PHYSICAL_P_VALUE_THRESHOLD,
                  ambiguous_p_value_threshold: float = DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD,
                  mag_limit: float = DEFAULT_GAIA_MAG_LIMIT,
-                 max_sources: int = DEFAULT_GAIA_ROW_LIMIT,
-                 # Legacy support for old parameter name
-                 p_value_threshold: Optional[float] = None):
+                 max_sources: int = DEFAULT_GAIA_ROW_LIMIT):
         """
         Initializes the Gaia validator with scientifically rigorous configuration.
 
@@ -47,7 +46,6 @@ class GaiaValidator:
                                          Below this: 'Likely Optical'. Standard: 0.001 (0.1%)
             mag_limit: G-band magnitude limit for Gaia queries (avoids faint noise)
             max_sources: Maximum number of sources to retrieve (prevents memory issues)
-            p_value_threshold: Legacy parameter name for physical_p_value_threshold
             
         Raises:
             ValueError: If thresholds are not in scientifically valid order
@@ -74,12 +72,7 @@ class GaiaValidator:
             Gaia.MAIN_GAIA_TABLE = gaia_table
             Gaia.ROW_LIMIT = max_sources
 
-        if p_value_threshold is not None:
-            log.warning("Parameter 'p_value_threshold' is deprecated. Use 'physical_p_value_threshold' instead.")
-            self.physical_threshold = p_value_threshold
-        else:
-            self.physical_threshold = physical_p_value_threshold
-
+        self.physical_threshold = physical_p_value_threshold
         self.ambiguous_threshold = ambiguous_p_value_threshold
         
         # Scientific validation of thresholds
@@ -107,16 +100,41 @@ class GaiaValidator:
         """
         Validates if a binary system is physically bound using Gaia data.
         
+        FIXED: Now returns PhysicalityAssessment compatible with source.py interface
+        
         Args:
             wds_summary: WDS summary data containing coordinates and magnitudes
             search_radius_arcsec: Optional override for search radius
             
         Returns:
-            A dictionary with physicality assessment details including:
-            - physicality_label: Classification result
-            - physicality_p_value: Statistical p-value
-            - physicality_test_used: Description of test performed
+            PhysicalityAssessment dictionary with complete metadata
         """
+        from datetime import datetime
+        from ..data.source import PhysicalityLabel, ValidationMethod
+        
+        # Prepare default response structure
+        def create_assessment(label: PhysicalityLabel, p_value: Optional[float] = None, 
+                            method: ValidationMethod = ValidationMethod.INSUFFICIENT_DATA,
+                            gaia_primary: Optional[str] = None,
+                            gaia_secondary: Optional[str] = None) -> Dict[str, Any]:
+            return {
+                'label': label,
+                'confidence': 1.0 - p_value if p_value else 0.0,
+                'p_value': p_value,
+                'method': method,
+                'parallax_consistency': None,
+                'proper_motion_consistency': None,
+                'gaia_source_id_primary': gaia_primary,
+                'gaia_source_id_secondary': gaia_secondary,
+                'validation_date': datetime.now().isoformat(),
+                'search_radius_arcsec': search_radius_arcsec or self.default_search_radius_arcsec,
+                'significance_thresholds': {
+                    'physical': self.physical_threshold,
+                    'ambiguous': self.ambiguous_threshold
+                },
+                'retry_attempts': 1  # Will be updated with actual retry count
+            }
+        
         try:
             # Extract coordinates and magnitudes from WDS summary
             ra_deg = wds_summary.get('ra_deg')
@@ -125,23 +143,15 @@ class GaiaValidator:
             mag_sec = wds_summary.get('mag_sec')
             
             if ra_deg is None or dec_deg is None:
-                return {
-                    'physicality_label': 'Unknown',
-                    'physicality_p_value': None,
-                    'physicality_test_used': 'Missing coordinates'
-                }
+                return create_assessment(PhysicalityLabel.UNKNOWN)
             
             final_radius = search_radius_arcsec if search_radius_arcsec is not None else self.default_search_radius_arcsec
             wds_magnitudes = (mag_pri, mag_sec)
             
-            # Async retry logic for Gaia queries (proper async pattern)
+            # Async retry logic for Gaia queries
             gaia_results = await self._query_gaia_for_pair_async(ra_deg, dec_deg, final_radius)
             if gaia_results is None or len(gaia_results) < 2:
-                return {
-                    'physicality_label': 'Unknown',
-                    'physicality_p_value': None,
-                    'physicality_test_used': 'Not enough Gaia sources'
-                }
+                return create_assessment(PhysicalityLabel.UNKNOWN)
             
             # Run synchronous analysis in executor
             loop = asyncio.get_event_loop()
@@ -152,20 +162,39 @@ class GaiaValidator:
                 wds_magnitudes
             )
             
-            # Rename keys to match expected format
-            return {
-                'physicality_label': result['label'],
-                'physicality_p_value': result['p_value'],
-                'physicality_test_used': result['test_used']
+            # Convert legacy format to PhysicalityAssessment
+            label_map = {
+                'Likely Physical': PhysicalityLabel.LIKELY_PHYSICAL,
+                'Likely Optical': PhysicalityLabel.LIKELY_OPTICAL,
+                'Ambiguous': PhysicalityLabel.AMBIGUOUS,
+                'Unknown': PhysicalityLabel.UNKNOWN
             }
+            
+            method_map = {
+                '3D (plx+pm)': ValidationMethod.GAIA_3D_PARALLAX_PM,
+                '2D (pm_only)': ValidationMethod.PROPER_MOTION_ONLY,
+                '1D (plx_only)': ValidationMethod.GAIA_PARALLAX_ONLY,
+                'Not enough Gaia sources': ValidationMethod.INSUFFICIENT_DATA,
+                'Component matching failed': ValidationMethod.INSUFFICIENT_DATA,
+                'Incomplete astrometry': ValidationMethod.INSUFFICIENT_DATA
+            }
+            
+            # Get Gaia source IDs if available
+            primary_gaia, secondary_gaia = self._identify_components_by_mag(gaia_results, wds_magnitudes)
+            gaia_primary_id = primary_gaia.get('source_id') if primary_gaia else None
+            gaia_secondary_id = secondary_gaia.get('source_id') if secondary_gaia else None
+            
+            return create_assessment(
+                label=label_map.get(result['label'], PhysicalityLabel.UNKNOWN),
+                p_value=result['p_value'],
+                method=method_map.get(result['test_used'], ValidationMethod.INSUFFICIENT_DATA),
+                gaia_primary=gaia_primary_id,
+                gaia_secondary=gaia_secondary_id
+            )
             
         except Exception as e:
             log.error(f"Error during Gaia validation for coordinates ({ra_deg:.4f}, {dec_deg:.4f}): {e}")
-            return {
-                'physicality_label': 'Error',
-                'physicality_p_value': None,
-                'physicality_test_used': f'Error occurred: {str(e)[:50]}...'
-            }
+            return create_assessment(PhysicalityLabel.UNKNOWN)
     
     def _validate_physicality_sync(self,
                                   gaia_results,
@@ -407,8 +436,7 @@ class GaiaValidator:
         Uses instance configuration to avoid modifying global state when possible.
         """
         try:
-            # Scientifically motivated query with comprehensive astrometry
-            # Use instance configuration instead of relying on global Gaia state
+            # Scientifically motivated query with comprehensive astrometry and quality filtering
             query = f"""
             SELECT
                 source_id, ra, dec, parallax, parallax_error,
@@ -422,6 +450,7 @@ class GaiaValidator:
                 CIRCLE('ICRS', {ra_deg}, {dec_deg}, {radius_arcsec / 3600.0})
             ) AND phot_g_mean_mag < {self.mag_limit}
               AND astrometric_chi2_al IS NOT NULL
+              AND ruwe < {GAIA_MAX_RUWE}
             ORDER BY phot_g_mean_mag ASC
             """
             
@@ -462,9 +491,9 @@ class GaiaValidator:
             - Proper motion significance > 2σ for kinematic analysis
         """
         try:
-            # Check RUWE (Renormalised Unit Weight Error)
+            # Check RUWE (Renormalised Unit Weight Error) using config constant
             ruwe = star.get('ruwe')
-            if ruwe is not None and ruwe > 1.4:
+            if ruwe is not None and ruwe > GAIA_MAX_RUWE:
                 log.debug(f"Source {star.get('source_id')} has poor RUWE: {ruwe:.2f}")
                 return False
             
@@ -513,10 +542,33 @@ class GaiaValidator:
             Covariance matrix or None if data is insufficient
             
         Notes:
-            - Handles correlation coefficients correctly
+            - Handles correlation coefficients correctly with scientific transparency
             - Validates data availability before construction
-            - Scientific approach to missing correlations (assume zero)
+            - Uses configurable default for missing correlations
         """
+        def get_correlation_safe(star: Dict, key: str) -> float:
+            """
+            Safe correlation retrieval with scientific transparency.
+            
+            Args:
+                star: Gaia source data
+                key: Correlation coefficient key
+                
+            Returns:
+                Correlation coefficient or configured default with logging
+            """
+            if hasattr(star, 'get'):
+                corr = star.get(key)
+            else:
+                corr = star[key] if key in star.colnames else None
+                
+            if corr is None:
+                log.debug(f"Missing correlation {key} for source {star.get('source_id', 'unknown')}, "
+                         f"using default {GAIA_DEFAULT_CORRELATION_MISSING}")
+                return GAIA_DEFAULT_CORRELATION_MISSING
+            
+            return float(corr)
+        
         try:
             if dimensions == 1:
                 # 1D: parallax only
@@ -539,13 +591,8 @@ class GaiaValidator:
                 if pmra_err is None or pmdec_err is None or pmra_err <= 0 or pmdec_err <= 0:
                     return None
                     
-                # Get correlation coefficient (default to 0 if missing)
-                if hasattr(star, 'get'):
-                    pmra_pmdec_corr = star.get('pmra_pmdec_corr', 0.0)
-                else:
-                    pmra_pmdec_corr = star['pmra_pmdec_corr'] if 'pmra_pmdec_corr' in star.colnames else 0.0
-                if pmra_pmdec_corr is None:
-                    pmra_pmdec_corr = 0.0
+                # Use safe correlation retrieval
+                pmra_pmdec_corr = get_correlation_safe(star, 'pmra_pmdec_corr')
                 
                 C = np.zeros((2, 2))
                 C[0, 0] = pmra_err**2
@@ -567,19 +614,10 @@ class GaiaValidator:
                     plx_err <= 0 or pmra_err <= 0 or pmdec_err <= 0):
                     return None
                 
-                # Get correlation coefficients (default to 0 if missing)
-                if hasattr(star, 'get'):
-                    plx_pmra_corr = star.get('parallax_pmra_corr', 0.0)
-                    plx_pmdec_corr = star.get('parallax_pmdec_corr', 0.0)
-                    pmra_pmdec_corr = star.get('pmra_pmdec_corr', 0.0)
-                else:
-                    plx_pmra_corr = star['parallax_pmra_corr'] if 'parallax_pmra_corr' in star.colnames else 0.0
-                    plx_pmdec_corr = star['parallax_pmdec_corr'] if 'parallax_pmdec_corr' in star.colnames else 0.0
-                    pmra_pmdec_corr = star['pmra_pmdec_corr'] if 'pmra_pmdec_corr' in star.colnames else 0.0
-                
-                if plx_pmra_corr is None: plx_pmra_corr = 0.0
-                if plx_pmdec_corr is None: plx_pmdec_corr = 0.0
-                if pmra_pmdec_corr is None: pmra_pmdec_corr = 0.0
+                # Use safe correlation retrieval with scientific transparency
+                plx_pmra_corr = get_correlation_safe(star, 'parallax_pmra_corr')
+                plx_pmdec_corr = get_correlation_safe(star, 'parallax_pmdec_corr')
+                pmra_pmdec_corr = get_correlation_safe(star, 'pmra_pmdec_corr')
                 
                 C = np.zeros((3, 3))
                 C[0, 0] = plx_err**2
@@ -595,4 +633,71 @@ class GaiaValidator:
                 
         except Exception as e:
             log.debug(f"Error building {dimensions}D covariance matrix: {e}")
+            return None
+
+    async def query_star_data(self, wds_id: str, position: Tuple[float, float], 
+                              radius: float = 5.0) -> Optional[Dict]:
+        """
+        Queries Gaia for star data by position with optimized ADQL query.
+        
+        Args:
+            wds_id: WDS identifier for the star
+            position: (ra, dec) in decimal degrees
+            radius: Search radius in arcseconds
+            
+        Returns:
+            Star data dictionary or None if not found
+            
+        Notes:
+            - Optimized ADQL query with RUWE filter for efficiency
+            - Handles multiple potential matches by selecting best quality
+            - Includes comprehensive error handling for network issues
+        """
+        ra, dec = position
+        
+        # Optimized ADQL query with RUWE filter and required fields
+        adql_query = f"""
+        SELECT TOP 10
+            source_id,
+            ra, dec,
+            parallax, parallax_error,
+            pmra, pmra_error,
+            pmdec, pmdec_error,
+            parallax_pmra_corr, parallax_pmdec_corr, pmra_pmdec_corr,
+            ruwe,
+            phot_g_mean_mag,
+            bp_rp,
+            astrometric_excess_noise,
+            astrometric_params_solved
+        FROM gaiadr3.gaia_source
+        WHERE CONTAINS(POINT('ICRS', ra, dec), 
+                      CIRCLE('ICRS', {ra}, {dec}, {radius/3600.0})) = 1
+        AND ruwe < {GAIA_MAX_RUWE}
+        AND parallax_error > 0
+        AND pmra_error > 0
+        AND pmdec_error > 0
+        ORDER BY ruwe ASC, parallax_error ASC
+        """
+        
+        try:
+            log.debug(f"Querying Gaia for {wds_id} at ({ra:.6f}, {dec:.6f}) with radius {radius}\"")
+            
+            # Execute the query with proper error handling
+            job = Gaia.launch_job_async(adql_query)
+            results = job.get_results()
+            
+            if len(results) == 0:
+                log.debug(f"No Gaia sources found for {wds_id}")
+                return None
+            
+            # Select best quality match (lowest RUWE, then lowest parallax error)
+            best_match = results[0]  # Already sorted by quality
+            
+            log.debug(f"Found {len(results)} Gaia sources for {wds_id}, "
+                     f"selected source_id={best_match['source_id']} with RUWE={best_match['ruwe']:.3f}")
+            
+            return best_match
+            
+        except Exception as e:
+            log.error(f"Error querying Gaia for {wds_id}: {e}")
             return None

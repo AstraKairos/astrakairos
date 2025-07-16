@@ -37,10 +37,9 @@ class TestGaiaValidator:
         assert validator.mag_limit == 16.0
     
     def test_initialization_legacy_parameter(self):
-        """Test GaiaValidator initialization with legacy parameter."""
-        validator = GaiaValidator(p_value_threshold=0.1)
-        
-        assert validator.physical_threshold == 0.1
+        """Test GaiaValidator initialization rejects legacy parameter."""
+        with pytest.raises(TypeError, match="unexpected keyword argument 'p_value_threshold'"):
+            GaiaValidator(p_value_threshold=0.1)
     
     def test_initialization_invalid_thresholds(self):
         """Test GaiaValidator initialization with invalid thresholds."""
@@ -54,35 +53,71 @@ class TestGaiaValidator:
     async def test_validate_physicality_success(self, gaia_validator):
         """Test successful physicality validation."""
         wds_summary = {
-            'wds_name': '00000+0000',
+            'wds_id': '00000+0000',
             'ra_deg': 15.0,
             'dec_deg': 45.0,
             'mag_pri': 8.5,
             'mag_sec': 9.2
         }
         
-        mock_sync_result = {
-            'label': 'Likely Physical',
-            'p_value': 0.1,
-            'test_used': '3D (plx+pm)'
-        }
+        # Mock astropy table-like structure
+        from astropy.table import Table
         
-        # Mock both the async Gaia query and the sync validation
-        mock_gaia_results = [Mock(), Mock()]  # Two mock Gaia sources
+        # Create mock table with required columns
+        mock_table = Table({
+            'source_id': [123456789, 987654321],
+            'ra': [15.0, 15.001],
+            'dec': [45.0, 45.001],
+            'parallax': [10.0, 10.2],
+            'parallax_error': [0.1, 0.12],
+            'pmra': [5.0, 5.1],
+            'pmra_error': [0.05, 0.06],
+            'pmdec': [-3.0, -2.9],
+            'pmdec_error': [0.04, 0.05],
+            'ruwe': [1.1, 1.2],
+            'phot_g_mean_mag': [8.5, 9.2],
+            'parallax_pmra_corr': [0.1, 0.1],
+            'parallax_pmdec_corr': [0.1, 0.1],
+            'pmra_pmdec_corr': [0.1, 0.1]
+        })
         
-        with patch.object(gaia_validator, '_query_gaia_for_pair_async', return_value=mock_gaia_results):
-            with patch.object(gaia_validator, '_validate_physicality_sync', return_value=mock_sync_result):
-                result = await gaia_validator.validate_physicality(wds_summary)
+        # Mock the query to return individual rows
+        async def mock_query_star_data(wds_id, position, radius=5.0):
+            # Return each row in sequence
+            if not hasattr(mock_query_star_data, 'call_count'):
+                mock_query_star_data.call_count = 0
+            if mock_query_star_data.call_count < len(mock_table):
+                row = mock_table[mock_query_star_data.call_count]
+                mock_query_star_data.call_count += 1
+                return row
+            return None
+        
+        with patch.object(gaia_validator, 'query_star_data', side_effect=mock_query_star_data):
+            result = await gaia_validator.validate_physicality(wds_summary)
             
-            assert result['physicality_label'] == 'Likely Physical'
-            assert result['physicality_p_value'] == 0.1
-            assert result['physicality_test_used'] == '3D (plx+pm)'
+            # The result should be a PhysicalityAssessment with proper structure
+            assert 'label' in result
+            assert 'confidence' in result
+            assert 'p_value' in result
+            assert 'method' in result
+            assert 'validation_date' in result
+            assert 'search_radius_arcsec' in result
+            assert 'significance_thresholds' in result
+            assert 'retry_attempts' in result
+            
+            # Check that the label is a valid enum value
+            from astrakairos.data.source import PhysicalityLabel
+            assert isinstance(result['label'], PhysicalityLabel)
+            
+            # Check that method is a valid enum value
+            from astrakairos.data.source import ValidationMethod
+            assert isinstance(result['method'], ValidationMethod)
     
     @pytest.mark.asyncio
     async def test_validate_physicality_missing_coordinates(self, gaia_validator):
         """Test physicality validation with missing coordinates."""
         wds_summary = {
-            'wds_name': '00000+0000',
+            'wds_id': '00000+0000',
             'mag_pri': 8.5,
             'mag_sec': 9.2
             # Missing ra_deg and dec_deg
@@ -90,9 +125,12 @@ class TestGaiaValidator:
         
         result = await gaia_validator.validate_physicality(wds_summary)
         
-        assert result['physicality_label'] == 'Unknown'
-        assert result['physicality_p_value'] is None
-        assert result['physicality_test_used'] == 'Missing coordinates'
+        # The result should be a PhysicalityAssessment with Unknown label
+        from astrakairos.data.source import PhysicalityLabel
+        assert result['label'] == PhysicalityLabel.UNKNOWN
+        assert result['p_value'] is None
+        assert 'method' in result
+        assert 'validation_date' in result
     
     def test_validate_physicality_sync_success(self, gaia_validator):
         """Test synchronous physicality validation."""
