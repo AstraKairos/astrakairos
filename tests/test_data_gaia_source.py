@@ -2,7 +2,6 @@ import pytest
 import numpy as np
 from unittest.mock import Mock, patch, MagicMock
 from astrakairos.data.gaia_source import GaiaValidator
-# --- Test GaiaValidator Class ---
 
 class TestGaiaValidator:
     """Test GaiaValidator class."""
