@@ -49,6 +49,17 @@ TOP_RESULTS_DISPLAY_COUNT = 10
 # Analysis modes
 ANALYSIS_MODES = ['orbital', 'characterize', 'discovery']
 
+# Analysis Mode Configuration
+DEFAULT_ANALYSIS_MODE = 'discovery'
+AVAILABLE_ANALYSIS_MODES = ['discovery', 'characterize', 'orbital']
+
+# Default sort keys for each analysis mode
+DEFAULT_SORT_KEYS = {
+    'discovery': 'v_total_arcsec_yr',
+    'characterize': 'rmse',
+    'orbital': 'opi_arcsec_yr'
+}
+
 # === PLANNER Module Configuration - Observatory Planning & Sky Quality ===
 
 # Sky Quality Map Configuration (Scientific Standards)
