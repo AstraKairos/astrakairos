@@ -132,7 +132,7 @@ async def test_get_wds_summary_success(mock_fs_and_source):
     assert summary is not None
     # WdsSummary is a dict-like object, access using dictionary notation
     assert summary.get('date_last') == 2015
-    assert summary.get('wds_name') == "00002+0146"
+    assert summary.get('wds_id') == "00002+0146"
 
 
 @pytest.mark.asyncio
@@ -218,7 +218,7 @@ async def test_validate_physicality_stub(mock_fs_and_source):
     """Tests that validate_physicality returns expected stub response."""
     # Create a proper WdsSummary dict with required fields
     test_summary = {
-        'wds_name': '00002+0146',
+        'wds_id': '00002+0146',
         'ra_deg': 0.0,
         'dec_deg': 0.0,
         'date_last': 2015
@@ -226,9 +226,14 @@ async def test_validate_physicality_stub(mock_fs_and_source):
     
     result = await mock_fs_and_source.validate_physicality(test_summary)
     assert result is not None
-    assert result['label'] == 'Unknown'
+    
+    # Check that the result is a proper PhysicalityAssessment with enum values
+    from astrakairos.data.source import PhysicalityLabel, ValidationMethod
+    assert result['label'] == PhysicalityLabel.UNKNOWN
     assert result['p_value'] is None
-    assert 'Local Source' in result['test_used']
+    assert result['method'] == ValidationMethod.INSUFFICIENT_DATA
+    assert result['confidence'] == 0.0
+    assert 'validation_date' in result
 
 @pytest.mark.asyncio
 async def test_validate_physicality_none_input(mock_fs_and_source):

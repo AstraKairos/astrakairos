@@ -278,3 +278,45 @@ MAX_SEPARATION_ARCSEC = 100.0  # Maximum reasonable angular separation for binar
 # Warning Thresholds for Scientific Validation
 MAX_DEVIATION_WARNING_ARCSEC = 10.0  # Threshold for large positional deviation warning
 MAX_OLD_OBSERVATION_WARNING_YEARS = 50.0  # Threshold for very old observation warning
+
+# === Local Source Configuration ===
+# Unit Conversion Constants for Catalog Parsing
+DAYS_PER_JULIAN_YEAR = 365.25  # Standard Julian year for astronomical epoch conversions
+CENTURIES_PER_YEAR = 100.0     # Century to year conversion factor
+MILLIARCSEC_PER_ARCSEC = 1000.0  # Milliarcsecond to arcsecond conversion
+
+# === Online Source Configuration ===
+# VizieR Catalog Identifiers - Updated versions can be changed here
+VIZIER_WDS_CATALOG = "B/wds/wds"
+VIZIER_ORBITAL_CATALOG = "J/MNRAS/517/2925/tablea3"  # ORB6 catalog
+
+# Backoff Strategy Configuration
+VIZIER_BACKOFF_BASE = 2.0  # Exponential backoff base
+VIZIER_BACKOFF_MAX_DELAY = 30.0  # Maximum delay in seconds
+
+# Validation Ranges for External Data
+MIN_MAGNITUDE = -5.0  # Minimum reasonable magnitude
+MAX_MAGNITUDE = 25.0  # Maximum reasonable magnitude
+
+# CLI Configuration
+DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
+DEFAULT_HTTP_CONNECTIONS_PER_HOST = 5
+DEFAULT_HTTP_TOTAL_CONNECTIONS = 50
+DEFAULT_USER_AGENT = 'AstraKairos/1.0 (https://github.com/AstraKairos/astrakairos)'
+
+# Analysis Configuration
+DEFAULT_CONCURRENT_REQUESTS = 5
+DEFAULT_MIN_OBSERVATIONS = 2
+DEFAULT_SORT_BY = 'v_total'
+DEFAULT_GAIA_P_VALUE = 0.01
+DEFAULT_GAIA_RADIUS_FACTOR = 1.5
+DEFAULT_GAIA_MIN_RADIUS = 2.0
+DEFAULT_GAIA_MAX_RADIUS = 60.0
+
+# Validation Constants for Scientific Rigor
+MIN_EPOCH_YEAR = 1800.0
+MAX_EPOCH_YEAR = 2100.0
+MIN_SEPARATION_ARCSEC = 0.1
+MAX_SEPARATION_ARCSEC = 300.0
+MIN_POSITION_ANGLE_DEG = 0.0
+MAX_POSITION_ANGLE_DEG = 360.0

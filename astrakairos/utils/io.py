@@ -193,9 +193,9 @@ def parse_wds_designation(wds_id: str) -> Optional[Dict[str, float]]:
     if not isinstance(wds_id, str) or len(wds_id) < 10:
         return None
         
-    # Improved regex for WDS designation format validation
-    # Matches: HHMMM[+-]DDMM with optional component (e.g., AB, AC)
-    if not re.match(r'^\d{5}[+-]\d{4}([A-Z]{1,2})?', wds_id[:12]):
+    # WDS designation format validation: HHMMM[+-]DDMM[AB-like components]
+    # Components after coordinates are optional (e.g., AB, AC, ABC)
+    if not re.match(r'^[0-9]{5}[+-][0-9]{4}([A-Z]{1,2})?$', wds_id[:12]):
         log.debug(f"WDS ID '{wds_id}' does not match the coordinate format.")
         return None
         
