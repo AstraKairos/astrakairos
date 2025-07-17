@@ -76,6 +76,46 @@ STELLE_DOPPIE_SEARCH_METHODS = {
     'ends_with': 4
 }
 
+# Advanced Search Parameters
+STELLE_DOPPIE_FILTERS = {
+    'magnitude': {
+        'min_value': 0.0,
+        'max_value': 25.0,
+        'default_min': 0.0,
+        'default_max': 12.0,
+        'param_name': 'cat_wds-maga'
+    },
+    'separation': {
+        'min_value': 0.0,
+        'max_value': 300.0,
+        'default_min': 0.5,
+        'default_max': 60.0,
+        'param_name': 'cat_wds-sep'
+    },
+    'position_angle': {
+        'min_value': 0.0,
+        'max_value': 360.0,
+        'default_min': 0.0,
+        'default_max': 360.0,
+        'param_name': 'cat_wds-pa'
+    },
+    'epoch': {
+        'min_value': 1800.0,
+        'max_value': 2030.0,
+        'default_min': 1950.0,
+        'default_max': 2025.0,
+        'param_name': 'cat_wds-epoch'
+    }
+}
+
+# Default Search Options
+DEFAULT_SEARCH_OPTIONS = {
+    'use_magnitude_filter': False,
+    'use_separation_filter': True,
+    'use_position_angle_filter': False,
+    'use_epoch_filter': False
+}
+
 # Analysis Mode Configuration
 DEFAULT_ANALYSIS_MODE = 'discovery'
 AVAILABLE_ANALYSIS_MODES = ['discovery', 'characterize', 'orbital']

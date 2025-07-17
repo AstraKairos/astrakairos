@@ -17,7 +17,8 @@ from ..config import (
     MIN_ALTITUDE_DEG, MAX_ALTITUDE_DEG,
     MIN_RA_WINDOW_HOURS, MAX_RA_WINDOW_HOURS,
     MIN_LIGHT_POLLUTION_MAG, MAX_LIGHT_POLLUTION_MAG,
-    DEFAULT_MIN_ALTITUDE_DEG, DEFAULT_RA_WINDOW_HOURS, DEFAULT_LIGHT_POLLUTION_MAG
+    DEFAULT_MIN_ALTITUDE_DEG, DEFAULT_RA_WINDOW_HOURS, DEFAULT_LIGHT_POLLUTION_MAG,
+    STELLE_DOPPIE_FILTERS, DEFAULT_SEARCH_OPTIONS
 )
 
 class AstraKairosPlannerApp:
@@ -37,6 +38,10 @@ class AstraKairosPlannerApp:
         
         self.optimal_ra_range = None
         self.optimal_dec_range = None
+        
+        # Search filter variables
+        self.search_options = {}
+        self.filter_vars = {}
         
         self.load_locations()
         self.create_widgets()
@@ -71,9 +76,10 @@ class AstraKairosPlannerApp:
         self._create_date_section(main_frame)
         self._create_params_section(main_frame)
         self._create_astro_info_section(main_frame)
+        self._create_search_options_section(main_frame)
         self._create_binary_search_section(main_frame)
         
-        main_frame.rowconfigure(5, weight=1)
+        main_frame.rowconfigure(6, weight=1)
 
     def _create_location_search_section(self, parent):
         frame = ttk.LabelFrame(parent, text="1. Select Observatory Location", padding="10")
@@ -144,9 +150,86 @@ class AstraKairosPlannerApp:
         self.astro_text = ScrolledText(frame, height=12, width=70, wrap=tk.WORD, state=tk.DISABLED)
         self.astro_text.grid(row=1, column=0, sticky="nsew")
 
-    def _create_binary_search_section(self, parent):
-        frame = ttk.LabelFrame(parent, text="5. Generate Target Search", padding="10")
+    def _create_search_options_section(self, parent):
+        """Create advanced search options section with configurable filters."""
+        frame = ttk.LabelFrame(parent, text="5. Advanced Search Options", padding="10")
         frame.grid(row=6, column=0, sticky="ew", pady=5)
+        frame.columnconfigure(1, weight=1)
+        
+        # Initialize search options with defaults
+        for option, default in DEFAULT_SEARCH_OPTIONS.items():
+            self.search_options[option] = tk.BooleanVar(value=default)
+        
+        # Create filter variable dictionaries
+        for filter_name, config in STELLE_DOPPIE_FILTERS.items():
+            self.filter_vars[filter_name] = {
+                'min': tk.DoubleVar(value=config['default_min']),
+                'max': tk.DoubleVar(value=config['default_max'])
+            }
+        
+        row = 0
+        
+        # Magnitude filter
+        mag_check = ttk.Checkbutton(frame, text="Filter by Magnitude:", 
+                                   variable=self.search_options['use_magnitude_filter'])
+        mag_check.grid(row=row, column=0, sticky=tk.W, pady=2)
+        
+        mag_frame = ttk.Frame(frame)
+        mag_frame.grid(row=row, column=1, sticky="ew", padx=5)
+        ttk.Label(mag_frame, text="Min:").grid(row=0, column=0, padx=2)
+        ttk.Entry(mag_frame, textvariable=self.filter_vars['magnitude']['min'], width=8).grid(row=0, column=1, padx=2)
+        ttk.Label(mag_frame, text="Max:").grid(row=0, column=2, padx=2)
+        ttk.Entry(mag_frame, textvariable=self.filter_vars['magnitude']['max'], width=8).grid(row=0, column=3, padx=2)
+        ttk.Label(mag_frame, text="mag").grid(row=0, column=4, padx=2)
+        
+        row += 1
+        
+        # Separation filter
+        sep_check = ttk.Checkbutton(frame, text="Filter by Separation:", 
+                                   variable=self.search_options['use_separation_filter'])
+        sep_check.grid(row=row, column=0, sticky=tk.W, pady=2)
+        
+        sep_frame = ttk.Frame(frame)
+        sep_frame.grid(row=row, column=1, sticky="ew", padx=5)
+        ttk.Label(sep_frame, text="Min:").grid(row=0, column=0, padx=2)
+        ttk.Entry(sep_frame, textvariable=self.filter_vars['separation']['min'], width=8).grid(row=0, column=1, padx=2)
+        ttk.Label(sep_frame, text="Max:").grid(row=0, column=2, padx=2)
+        ttk.Entry(sep_frame, textvariable=self.filter_vars['separation']['max'], width=8).grid(row=0, column=3, padx=2)
+        ttk.Label(sep_frame, text="arcsec").grid(row=0, column=4, padx=2)
+        
+        row += 1
+        
+        # Position angle filter
+        pa_check = ttk.Checkbutton(frame, text="Filter by Position Angle:", 
+                                  variable=self.search_options['use_position_angle_filter'])
+        pa_check.grid(row=row, column=0, sticky=tk.W, pady=2)
+        
+        pa_frame = ttk.Frame(frame)
+        pa_frame.grid(row=row, column=1, sticky="ew", padx=5)
+        ttk.Label(pa_frame, text="Min:").grid(row=0, column=0, padx=2)
+        ttk.Entry(pa_frame, textvariable=self.filter_vars['position_angle']['min'], width=8).grid(row=0, column=1, padx=2)
+        ttk.Label(pa_frame, text="Max:").grid(row=0, column=2, padx=2)
+        ttk.Entry(pa_frame, textvariable=self.filter_vars['position_angle']['max'], width=8).grid(row=0, column=3, padx=2)
+        ttk.Label(pa_frame, text="deg").grid(row=0, column=4, padx=2)
+        
+        row += 1
+        
+        # Epoch filter
+        epoch_check = ttk.Checkbutton(frame, text="Filter by Epoch:", 
+                                     variable=self.search_options['use_epoch_filter'])
+        epoch_check.grid(row=row, column=0, sticky=tk.W, pady=2)
+        
+        epoch_frame = ttk.Frame(frame)
+        epoch_frame.grid(row=row, column=1, sticky="ew", padx=5)
+        ttk.Label(epoch_frame, text="Min:").grid(row=0, column=0, padx=2)
+        ttk.Entry(epoch_frame, textvariable=self.filter_vars['epoch']['min'], width=8).grid(row=0, column=1, padx=2)
+        ttk.Label(epoch_frame, text="Max:").grid(row=0, column=2, padx=2)
+        ttk.Entry(epoch_frame, textvariable=self.filter_vars['epoch']['max'], width=8).grid(row=0, column=3, padx=2)
+        ttk.Label(epoch_frame, text="year").grid(row=0, column=4, padx=2)
+
+    def _create_binary_search_section(self, parent):
+        frame = ttk.LabelFrame(parent, text="6. Generate Target Search", padding="10")
+        frame.grid(row=7, column=0, sticky="ew", pady=5)
         frame.columnconfigure(0, weight=1)
 
         ttk.Button(frame, text="Generate Search on Stelle Doppie", 
@@ -356,7 +439,7 @@ class AstraKairosPlannerApp:
         self.astro_text.config(state=tk.DISABLED)
 
     def generate_stelle_doppie_search(self):
-        """Generate Stelle Doppie search URL with robust error handling."""
+        """Generate Stelle Doppie search URL with advanced filters and robust error handling."""
         if not self.optimal_ra_range:
             messagebox.showwarning("Calculation Required", 
                                  "Please calculate optimal conditions first before generating search URL.")
@@ -383,7 +466,7 @@ class AstraKairosPlannerApp:
             dec_min_str = f"{int(dec_min_d):+03d}%2C{int(abs(dec_min_d) % 1 * 60):02d}" if dec_min_d is not None else ""
             dec_max_str = f"{int(dec_max_d):+03d}%2C{int(abs(dec_max_d) % 1 * 60):02d}" if dec_max_d is not None else ""
             
-            # Build URL with centralized configuration
+            # Build base URL parameters
             params = {
                 'menu': 21, 
                 'azione': 'cerca_nel_database', 
@@ -393,6 +476,43 @@ class AstraKairosPlannerApp:
                 'metodo-cat_wds-de': STELLE_DOPPIE_SEARCH_METHODS['coordinate_range'], 
                 'dato-cat_wds-de': f'{dec_min_str}%2C{dec_max_str}',
             }
+            
+            # Add advanced filters if enabled
+            active_filters = []
+            
+            if self.search_options['use_magnitude_filter'].get():
+                mag_min = self.filter_vars['magnitude']['min'].get()
+                mag_max = self.filter_vars['magnitude']['max'].get()
+                if self._validate_filter_range('magnitude', mag_min, mag_max):
+                    params[f'metodo-{STELLE_DOPPIE_FILTERS["magnitude"]["param_name"]}'] = STELLE_DOPPIE_SEARCH_METHODS['magnitude_range']
+                    params[f'dato-{STELLE_DOPPIE_FILTERS["magnitude"]["param_name"]}'] = f'{mag_min:.1f}%2C{mag_max:.1f}'
+                    active_filters.append(f"Magnitude: {mag_min:.1f} - {mag_max:.1f} mag")
+            
+            if self.search_options['use_separation_filter'].get():
+                sep_min = self.filter_vars['separation']['min'].get()
+                sep_max = self.filter_vars['separation']['max'].get()
+                if self._validate_filter_range('separation', sep_min, sep_max):
+                    params[f'metodo-{STELLE_DOPPIE_FILTERS["separation"]["param_name"]}'] = STELLE_DOPPIE_SEARCH_METHODS['separation_range']
+                    params[f'dato-{STELLE_DOPPIE_FILTERS["separation"]["param_name"]}'] = f'{sep_min:.1f}%2C{sep_max:.1f}'
+                    active_filters.append(f"Separation: {sep_min:.1f} - {sep_max:.1f} arcsec")
+            
+            if self.search_options['use_position_angle_filter'].get():
+                pa_min = self.filter_vars['position_angle']['min'].get()
+                pa_max = self.filter_vars['position_angle']['max'].get()
+                if self._validate_filter_range('position_angle', pa_min, pa_max):
+                    params[f'metodo-{STELLE_DOPPIE_FILTERS["position_angle"]["param_name"]}'] = STELLE_DOPPIE_SEARCH_METHODS['coordinate_range']
+                    params[f'dato-{STELLE_DOPPIE_FILTERS["position_angle"]["param_name"]}'] = f'{pa_min:.0f}%2C{pa_max:.0f}'
+                    active_filters.append(f"Position Angle: {pa_min:.0f}° - {pa_max:.0f}°")
+            
+            if self.search_options['use_epoch_filter'].get():
+                epoch_min = self.filter_vars['epoch']['min'].get()
+                epoch_max = self.filter_vars['epoch']['max'].get()
+                if self._validate_filter_range('epoch', epoch_min, epoch_max):
+                    params[f'metodo-{STELLE_DOPPIE_FILTERS["epoch"]["param_name"]}'] = STELLE_DOPPIE_SEARCH_METHODS['coordinate_range']
+                    params[f'dato-{STELLE_DOPPIE_FILTERS["epoch"]["param_name"]}'] = f'{epoch_min:.0f}%2C{epoch_max:.0f}'
+                    active_filters.append(f"Epoch: {epoch_min:.0f} - {epoch_max:.0f}")
+            
+            # Build final URL
             full_url = STELLE_DOPPIE_BASE_URL + "?" + "&".join([f"{k}={v}" for k, v in params.items()])
 
             self.url_text.config(state=tk.NORMAL)
@@ -400,10 +520,14 @@ class AstraKairosPlannerApp:
             self.url_text.insert(tk.END, full_url)
             self.url_text.config(state=tk.DISABLED)
             
+            # Create detailed confirmation message
+            filter_text = "\n".join(active_filters) if active_filters else "No additional filters applied"
+            
             if messagebox.askyesno("Open Search", 
                                  f"Search URL generated for:\n"
                                  f"RA: {self.format_ra_hours(ra_min_h)} to {self.format_ra_hours(ra_max_h)}\n"
                                  f"Dec: {self.format_dec_degrees(dec_min_d)} to {self.format_dec_degrees(dec_max_d)}\n\n"
+                                 f"Active filters:\n{filter_text}\n\n"
                                  f"Open in browser?"):
                 webbrowser.open(full_url)
                 
@@ -411,6 +535,34 @@ class AstraKairosPlannerApp:
             messagebox.showerror("URL Generation Error", 
                                f"Failed to generate search URL: {e}")
             return
+            
+    def _validate_filter_range(self, filter_name: str, min_val: float, max_val: float) -> bool:
+        """Validate filter range values against configuration limits."""
+        if filter_name not in STELLE_DOPPIE_FILTERS:
+            return False
+        
+        config = STELLE_DOPPIE_FILTERS[filter_name]
+        
+        # Check if values are within valid range
+        if not (config['min_value'] <= min_val <= config['max_value']):
+            messagebox.showerror("Invalid Filter Range", 
+                               f"{filter_name.title()} minimum value {min_val} outside valid range "
+                               f"[{config['min_value']}, {config['max_value']}]")
+            return False
+        
+        if not (config['min_value'] <= max_val <= config['max_value']):
+            messagebox.showerror("Invalid Filter Range", 
+                               f"{filter_name.title()} maximum value {max_val} outside valid range "
+                               f"[{config['min_value']}, {config['max_value']}]")
+            return False
+        
+        # Check if min <= max
+        if min_val >= max_val:
+            messagebox.showerror("Invalid Filter Range", 
+                               f"{filter_name.title()} minimum value {min_val} must be less than maximum value {max_val}")
+            return False
+        
+        return True
             
     def format_ra_hours(self, hours: float) -> str:
         h = int(hours)
