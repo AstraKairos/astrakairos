@@ -49,6 +49,33 @@ TOP_RESULTS_DISPLAY_COUNT = 10
 # Analysis modes
 ANALYSIS_MODES = ['orbital', 'characterize', 'discovery']
 
+# GUI Configuration
+GUI_DEFAULT_WIDTH = 800
+GUI_DEFAULT_HEIGHT = 950
+DEFAULT_MIN_ALTITUDE_DEG = 40.0
+DEFAULT_RA_WINDOW_HOURS = 3.0
+DEFAULT_LIGHT_POLLUTION_MAG = 21.0
+
+# GUI Parameter Validation Ranges
+MIN_ALTITUDE_DEG = 0.0
+MAX_ALTITUDE_DEG = 90.0
+MIN_RA_WINDOW_HOURS = 0.5
+MAX_RA_WINDOW_HOURS = 12.0
+MIN_LIGHT_POLLUTION_MAG = 15.0
+MAX_LIGHT_POLLUTION_MAG = 25.0
+
+# Stelle Doppie Search Configuration
+STELLE_DOPPIE_BASE_URL = "https://www.stelledoppie.it/index2.php"
+STELLE_DOPPIE_SEARCH_METHODS = {
+    'coordinate_range': 7,
+    'magnitude_range': 7,
+    'separation_range': 7,
+    'exact_match': 1,
+    'contains': 2,
+    'starts_with': 3,
+    'ends_with': 4
+}
+
 # Analysis Mode Configuration
 DEFAULT_ANALYSIS_MODE = 'discovery'
 AVAILABLE_ANALYSIS_MODES = ['discovery', 'characterize', 'orbital']

@@ -11,6 +11,14 @@ import pytz
 
 # Importamos el módulo de cálculos actualizado que ahora usa Skyfield
 from ..planner import calculations
+from ..config import (
+    GUI_DEFAULT_WIDTH, GUI_DEFAULT_HEIGHT,
+    STELLE_DOPPIE_BASE_URL, STELLE_DOPPIE_SEARCH_METHODS,
+    MIN_ALTITUDE_DEG, MAX_ALTITUDE_DEG,
+    MIN_RA_WINDOW_HOURS, MAX_RA_WINDOW_HOURS,
+    MIN_LIGHT_POLLUTION_MAG, MAX_LIGHT_POLLUTION_MAG,
+    DEFAULT_MIN_ALTITUDE_DEG, DEFAULT_RA_WINDOW_HOURS, DEFAULT_LIGHT_POLLUTION_MAG
+)
 
 class AstraKairosPlannerApp:
     """Main GUI application for the AstraKairos observation planner."""
@@ -18,7 +26,7 @@ class AstraKairosPlannerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("AstraKairos - Observation Planner")
-        self.root.geometry("800x900") # Aumentamos un poco la altura
+        self.root.geometry(f"{GUI_DEFAULT_WIDTH}x{GUI_DEFAULT_HEIGHT}")
         self.root.configure(bg='#f0f0f0')
         
         # --- Variables de Estado ---
@@ -113,15 +121,15 @@ class AstraKairosPlannerApp:
         frame.grid(row=4, column=0, sticky="ew", pady=5)
         
         ttk.Label(frame, text="Min Altitude (deg):").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
-        self.min_alt_var = tk.DoubleVar(value=40.0)
+        self.min_alt_var = tk.DoubleVar(value=DEFAULT_MIN_ALTITUDE_DEG)
         ttk.Entry(frame, textvariable=self.min_alt_var, width=10).grid(row=0, column=1)
         
         ttk.Label(frame, text="RA Window (± hours):").grid(row=0, column=2, sticky=tk.W, padx=(20, 5))
-        self.ra_win_var = tk.DoubleVar(value=3.0)
+        self.ra_win_var = tk.DoubleVar(value=DEFAULT_RA_WINDOW_HOURS)
         ttk.Entry(frame, textvariable=self.ra_win_var, width=10).grid(row=0, column=3)
         
         ttk.Label(frame, text="Light Pollution (mag/arcsec²):").grid(row=1, column=0, sticky=tk.W, pady=(5,0), padx=(0,5))
-        self.lp_var = tk.DoubleVar(value=21.0) # Default for a reasonably dark site
+        self.lp_var = tk.DoubleVar(value=DEFAULT_LIGHT_POLLUTION_MAG)
         ttk.Entry(frame, textvariable=self.lp_var, width=10).grid(row=1, column=1, pady=(5,0))
 
     def _create_astro_info_section(self, parent):
@@ -170,15 +178,45 @@ class AstraKairosPlannerApp:
         self.info_labels['Altitude'].config(text=f"{loc.get('altitude_m', 'N/A')} m")
 
     def create_observer_location(self):
-        if not self.selected_location: return
+        """Create observer location with robust coordinate validation."""
+        if not self.selected_location: 
+            return
+        
         loc = self.selected_location
         try:
-            lat = float(loc['latitude'][:-1]) * (-1 if loc['latitude'].endswith('S') else 1)
-            lon = float(loc['longitude'][:-1]) * (-1 if loc['longitude'].endswith('W') else 1)
+            # Parse latitude with validation
+            lat_str = loc['latitude']
+            if lat_str.endswith(('N', 'S')):
+                lat_value = float(lat_str[:-1])
+                lat = lat_value * (-1 if lat_str.endswith('S') else 1)
+            else:
+                lat = float(lat_str)
+            
+            # Parse longitude with validation
+            lon_str = loc['longitude']
+            if lon_str.endswith(('E', 'W')):
+                lon_value = float(lon_str[:-1])
+                lon = lon_value * (-1 if lon_str.endswith('W') else 1)
+            else:
+                lon = float(lon_str)
+            
+            # Validate coordinate ranges
+            if not (-90.0 <= lat <= 90.0):
+                raise ValueError(f"Latitude {lat}° outside valid range [-90°, +90°]")
+            if not (-180.0 <= lon <= 180.0):
+                raise ValueError(f"Longitude {lon}° outside valid range [-180°, +180°]")
+            
+            # Parse altitude with default
             alt = float(loc.get('altitude_m', 0))
+            if alt < -500 or alt > 10000:  # Reasonable altitude range
+                messagebox.showwarning("Location Warning", 
+                                     f"Altitude {alt}m seems unusual. Proceeding anyway.")
+            
             self.observer_location = calculations.get_observer_location(lat, lon, alt)
-        except (ValueError, TypeError) as e:
-            messagebox.showerror("Location Error", f"Could not parse location coordinates: {e}")
+            
+        except (ValueError, TypeError, KeyError) as e:
+            messagebox.showerror("Location Error", 
+                               f"Could not parse location coordinates: {e}")
             self.observer_location = None
 
     def run_full_calculation(self):
@@ -191,6 +229,23 @@ class AstraKairosPlannerApp:
             min_alt = self.min_alt_var.get()
             ra_win = self.ra_win_var.get()
             lp_mag = self.lp_var.get()
+            
+            # Validate parameters against configuration ranges
+            if not (MIN_ALTITUDE_DEG <= min_alt <= MAX_ALTITUDE_DEG):
+                messagebox.showerror("Invalid Parameter", 
+                                   f"Minimum altitude must be between {MIN_ALTITUDE_DEG}° and {MAX_ALTITUDE_DEG}°")
+                return
+            
+            if not (MIN_RA_WINDOW_HOURS <= ra_win <= MAX_RA_WINDOW_HOURS):
+                messagebox.showerror("Invalid Parameter", 
+                                   f"RA window must be between {MIN_RA_WINDOW_HOURS} and {MAX_RA_WINDOW_HOURS} hours")
+                return
+            
+            if not (MIN_LIGHT_POLLUTION_MAG <= lp_mag <= MAX_LIGHT_POLLUTION_MAG):
+                messagebox.showerror("Invalid Parameter", 
+                                   f"Light pollution must be between {MIN_LIGHT_POLLUTION_MAG} and {MAX_LIGHT_POLLUTION_MAG} mag/arcsec²")
+                return
+            
             timezone = self.selected_location.get('timezone', 'UTC')
             
             # --- Perform All Calculations ---
@@ -301,34 +356,61 @@ class AstraKairosPlannerApp:
         self.astro_text.config(state=tk.DISABLED)
 
     def generate_stelle_doppie_search(self):
+        """Generate Stelle Doppie search URL with robust error handling."""
         if not self.optimal_ra_range:
-            messagebox.showwarning("Calculation Required", "Please calculate conditions first.")
+            messagebox.showwarning("Calculation Required", 
+                                 "Please calculate optimal conditions first before generating search URL.")
             return
         
-        ra_min_h, ra_max_h = self.optimal_ra_range
-        dec_min_d, dec_max_d = self.optimal_dec_range
-        
-        ra_min_str = f"{int(ra_min_h):02d},{int((ra_min_h % 1) * 60):02d}"
-        ra_max_str = f"{int(ra_max_h):02d},{int((ra_max_h % 1) * 60):02d}"
-        dec_min_str = f"{int(dec_min_d):+03d},{int(abs(dec_min_d) % 1 * 60):02d}" if dec_min_d is not None else ""
-        dec_max_str = f"{int(dec_max_d):+03d},{int(abs(dec_max_d) % 1 * 60):02d}" if dec_max_d is not None else ""
-        
-        # A simplified set of parameters for the search URL
-        base_url = "https://www.stelledoppie.it/index2.php"
-        params = {
-            'menu': 21, 'azione': 'cerca_nel_database', 'gocerca': 'Search+the+database',
-            'metodo-cat_wds-ra': 7, 'dato-cat_wds-ra': f'{ra_min_str}%2C{ra_max_str}',
-            'metodo-cat_wds-de': 7, 'dato-cat_wds-de': f'{dec_min_str}%2C{dec_max_str}',
-        }
-        full_url = base_url + "?" + "&".join([f"{k}={v}" for k, v in params.items()])
+        try:
+            ra_min_h, ra_max_h = self.optimal_ra_range
+            dec_min_d, dec_max_d = self.optimal_dec_range
+            
+            # Validate coordinate ranges
+            if not (0 <= ra_min_h <= 24 and 0 <= ra_max_h <= 24):
+                messagebox.showerror("Invalid Coordinates", 
+                                   f"RA range [{ra_min_h:.1f}, {ra_max_h:.1f}] outside valid range [0, 24] hours")
+                return
+            
+            if not (-90 <= dec_min_d <= 90 and -90 <= dec_max_d <= 90):
+                messagebox.showerror("Invalid Coordinates", 
+                                   f"Dec range [{dec_min_d:.1f}, {dec_max_d:.1f}] outside valid range [-90, +90] degrees")
+                return
+            
+            # Format coordinates correctly for Stelle Doppie URL encoding
+            ra_min_str = f"{int(ra_min_h):02d}%2C{int((ra_min_h % 1) * 60):02d}"
+            ra_max_str = f"{int(ra_max_h):02d}%2C{int((ra_max_h % 1) * 60):02d}"
+            dec_min_str = f"{int(dec_min_d):+03d}%2C{int(abs(dec_min_d) % 1 * 60):02d}" if dec_min_d is not None else ""
+            dec_max_str = f"{int(dec_max_d):+03d}%2C{int(abs(dec_max_d) % 1 * 60):02d}" if dec_max_d is not None else ""
+            
+            # Build URL with centralized configuration
+            params = {
+                'menu': 21, 
+                'azione': 'cerca_nel_database', 
+                'gocerca': 'Search+the+database',
+                'metodo-cat_wds-ra': STELLE_DOPPIE_SEARCH_METHODS['coordinate_range'], 
+                'dato-cat_wds-ra': f'{ra_min_str}%2C{ra_max_str}',
+                'metodo-cat_wds-de': STELLE_DOPPIE_SEARCH_METHODS['coordinate_range'], 
+                'dato-cat_wds-de': f'{dec_min_str}%2C{dec_max_str}',
+            }
+            full_url = STELLE_DOPPIE_BASE_URL + "?" + "&".join([f"{k}={v}" for k, v in params.items()])
 
-        self.url_text.config(state=tk.NORMAL)
-        self.url_text.delete(1.0, tk.END)
-        self.url_text.insert(tk.END, full_url)
-        self.url_text.config(state=tk.DISABLED)
-        
-        if messagebox.askyesno("Open Search", "Search URL generated. Open in browser?"):
-            webbrowser.open(full_url)
+            self.url_text.config(state=tk.NORMAL)
+            self.url_text.delete(1.0, tk.END)
+            self.url_text.insert(tk.END, full_url)
+            self.url_text.config(state=tk.DISABLED)
+            
+            if messagebox.askyesno("Open Search", 
+                                 f"Search URL generated for:\n"
+                                 f"RA: {self.format_ra_hours(ra_min_h)} to {self.format_ra_hours(ra_max_h)}\n"
+                                 f"Dec: {self.format_dec_degrees(dec_min_d)} to {self.format_dec_degrees(dec_max_d)}\n\n"
+                                 f"Open in browser?"):
+                webbrowser.open(full_url)
+                
+        except Exception as e:
+            messagebox.showerror("URL Generation Error", 
+                               f"Failed to generate search URL: {e}")
+            return
             
     def format_ra_hours(self, hours: float) -> str:
         h = int(hours)
