@@ -446,10 +446,6 @@ def calculate_mean_velocity_from_endpoints(
     for robust analysis. It provides a simple two-point velocity estimate
     with proper validation using framework configuration.
     
-    DEPRECATED: This method is maintained for backward compatibility but
-    is superseded by calculate_robust_linear_fit() for systems with sufficient
-    historical data.
-    
     Args:
         wds_summary: WDS summary data containing first and last observations.
         
@@ -462,7 +458,6 @@ def calculate_mean_velocity_from_endpoints(
         - Validates velocities against MAX_ASTROMETRIC_VELOCITY_ARCSEC_PER_YEAR
         - Logs scientific warnings for deprecated usage and edge cases
     """
-    logger.warning("Using deprecated two-point velocity calculation. Consider using robust linear fit for better accuracy.")
     
     if not wds_summary:
         logger.debug("Endpoint velocity calculation failed: Missing WDS summary")

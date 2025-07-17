@@ -51,7 +51,7 @@ ANALYSIS_MODES = ['orbital', 'characterize', 'discovery']
 
 # GUI Configuration
 GUI_DEFAULT_WIDTH = 800
-GUI_DEFAULT_HEIGHT = 950
+GUI_DEFAULT_HEIGHT = 800
 DEFAULT_MIN_ALTITUDE_DEG = 40.0
 DEFAULT_RA_WINDOW_HOURS = 3.0
 DEFAULT_LIGHT_POLLUTION_MAG = 21.0
@@ -77,43 +77,226 @@ STELLE_DOPPIE_SEARCH_METHODS = {
 }
 
 # Advanced Search Parameters
+# Stelle Doppie search method mapping
+STELLE_DOPPIE_METHODS = {
+    1: 'equal to',
+    2: 'not equal to', 
+    3: 'more than',
+    4: 'more or equal to',
+    5: 'less than',
+    6: 'less or equal to',
+    7: 'between',
+    8: 'not between',
+    9: 'contains',
+    17: 'void',
+    18: 'not void'
+}
+
+# Filter configurations with method options
 STELLE_DOPPIE_FILTERS = {
-    'magnitude': {
-        'min_value': 0.0,
-        'max_value': 25.0,
-        'default_min': 0.0,
-        'default_max': 12.0,
-        'param_name': 'cat_wds-maga'
-    },
-    'separation': {
-        'min_value': 0.0,
-        'max_value': 300.0,
-        'default_min': 0.5,
-        'default_max': 60.0,
-        'param_name': 'cat_wds-sep'
-    },
-    'position_angle': {
-        'min_value': 0.0,
-        'max_value': 360.0,
-        'default_min': 0.0,
-        'default_max': 360.0,
-        'param_name': 'cat_wds-pa'
-    },
-    'epoch': {
+    'first': {
         'min_value': 1800.0,
         'max_value': 2030.0,
-        'default_min': 1950.0,
-        'default_max': 2025.0,
-        'param_name': 'cat_wds-epoch'
+        'default_value': 2000.0,
+        'default_method': '4',  # More or equal to
+        'param_name': 'cat_wds-date_first',
+        'label': 'First Observation Date',
+        'unit': 'year',
+        'data_type': 'numeric',
+        'available_methods': ['1', '2', '3', '4', '5', '6', '7', '8', '17', '18']
+    },
+    'last': {
+        'min_value': 1800.0,
+        'max_value': 2030.0,
+        'default_value': 2020.0,
+        'default_method': '5',  # Less than
+        'param_name': 'cat_wds-date_last',
+        'label': 'Last Observation Date',
+        'unit': 'year',
+        'data_type': 'numeric',
+        'available_methods': ['1', '2', '3', '4', '5', '6', '7', '8', '17', '18']
+    },
+    'mag_pri': {
+        'min_value': -2.0,
+        'max_value': 20.0,
+        'default_value': 10.0,
+        'default_method': '6',  # Less or equal to
+        'param_name': 'cat_wds-mag_pri',
+        'label': 'Primary Magnitude',
+        'unit': 'mag',
+        'data_type': 'numeric',
+        'available_methods': ['1', '2', '3', '4', '5', '6', '7', '8', '17', '18']
+    },
+    'mag_sec': {
+        'min_value': -2.0,
+        'max_value': 20.0,
+        'default_value': 12.0,
+        'default_method': '6',  # Less or equal to
+        'param_name': 'cat_wds-mag_sec',
+        'label': 'Secondary Magnitude',
+        'unit': 'mag',
+        'data_type': 'numeric',
+        'available_methods': ['1', '2', '3', '4', '5', '6', '7', '8', '17', '18']
+    },
+    'delta_magnitude': {
+        'min_value': 0.0,
+        'max_value': 15.0,
+        'default_value': 3.0,
+        'default_method': '6',  # Less or equal to
+        'param_name': 'cat_wds-calc_delta_mag',
+        'label': 'Delta Magnitude',
+        'unit': 'mag',
+        'data_type': 'numeric',
+        'available_methods': ['1', '2', '3', '4', '5', '6', '7', '8', '17', '18']
+    },
+    'separation': {
+        'min_value': 0.1,
+        'max_value': 300.0,
+        'default_value': 30.0,
+        'default_method': '6',  # Less or equal to
+        'param_name': 'cat_wds-sep_last',
+        'label': 'Separation',
+        'unit': 'arcsec',
+        'data_type': 'numeric',
+        'available_methods': ['1', '2', '3', '4', '5', '6', '7', '8', '17', '18']
+    },
+    'spectral_class': {
+        'default_value': 'G',
+        'default_method': '9',  # Contains
+        'param_name': 'cat_wds-spectr',
+        'label': 'Spectral Class',
+        'unit': '',
+        'data_type': 'string',
+        'available_methods': ['1', '2', '9', '17', '18']  # String-appropriate methods
+    },
+    'observations': {
+        'min_value': 1,
+        'max_value': 999,
+        'default_value': 5,
+        'default_method': '4',  # More or equal to
+        'param_name': 'cat_wds-obs',
+        'label': 'Observations Count',
+        'unit': 'count',
+        'data_type': 'integer',
+        'available_methods': ['1', '2', '3', '4', '5', '6', '7', '8', '17', '18']
     }
 }
 
 # Default Search Options
 DEFAULT_SEARCH_OPTIONS = {
-    'use_magnitude_filter': False,
+    'use_first_filter': False,
+    'use_last_filter': False,
+    'use_mag_pri_filter': False,
+    'use_mag_sec_filter': False,
+    'use_delta_magnitude_filter': False,
     'use_separation_filter': True,
-    'use_position_angle_filter': False,
-    'use_epoch_filter': False
+    'use_spectral_class_filter': False,
+    'use_observations_filter': False,
+    'known_orbit': False,
+    'physical_double': False,
+    'uncertain_double': False
+}
+
+# Export Format Configuration
+EXPORT_FORMATS = {
+    'csv': {
+        'name': 'CSV (Comma Separated Values)',
+        'extension': '.csv',
+        'mime_type': 'text/csv',
+        'description': 'Standard CSV format compatible with Excel and databases'
+    },
+    'json': {
+        'name': 'JSON (JavaScript Object Notation)',
+        'extension': '.json',
+        'mime_type': 'application/json',
+        'description': 'Machine-readable JSON format for APIs and web applications'
+    },
+    'fits': {
+        'name': 'FITS (Flexible Image Transport System)',
+        'extension': '.fits',
+        'mime_type': 'application/fits',
+        'description': 'Astronomical standard format for tables and images'
+    },
+    'votable': {
+        'name': 'VOTable (Virtual Observatory Table)',
+        'extension': '.xml',
+        'mime_type': 'application/x-votable+xml',
+        'description': 'Virtual Observatory standard for astronomical data exchange'
+    },
+    'latex': {
+        'name': 'LaTeX Table',
+        'extension': '.tex',
+        'mime_type': 'application/x-latex',
+        'description': 'LaTeX format for scientific publications'
+    }
+}
+
+# Multi-Catalog Integration
+CATALOG_SOURCES = {
+    'stelle_doppie': {
+        'name': 'Stelle Doppie',
+        'description': 'Italian catalog of visual binary stars',
+        'url': 'https://www.stelledoppie.it',
+        'enabled': True,
+        'priority': 1
+    },
+    'wds': {
+        'name': 'Washington Double Star Catalog',
+        'description': 'Comprehensive catalog of double and multiple stars',
+        'url': 'https://www.usno.navy.mil/USNO/astrometry/optical-IR-prod/wds',
+        'enabled': True,
+        'priority': 2
+    },
+    'gaia': {
+        'name': 'Gaia DR3',
+        'description': 'ESA Gaia Data Release 3',
+        'url': 'https://gea.esac.esa.int/archive/',
+        'enabled': True,
+        'priority': 3
+    },
+    'hipparcos': {
+        'name': 'Hipparcos/Tycho',
+        'description': 'Hipparcos and Tycho catalogs',
+        'url': 'https://www.cosmos.esa.int/web/hipparcos',
+        'enabled': False,
+        'priority': 4
+    }
+}
+
+# Advanced UI Configuration
+UI_THEMES = {
+    'default': {
+        'name': 'Default',
+        'bg_color': '#f0f0f0',
+        'fg_color': '#000000',
+        'select_color': '#0078d4',
+        'font_family': 'Arial',
+        'font_size': 10
+    },
+    'dark': {
+        'name': 'Dark Mode',
+        'bg_color': '#2d2d2d',
+        'fg_color': '#ffffff',
+        'select_color': '#4a9eff',
+        'font_family': 'Arial',
+        'font_size': 10
+    },
+    'scientific': {
+        'name': 'Scientific',
+        'bg_color': '#ffffff',
+        'fg_color': '#000000',
+        'select_color': '#1f77b4',
+        'font_family': 'Times New Roman',
+        'font_size': 11
+    }
+}
+
+# Progress Tracking Configuration
+PROGRESS_INDICATORS = {
+    'search_timeout': 30,  # seconds
+    'export_chunk_size': 1000,  # records per chunk
+    'ui_update_interval': 100,  # milliseconds
+    'auto_save_interval': 300   # seconds
 }
 
 # Analysis Mode Configuration

@@ -116,7 +116,13 @@ def calculate_astronomical_midnight(observer_location, obs_date: datetime, timez
     Returns:
         Dictionary with astronomical midnight times in UTC and local time
     """
-    local_tz = pytz.timezone(timezone)
+    # Handle both string and pytz timezone objects
+    if hasattr(timezone, 'zone'):
+        # It's already a pytz timezone object
+        local_tz = timezone
+    else:
+        # It's a string, convert to pytz timezone
+        local_tz = pytz.timezone(timezone)
     
     # Ensure obs_date is a datetime object, not just a date
     if hasattr(obs_date, 'date'):
@@ -176,7 +182,11 @@ def get_nightly_events(observer_location, obs_date: datetime, timezone: str = 'U
         obs_date: Observation date (datetime object or date object)
         timezone: Timezone string for local time conversion
     """
-    local_tz = pytz.timezone(timezone)
+    # Handle timezone parameter - it can be a string or a timezone object
+    if isinstance(timezone, str):
+        local_tz = pytz.timezone(timezone)
+    else:
+        local_tz = timezone
     
     # Ensure obs_date is a datetime object, not just a date
     if hasattr(obs_date, 'date'):
