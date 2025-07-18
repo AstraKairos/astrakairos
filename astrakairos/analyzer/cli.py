@@ -631,10 +631,15 @@ def save_results_to_csv(results: List[Dict[str, Any]], output_path: str):
         log.error(f"Failed to save results to {output_path}: {e}")
         raise
 
-def main():
-    """Main entry point for the analyzer CLI."""
+def main(args_list: Optional[List[str]] = None):
+    """Main entry point for the analyzer CLI.
+    
+    Args:
+        args_list: Optional list of command line arguments. 
+                  If None, will parse from sys.argv
+    """
     parser = create_argument_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(args_list)
     
     # Run async main
     import time
