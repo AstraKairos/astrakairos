@@ -180,7 +180,7 @@ Contributions are welcome! Whether you're reporting a bug, proposing a new featu
 This project builds upon the foundational work of the astronomical community and the availability of open data.
 
 **Special recognition to:**
-- **U.S. Naval Observatory (USNO)** for curation of the **Washington Double Star (WDS) Catalog** and **Sixth Catalog of Orbits of Visual Binary Stars (ORB6)**
+- **U.S. Naval Observatory (USNO)** for curation of the **Washington Double Star (WDS) Catalog**, the **Washington Double Star Supplemental (WDSS) Catalog**, and the **Sixth Catalog of Orbits of Visual Binary Stars (ORB6)**
 - **Stelle Doppie** project for providing accessible, centralized astronomical data resources
 - **ESA Gaia Mission** and the **Gaia Data Processing and Analysis Consortium (DPAC)** for astrometric data
 - **Stellarium project** for the observatory location database used in `/locations.json`
@@ -188,14 +188,7 @@ This project builds upon the foundational work of the astronomical community and
 **Software foundation:**
 This project leverages the Python ecosystem, particularly **NumPy**, **SciPy**, **Pandas**, **Astropy**, **Skyfield**, and **AstroQuery**.
 
-**AI assistance transparency:**
-Development was enhanced using AI-powered tools including OpenAI's **ChatGPT** for tasks such as:
-- Algorithm debugging and optimization
-- Documentation generation and translation  
-- Code review and testing strategies
-- Boilerplate generation for scientific calculations
-
-All AI-generated content was reviewed, tested, and adapted by human astronomers to ensure accuracy and reliability for research environments.
+Additionally, this project was developed with the assistance of AI-powered tools such as OpenAI's ChatGPT. These tools were used for tasks including generating boilerplate code, debugging algorithms, and writing/translating documentation. All AI-assisted output was carefully reviewed, tested, and adapted by the human author to ensure its viability and correctness for real-world research environments.
 
 **Methodology:**
 All astronomical calculations implement peer-reviewed algorithms with proper citations. Ephemeris calculations use JPL DE421, twilight calculations follow standard astronomical definitions, and sky brightness modeling implements the Krisciunas & Schaefer (1991) lunar scattering model.
