@@ -2,7 +2,7 @@
 Keplerian orbital mechanics calculations for binary star systems.
 
 This module implements numerical solutions to Kepler's equation and orbital
-position calculations with proper vectorization and numerical stability.
+position calculations using Newton-Raphson iteration and coordinate transformations.
 
 Functions:
     solve_kepler: Solves Kepler's equation using Newton-Raphson method
@@ -55,29 +55,29 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
                  coeff_high_e: Optional[float] = None) -> Union[float, np.ndarray]:
     """
     Solves Kepler's equation (M = E - e*sin(E)) for Eccentric Anomaly (E)
-    using the Newton-Raphson method with a robust, hybrid initial guess strategy.
+    using the Newton-Raphson method with hybrid initial guess strategy.
 
-    This implementation is optimized for stability and speed across all
-    elliptical eccentricities (0 <= e < 1) and operates vectorized on arrays.
-    Uses centralized configuration from config.py for scientific consistency.
+    This implementation handles all elliptical eccentricities (0 <= e < 1)
+    and operates on scalars or arrays. Uses centralized configuration 
+    from config.py for consistent parameters.
 
     Args:
         M_rad: Mean anomaly in radians. Can be a scalar or numpy array.
         e: Eccentricity of the orbit (0 <= e < 1).
-        tol: The desired precision for convergence. Uses DEFAULT_KEPLER_TOLERANCE if None.
-        max_iter: Maximum number of iterations. Uses DEFAULT_KEPLER_MAX_ITER if None.
-        e_threshold: Eccentricity threshold for robust initial guess. Uses HIGH_ECCENTRICITY_THRESHOLD if None.
+        tol: Convergence tolerance. Uses DEFAULT_KEPLER_TOLERANCE if None.
+        max_iter: Maximum iterations. Uses DEFAULT_KEPLER_MAX_ITER if None.
+        e_threshold: Eccentricity threshold for initial guess. Uses HIGH_ECCENTRICITY_THRESHOLD if None.
         coeff_high_e: Coefficient for high-eccentricity initial guess. Uses HIGH_E_COEFFICIENT if None.
 
     Returns:
         The Eccentric Anomaly (E) in radians. Same shape as input M_rad.
         
     Raises:
-        ValueError: If eccentricity is outside valid range or potentially unstable.
+        ValueError: If eccentricity is outside valid range.
         
     Notes:
-        - For e > 0.95, issues a warning about potential numerical instability
-        - Based on Napier (2024) for high-eccentricity initial guess strategy
+        - Issues warning for e > 0.95 due to potential convergence issues
+        - Initial guess strategy based on Napier (2024)
     """
     # Use centralized configuration with fallback to provided values
     tol = tol if tol is not None else DEFAULT_KEPLER_TOLERANCE
@@ -85,7 +85,7 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
     e_threshold = e_threshold if e_threshold is not None else HIGH_ECCENTRICITY_THRESHOLD
     coeff_high_e = coeff_high_e if coeff_high_e is not None else HIGH_E_COEFFICIENT
     
-    # Scientific validation using centralized config
+    # Validate eccentricity range
     if not (MIN_ECCENTRICITY <= e <= MAX_ECCENTRICITY_STABLE):
         raise ValueError(f"Eccentricity {e:.6f} outside stable range [{MIN_ECCENTRICITY}, {MAX_ECCENTRICITY_STABLE}]")
     
@@ -151,7 +151,7 @@ def predict_position(orbital_elements: Dict[str, float], date: float) -> Tuple[f
     Predicts the sky position (Position Angle and Separation) of a binary star 
     for a given observation date, based on its Keplerian orbital elements.
     
-    Uses centralized configuration for scientific validation of orbital elements.
+    Uses centralized configuration for validation of orbital elements.
 
     Args:
         orbital_elements: A dictionary containing the 7 Keplerian elements:
@@ -165,7 +165,7 @@ def predict_position(orbital_elements: Dict[str, float], date: float) -> Tuple[f
         A tuple containing (position_angle_deg, separation_arcsec).
         
     Raises:
-        ValueError: If any orbital element is outside scientifically valid ranges.
+        ValueError: If any orbital element is outside valid ranges.
         KeyError: If required orbital elements are missing.
     """
     # 1. Extract and validate orbital elements
@@ -253,8 +253,6 @@ def compute_orbital_anomalies(orbital_elements: Dict[str, float], dates: np.ndar
     """
     Computes Mean Anomaly (M), Eccentric Anomaly (E), and True Anomaly (nu)
     for an array of dates, useful for plotting orbits or detailed analysis.
-    
-    Uses the vectorized solve_kepler function directly (no np.vectorize needed).
 
     Args:
         orbital_elements: Dictionary with orbital elements.
@@ -276,7 +274,7 @@ def compute_orbital_anomalies(orbital_elements: Dict[str, float], dates: np.ndar
     except KeyError as exc:
         raise ValueError(f"Missing required orbital element for anomaly calculation: {exc}")
     
-    # Scientific validation
+    # Validate orbital elements
     if not (MIN_PERIOD_YEARS <= P <= MAX_PERIOD_YEARS):
         raise ValueError(f"Orbital period {P:.3f} years outside valid range")
     
