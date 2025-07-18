@@ -21,6 +21,9 @@ MAX_ECCENTRICITY = 0.99
 MIN_INCLINATION_DEG = 0.0
 MAX_INCLINATION_DEG = 180.0
 
+
+AMBIGUOUS_P_VALUE_RATIO = 10  # Ratio for calculating ambiguous threshold from primary threshold
+
 # Orbital Quality Grades (ORB6)
 MIN_ORBIT_GRADE = 1  # Best quality
 MAX_ORBIT_GRADE = 5  # Lowest quality

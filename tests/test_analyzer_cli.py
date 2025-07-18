@@ -2,7 +2,7 @@
 
 import pytest
 import pandas as pd
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock, MagicMock, Mock
 import argparse
 from enum import Enum
 
@@ -47,7 +47,7 @@ def test_parser_custom_arguments():
     args_list = [
         'my_stars.csv',
         '--source', 'local',
-        '--wds-file', 'wds.txt',
+        '--database-path', 'catalogs.db',
         '--validate-gaia',
         '--gaia-p-value', '0.05',
         '--limit', '50'
@@ -55,7 +55,7 @@ def test_parser_custom_arguments():
     args = parser.parse_args(args_list)
 
     assert args.source == 'local'
-    assert args.wds_file == 'wds.txt'
+    assert args.database_path == 'catalogs.db'
     assert args.validate_gaia
     assert args.gaia_p_value == 0.05
     assert args.limit == 50
@@ -83,7 +83,7 @@ MOCK_GAIA_RESULT = {
 @pytest.mark.asyncio
 # El decorador 'patch' reemplaza objetos con 'Mocks' durante la prueba
 @patch('astrakairos.analyzer.cli.load_csv_data')
-@patch('astrakairos.analyzer.cli.LocalFileDataSource')
+@patch('astrakairos.analyzer.cli.LocalDataSource')
 @patch('astrakairos.analyzer.cli.GaiaValidator')
 @patch('astrakairos.analyzer.cli.save_results_to_csv')
 async def test_main_async_local_source_flow(mock_save_csv, mock_gaia_validator, mock_local_source, mock_load_csv):
@@ -95,10 +95,11 @@ async def test_main_async_local_source_flow(mock_save_csv, mock_gaia_validator, 
     # Simula la carga del CSV
     mock_load_csv.return_value = MOCK_CSV_DATA
     
-    # Configura la instancia 'mockeada' de LocalFileDataSource
+    # Configura la instancia 'mockeada' de LocalDataSource
     mock_local_instance = mock_local_source.return_value
     mock_local_instance.get_wds_summary = AsyncMock(return_value=MOCK_WDS_DATA)
     mock_local_instance.get_orbital_elements = AsyncMock(return_value=MOCK_ORBITAL_DATA)
+    mock_local_instance.close = Mock()  # Mock para el método close()
     
     # Configura la instancia 'mockeada' de GaiaValidator
     mock_gaia_instance = mock_gaia_validator.return_value
@@ -111,8 +112,7 @@ async def test_main_async_local_source_flow(mock_save_csv, mock_gaia_validator, 
     args_list = [
         'stars.csv',
         '--source', 'local',
-        '--wds-file', 'wds.txt',
-        '--orb6-file', 'orb6.txt',
+        '--database-path', 'catalogs.db',
         '--validate-gaia',
         '--output', 'results.csv'
     ]
@@ -125,7 +125,7 @@ async def test_main_async_local_source_flow(mock_save_csv, mock_gaia_validator, 
     
     # Verifica que las funciones fueron llamadas
     mock_load_csv.assert_called_once_with('stars.csv')
-    mock_local_source.assert_called_once_with(wds_filepath='wds.txt', orb6_filepath='orb6.txt')
+    mock_local_source.assert_called_once_with(database_path='catalogs.db')
     mock_local_instance.get_wds_summary.assert_called_once()
     # Note: In discovery mode, get_orbital_elements is not called
     

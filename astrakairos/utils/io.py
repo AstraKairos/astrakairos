@@ -211,7 +211,7 @@ def parse_wds_designation(wds_id: str) -> Optional[Dict[str, float]]:
         log.warning(f"Failed to parse WDS designation '{wds_id}': {e}")
         return None
 
-# Coordinate formatting functions
+
 def format_coordinates(ra_hours: float, dec_degrees: float, precision: Optional[int] = None) -> str:
     """
     Universal coordinate formatting function.

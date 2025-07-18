@@ -8,6 +8,7 @@ __pycache__/
 *.bsp
 *.bsp.download
 deprecated/
+*.db
 
 # C extensions
 *.so
