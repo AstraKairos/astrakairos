@@ -16,7 +16,9 @@ from ..config import (
     DEFAULT_GAIA_SEARCH_RADIUS_ARCSEC,
     DEFAULT_GAIA_MAG_LIMIT,
     GAIA_MAX_RETRY_ATTEMPTS,
-    GAIA_RETRY_DELAY_SECONDS
+    GAIA_RETRY_DELAY_SECONDS,
+    MIN_ORBIT_GRADE,
+    MAX_ORBIT_GRADE
 )
 
 # --- Enums for categorical data ---
@@ -34,18 +36,18 @@ class ValidationMethod(Enum):
     GAIA_PARALLAX_ONLY = "Gaia Parallax"
     PROPER_MOTION_ONLY = "Proper Motion"
     STATISTICAL_ANALYSIS = "Statistical Analysis"
-    INSUFFICIENT_DATA = "Insufficient Data"
+    INSUFFICIENT_DATA = PhysicalityLabel.INSUFFICIENT_DATA.value
 
 class WdsSummary(TypedDict, total=False):
     """Data structure for a single-line entry from the WDS summary catalog."""
-    wds_id: str  # Changed from wds_name for consistency with astronomical standards
+    wds_id: str
     ra_deg: float
     dec_deg: float
     date_first: float
     date_last: float
-    n_observations: int  # Changed from obs for clarity
-    pa_first: float      # Changed from int to float for precision
-    pa_last: float       # Changed from int to float for precision
+    n_observations: int
+    pa_first: float
+    pa_last: float
     sep_first: float
     sep_last: float
     mag_pri: float
@@ -53,7 +55,7 @@ class WdsSummary(TypedDict, total=False):
 
 class OrbitalElements(TypedDict, total=False):
     """Data structure for complete Keplerian orbital elements with uncertainties."""
-    wds_id: str  # Changed from wds_name for consistency
+    wds_id: str
     
     # Orbital elements
     P: float      # Period (years)
@@ -67,7 +69,7 @@ class OrbitalElements(TypedDict, total=False):
     # Complete uncertainty set - all 7 elements for scientific completeness
     e_P: float    # Period uncertainty (years)
     e_T: float    # Epoch of periastron uncertainty (years)
-    e_e: float    # Eccentricity uncertainty
+    e_e: float    # Eccentricity uncertainty (dimensionless)
     e_a: float    # Semi-major axis uncertainty (arcsec)
     e_i: float    # Inclination uncertainty (degrees)
     e_Omega: float # Longitude of ascending node uncertainty (degrees)
@@ -75,27 +77,32 @@ class OrbitalElements(TypedDict, total=False):
     
     # Scientific metadata
     reference: str  # Source reference/publication
-    grade: int      # Orbit quality grade (1-5, where 1 is best)
+    grade: int      # Orbit quality grade (MIN_ORBIT_GRADE=best to MAX_ORBIT_GRADE=worst)
     last_updated: str  # ISO format date string
 
-class PhysicalityAssessment(TypedDict, total=False):
-    """Data structure for physicality validation results."""
-    label: PhysicalityLabel  # Enum instead of string for type safety
+class BasePhysicalityAssessment(TypedDict, total=False):
+    """Base data structure for physicality validation results."""
+    label: PhysicalityLabel  # Standardized assessment result
     confidence: float        # 0-1 confidence score
-    p_value: float
-    method: ValidationMethod # Enum instead of string for type safety
+    p_value: float          # Statistical significance
+    method: ValidationMethod # Method used for validation
     
-    # Detailed Gaia-specific metrics
+    # Analysis metadata for reproducibility
+    validation_date: str  # ISO format timestamp
+    retry_attempts: int   # Number of retry attempts made
+
+class PhysicalityAssessment(BasePhysicalityAssessment, total=False):
+    """Extended physicality assessment with Gaia-specific metrics."""
+    
+    # Gaia-specific metrics
     parallax_consistency: Optional[float]  # Parallax-based consistency metric
     proper_motion_consistency: Optional[float]  # Proper motion consistency metric
     gaia_source_id_primary: Optional[str]     # Gaia source ID for primary star
     gaia_source_id_secondary: Optional[str]   # Gaia source ID for secondary star
     
-    # Analysis metadata for reproducibility
-    validation_date: str  # ISO format timestamp
+    # Gaia-specific metadata
     search_radius_arcsec: float  # Search radius used
     significance_thresholds: Dict[str, float]  # Thresholds used in analysis
-    retry_attempts: int  # Number of retry attempts made
 
 # --- Abstract Base Class ---
 
@@ -103,10 +110,13 @@ class DataSource(ABC):
     """
     Abstract Base Class for all AstraKairos data sources.
 
-    This interface defines a contract for fetching various types of data
+    This interface defines a contract for fetching astronomical catalog data
     related to double star systems. Each method is designed to be explicit
     about the data it retrieves and integrates with the configuration system
     for consistent, configurable behavior.
+    
+    Note: Physicality validation has been separated from data access.
+    Use PhysicalityValidator classes for validation logic.
     """
 
     @abstractmethod
@@ -154,41 +164,31 @@ class DataSource(ABC):
         """
         pass
 
+
+# --- Abstract Base Class for Physicality Validation ---
+
+class PhysicalityValidator(ABC):
+    """
+    Abstract base class for physicality validation methods.
+    
+    This interface separates validation logic from data access,
+    allowing for different validation approaches (Gaia, spectroscopy, ML).
+    """
+    
     @abstractmethod
     async def validate_physicality(
-        self, 
+        self,
         system_data: WdsSummary,
-        p_value_threshold: float = DEFAULT_PHYSICAL_P_VALUE_THRESHOLD,
-        ambiguous_threshold: float = DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD,
-        search_radius_arcsec: float = DEFAULT_GAIA_SEARCH_RADIUS_ARCSEC,
-        mag_limit: float = DEFAULT_GAIA_MAG_LIMIT,
-        min_parallax_significance: float = MIN_PARALLAX_SIGNIFICANCE,
-        min_pm_significance: float = MIN_PM_SIGNIFICANCE,
-        timeout_seconds: float = GAIA_QUERY_TIMEOUT_SECONDS,
-        max_retry_attempts: int = GAIA_MAX_RETRY_ATTEMPTS,
-        retry_delay_seconds: float = GAIA_RETRY_DELAY_SECONDS
-    ) -> Optional[PhysicalityAssessment]:
+        **kwargs
+    ) -> Optional[BasePhysicalityAssessment]:
         """
-        Validates if a system is likely physically bound using external data (e.g., Gaia).
-
-        Uses configuration defaults but allows per-call customization for
-        scientific analysis flexibility. This method requires summary data
-        (coordinates, magnitudes) to perform its task.
+        Validates if a binary system is likely physically bound.
         
         Args:
-            system_data: A WdsSummary dictionary containing the star's coordinates and magnitudes
-            p_value_threshold: Threshold for physical companion classification (default from config)
-            ambiguous_threshold: Threshold for ambiguous classification (default from config)
-            search_radius_arcsec: Search radius around target position (default from config)
-            mag_limit: Magnitude limit for catalog queries (default from config)
-            min_parallax_significance: Minimum parallax/error ratio (default from config)
-            min_pm_significance: Minimum proper motion significance (default from config)
-            timeout_seconds: Query timeout limit (default from config)
-            max_retry_attempts: Maximum retry attempts for failed queries (default from config)
-            retry_delay_seconds: Delay between retry attempts (default from config)
-        
+            system_data: Basic system information (coordinates, magnitudes)
+            **kwargs: Method-specific parameters
+            
         Returns:
-            A PhysicalityAssessment dictionary with validation results and metadata,
-            or None if validation cannot be performed.
+            BasePhysicalityAssessment or subclass, None if validation fails
         """
         pass
