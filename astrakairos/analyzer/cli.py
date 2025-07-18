@@ -12,7 +12,7 @@ from ..data.source import DataSource, WdsSummary, OrbitalElements, PhysicalityAs
 from ..data.local_source import LocalFileDataSource
 from ..data.online_source import OnlineDataSource
 from ..data.gaia_source import GaiaValidator
-from ..physics.dynamics import calculate_mean_velocity_from_endpoints, calculate_observation_priority_index
+from ..physics.dynamics import estimate_velocity_from_endpoints, calculate_observation_priority_index
 from ..physics.kepler import predict_position
 from ..utils.io import load_csv_data, save_results_to_csv
 from ..config import (
@@ -212,13 +212,13 @@ async def process_star(row: pd.Series,
                 log.debug(f"Running discovery analysis for {wds_id}")
                 
                 try:
-                    velocity_result = calculate_mean_velocity_from_endpoints(wds_summary)
+                    velocity_result = estimate_velocity_from_endpoints(wds_summary)
                     if velocity_result is None:
                         log.error(f"Could not calculate velocity for {wds_id}")
                         return None
                     
-                    v_total = velocity_result['v_total_endpoint']
-                    pa_v = velocity_result['pa_v_endpoint']
+                    v_total = velocity_result['v_total_estimate']
+                    pa_v = velocity_result['pa_v_estimate']
                     
                     result.update({
                         'v_total_arcsec_yr': v_total,

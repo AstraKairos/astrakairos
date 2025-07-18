@@ -6,7 +6,7 @@ from astrakairos.physics.dynamics import (
     calculate_observation_priority_index,
     calculate_robust_linear_fit,
     calculate_curvature_index,
-    calculate_mean_velocity_from_endpoints
+    estimate_velocity_from_endpoints
 )
 
 class TestObservationPriorityIndex:
@@ -342,7 +342,7 @@ class TestCurvatureIndex:
         assert result is None
 
 class TestMeanVelocityFromEndpoints:
-    """Test calculate_mean_velocity_from_endpoints function."""
+    """Test estimate_velocity_from_endpoints function."""
     
     @pytest.fixture
     def sample_wds_summary(self):
@@ -359,22 +359,22 @@ class TestMeanVelocityFromEndpoints:
     
     def test_endpoint_velocity_success(self, sample_wds_summary):
         """Test successful endpoint velocity calculation."""
-        result = calculate_mean_velocity_from_endpoints(sample_wds_summary)
+        result = estimate_velocity_from_endpoints(sample_wds_summary)
         
         assert result is not None
         assert 'vx_arcsec_per_year' in result
         assert 'vy_arcsec_per_year' in result
-        assert 'v_total_endpoint' in result
-        assert 'pa_v_endpoint' in result
+        assert 'v_total_estimate' in result
+        assert 'pa_v_estimate' in result
         assert 'time_baseline_years' in result
         assert 'n_points_fit' in result
         assert 'method' in result
         
         assert result['n_points_fit'] == 2
-        assert result['method'] == 'two_point_endpoint'
+        assert result['method'] == 'two_point_estimate'
         assert result['time_baseline_years'] == 20.0
-        assert result['v_total_endpoint'] >= 0
-        assert 0 <= result['pa_v_endpoint'] < 360
+        assert result['v_total_estimate'] >= 0
+        assert 0 <= result['pa_v_estimate'] < 360
     
     def test_endpoint_velocity_missing_data(self):
         """Test endpoint velocity with missing data."""
@@ -386,21 +386,21 @@ class TestMeanVelocityFromEndpoints:
             # Missing 'pa_last'
         }
         
-        result = calculate_mean_velocity_from_endpoints(incomplete_summary)
+        result = estimate_velocity_from_endpoints(incomplete_summary)
         assert result is None
     
     def test_endpoint_velocity_zero_time_baseline(self, sample_wds_summary):
         """Test endpoint velocity with zero time baseline."""
         sample_wds_summary['date_last'] = 2000.0  # Same as date_first
         
-        result = calculate_mean_velocity_from_endpoints(sample_wds_summary)
+        result = estimate_velocity_from_endpoints(sample_wds_summary)
         assert result is None
     
     def test_endpoint_velocity_negative_time_baseline(self, sample_wds_summary):
         """Test endpoint velocity with negative time baseline."""
         sample_wds_summary['date_last'] = 1990.0  # Earlier than date_first
         
-        result = calculate_mean_velocity_from_endpoints(sample_wds_summary)
+        result = estimate_velocity_from_endpoints(sample_wds_summary)
         assert result is None
     
     def test_endpoint_velocity_calculation_values(self, sample_wds_summary):
@@ -413,7 +413,7 @@ class TestMeanVelocityFromEndpoints:
             'sep_last': 2.0  # Separation increases
         })
         
-        result = calculate_mean_velocity_from_endpoints(sample_wds_summary)
+        result = estimate_velocity_from_endpoints(sample_wds_summary)
         
         assert result is not None
         # Should have pure radial velocity (in y-direction for PA=0)
