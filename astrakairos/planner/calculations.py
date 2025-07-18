@@ -326,8 +326,8 @@ def calculate_sky_conditions_at_time(observer_location, time_utc: datetime) -> D
     zenith_apparent = observer.at(t).from_altaz(alt_degrees=90, az_degrees=0)
     zenith_ra, zenith_dec, _ = zenith_apparent.radec()
     
-    # Import unified coordinate formatting functions
-    from ..utils.io import format_ra_hours_unified, format_dec_degrees_unified
+    # Import unified coordinate formatting function
+    from ..utils.io import format_coordinates_astropy
     
     return {
         'moon_alt_deg': moon_alt.degrees,
@@ -337,8 +337,8 @@ def calculate_sky_conditions_at_time(observer_location, time_utc: datetime) -> D
         'moon_phase_percent': moon_phase_percent,
         'zenith_ra_hours': zenith_ra.hours,
         'zenith_dec_deg': zenith_dec.degrees,
-        'zenith_ra_str': format_ra_hours_unified(zenith_ra.hours),
-        'zenith_dec_str': format_dec_degrees_unified(zenith_dec.degrees)
+        'zenith_ra_str': format_coordinates_astropy(zenith_ra, zenith_dec)[0],
+        'zenith_dec_str': format_coordinates_astropy(zenith_ra, zenith_dec)[1]
     }
 
 

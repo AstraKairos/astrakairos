@@ -39,7 +39,7 @@ def test_get_nightly_events_returns_correct_structure(paris_observatory, test_da
     assert isinstance(events, dict)
     expected_keys = [
         'sunset_utc', 'sunset_local', 'sunrise_utc', 'sunrise_local',
-        'astronomical_twilight_end', 'astronomical_twilight_start',
+        'astronomical_twilight_end_utc', 'astronomical_twilight_start_utc',
         'moonrise_utc', 'moonrise_local', 'moonset_utc', 'moonset_local'
     ]
     for key in expected_keys:
@@ -52,8 +52,8 @@ def test_get_nightly_events_returns_correct_structure(paris_observatory, test_da
     if events['sunset_utc'] and events['sunrise_utc']:
         assert events['sunset_utc'] < events['sunrise_utc']
     
-    if events['astronomical_twilight_end'] and events['astronomical_twilight_start']:
-        assert events['astronomical_twilight_end'] < events['astronomical_twilight_start']
+    if events['astronomical_twilight_end_utc'] and events['astronomical_twilight_start_utc']:
+        assert events['astronomical_twilight_end_utc'] < events['astronomical_twilight_start_utc']
 
 # --- Pruebas para calculate_sky_conditions_at_time ---
 

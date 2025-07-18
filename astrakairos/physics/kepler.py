@@ -1,84 +1,21 @@
 """
-Keplerian Orbital Mechanics Module
+Keplerian orbital mechanics calculations for binary star systems.
 
-This module implements scientifically rigorous Keplerian orbital mechanics calculations
-for binary star systems, with emphasis on numerical stability, proper vectorization,
-and adherence to astronomical software standards for peer-reviewed publication.
+This module implements numerical solutions to Kepler's equation and orbital
+position calculations with proper vectorization and numerical stability.
 
-Scientific Framework:
---------------------
-- Newton-Raphson solver for Kepler's equation with adaptive convergence
-- Hybrid initial guess strategy for high-eccentricity orbits (e > 0.7)
-- Thiele-Innes constants formulation for 3D orbital projections
-- Comprehensive validation using configurable astronomical ranges
-- IEEE 754 double-precision numerical accuracy with configurable tolerances
-
-Key Features:
--------------
-1. **Vectorized Operations**: All functions handle both scalar and array inputs
-   consistently, returning appropriate types (float for scalar, ndarray for vector)
-
-2. **Centralized Configuration**: Scientific constants and validation ranges
-   sourced from config.py for framework consistency and reproducibility
-
-3. **Robust Validation**: Comprehensive bounds checking for all orbital elements
-   using established astronomical ranges and physical constraints
-
-4. **Scientific Logging**: Detailed convergence information and warnings for
-   high-eccentricity cases to aid in scientific debugging
-
-5. **Publication-Ready**: Designed to meet standards for astronomical software
-   described in peer-reviewed publications
-
-Mathematical Background:
------------------------
-The module implements the standard formulation for visual binary orbits:
-
-1. **Kepler's Equation**: M = E - e*sin(E)
-   Solved using Newton-Raphson: E_{n+1} = E_n - (E_n - e*sin(E_n) - M)/(1 - e*cos(E_n))
-
-2. **True Anomaly**: tan(ν/2) = sqrt((1+e)/(1-e)) * tan(E/2)
-
-3. **Position Calculation**: 
-   - X = r * (cos(Ω)*cos(ω+ν) - sin(Ω)*sin(ω+ν)*cos(i))
-   - Y = r * (sin(Ω)*cos(ω+ν) + cos(Ω)*sin(ω+ν)*cos(i))
-   - ρ = sqrt(X² + Y²), θ = atan2(Y, X)
+Functions:
+    solve_kepler: Solves Kepler's equation using Newton-Raphson method
+    predict_position: Calculates position angle and separation for given epoch
+    compute_orbital_anomalies: Computes mean, eccentric, and true anomalies
 
 Dependencies:
--------------
-- numpy: Vectorized numerical operations
-- astropy.time: Time scale conversions and epoch handling
-- config: Centralized scientific constants and validation ranges
-- logging: Scientific debugging and convergence monitoring
-
-Examples:
----------
->>> # Solve Kepler's equation for array of mean anomalies
->>> import numpy as np
->>> from astrakairos.physics.kepler import solve_kepler
->>> M = np.array([0.1, 0.5, 1.0, 2.0])
->>> E = solve_kepler(M, e=0.3)
-
->>> # Predict binary position at specific epoch
->>> from astrakairos.physics.kepler import predict_position
->>> elements = {'P': 12.3, 'T': 2015.4, 'e': 0.234, 'a': 1.45, 
-...            'i': 67.2, 'Omega': 123.4, 'omega': 89.1}
->>> pa, sep = predict_position(elements, 2025.0)
-
-Notes:
-------
-This implementation prioritizes numerical stability and scientific rigor over
-computational speed. For production applications requiring high-frequency
-calculations, consider caching intermediate results or using compiled extensions.
-
-Authors: AstraKairos Development Team
-License: MIT
-Version: 2.0 (Refactored for scientific publication standards)
+    numpy: Vectorized numerical operations
+    logging: Convergence information and warnings
 """
 
 import logging
 import numpy as np
-from astropy.time import Time
 from typing import Dict, Tuple, Union, Optional
 
 # Centralized configuration imports for scientific consistency
@@ -152,9 +89,9 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
     if not (MIN_ECCENTRICITY <= e <= MAX_ECCENTRICITY_STABLE):
         raise ValueError(f"Eccentricity {e:.6f} outside stable range [{MIN_ECCENTRICITY}, {MAX_ECCENTRICITY_STABLE}]")
     
-    # Warning for potentially problematic eccentricities
+    # Validate eccentricity range for numerical stability
     if e > DANGEROUS_ECCENTRICITY_WARNING:
-        logger.warning(f"High eccentricity {e:.{KEPLER_LOGGING_PRECISION}f} may cause numerical instability in Kepler solver")
+        logger.warning(f"High eccentricity {e:.{KEPLER_LOGGING_PRECISION}f} may cause instability")
     
     # Determine if input is scalar
     input_is_scalar = np.isscalar(M_rad)
@@ -164,31 +101,21 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
     original_shape = M_rad.shape
     M_rad = M_rad.flatten()
     
-    # 1. Normalize Mean Anomaly to be within [-pi, pi] for better convergence.
+    # Normalize Mean Anomaly to [-pi, pi] for better convergence
     M_norm = M_rad % (2 * np.pi)
     M_norm = np.where(M_norm > np.pi, M_norm - 2 * np.pi, M_norm)
     M_norm = np.where(M_norm < -np.pi, M_norm + 2 * np.pi, M_norm)
 
-    # 2. Provide a robust initial guess for Eccentric Anomaly (E) using a
-    #    hybrid strategy based on eccentricity.
+    # Initial guess strategy based on eccentricity
     if e < e_threshold:
-        # For low to moderate eccentricities, a second-order approximation is very effective.
         E = M_norm + e * np.sin(M_norm) * (1.0 + e * np.cos(M_norm))
     else:
-        # For high eccentricities (e -> 1), this simpler guess is more stable.
-        # Based on Napier (2024): E ≈ M + 0.71 * e
         E = M_norm + coeff_high_e * e
 
-    # 3. Newton-Raphson iteration loop - This is the core of the solver.
-    # The function to find the root of is f(E) = E - e*sin(E) - M_norm = 0
-    # Its derivative is f'(E) = 1 - e*cos(E)
-    # The iteration step is E_next = E - f(E) / f'(E)
-
-    # Track convergence for each element
+    # Newton-Raphson iteration
     converged = np.zeros(E.shape, dtype=bool)
     
     for _ in range(max_iter):
-        # Only compute for elements that haven't converged yet
         mask = ~converged
         
         if not np.any(mask):
@@ -205,10 +132,10 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
         # Check for convergence: if the correction step is smaller than the tolerance.
         converged[mask] = np.abs(delta) < tol
 
-    # Log convergence statistics for scientific debugging
+    # Performance warning for low convergence
     convergence_rate = np.sum(converged) / len(converged) * 100
     if convergence_rate < KEPLER_CONVERGENCE_WARNING_THRESHOLD:
-        logger.warning(f"Kepler solver convergence rate: {convergence_rate:.1f}% (e={e:.{KEPLER_LOGGING_PRECISION}f})")
+        logger.warning(f"Low convergence rate: {convergence_rate:.1f}% (e={e:.{KEPLER_LOGGING_PRECISION}f})")
     
     # Reshape result and handle scalar vs array return type
     result = E.reshape(original_shape)
@@ -276,69 +203,48 @@ def predict_position(orbital_elements: Dict[str, float], date: float) -> Tuple[f
     if not (MIN_EPOCH_PERIASTRON_YEAR <= T <= MAX_EPOCH_PERIASTRON_YEAR):
         raise ValueError(f"Epoch of periastron {T:.1f} outside reasonable range [{MIN_EPOCH_PERIASTRON_YEAR}, {MAX_EPOCH_PERIASTRON_YEAR}]")
 
-    # Log potentially problematic cases for scientific awareness
-    if e > DANGEROUS_ECCENTRICITY_WARNING:
-        logger.info(f"Computing position for high-eccentricity orbit: e={e:.{KEPLER_LOGGING_PRECISION}f}")
-    
-    if P > 1000:
-        logger.debug(f"Computing position for very long-period orbit: P={P:.1f} years")
+    # Conditionally log high-eccentricity cases
+    if e > DANGEROUS_ECCENTRICITY_WARNING and P > 1000:
+        logger.info(f"Computing high-eccentricity ({e:.3f}) long-period ({P:.0f}y) orbit")
 
-    # 3. Convert all input angles from degrees to radians for numpy functions
+    # Convert angles to radians
     i_rad = np.radians(i_deg)
     Omega_rad = np.radians(Omega_deg)
     omega_rad = np.radians(omega_deg)
     
-    # 4. Calculate Mean Anomaly (M)
-    # M represents the fraction of the orbital period that has elapsed since periastron.
+    # Calculate Mean Anomaly
     mean_motion = 2 * np.pi / P
     M = mean_motion * (date - T)
     
-    # 5. Solve Kepler's Equation for Eccentric Anomaly (E)
-    # This is the crucial step linking time to orbital position.
-    # Uses the refactored solver with centralized configuration
+    # Solve Kepler's equation for Eccentric Anomaly
     E = solve_kepler(M, e)
     
-    # 6. Calculate rectangular coordinates (x_prime, y_prime) in the orbital plane.
-    # The primary star is at the origin (0,0). x' is along the major axis towards periastron.
-    # y' is perpendicular to x' in the orbital plane.
+    # Calculate orbital plane coordinates
     x_prime = a * (np.cos(E) - e)
     y_prime = a * np.sqrt(1 - e**2) * np.sin(E)
     
-    # 7. Apply three successive rotations to project to the plane of the sky.
-    # This is the standard formulation for visual binary orbits.
-
-    # Rotate by the argument of periastron (omega) to align the orbit with the line of nodes.
+    # Apply orbital rotations to project to sky plane
     cos_omega = np.cos(omega_rad)
     sin_omega = np.sin(omega_rad)
     x = x_prime * cos_omega - y_prime * sin_omega
     y = x_prime * sin_omega + y_prime * cos_omega
     
-    # Rotate by the inclination (i) around the line of nodes (the new x-axis).
-    # This projects the orbit onto the sky plane.
+    # Apply inclination rotation
     cos_i = np.cos(i_rad)
     y_inclined = y * cos_i
     
-    # Rotate by the longitude of the ascending node (Omega) in the plane of the sky.
-    # This aligns the orbit with celestial coordinates (North and East).
+    # Apply ascending node rotation
     cos_Omega = np.cos(Omega_rad)
     sin_Omega = np.sin(Omega_rad)
-
-    # x_sky corresponds to the East-West direction (+East)
-    # y_sky corresponds to the North-South direction (+North)
     x_sky = x * sin_Omega + y_inclined * cos_Omega
     y_sky = -x * cos_Omega + y_inclined * sin_Omega
     
-    # 8. Convert the sky-plane cartesian coordinates to observables.
-    # Separation (rho) is the distance from the primary star (origin).
+    # Convert to observables
     separation_arcsec = np.sqrt(x_sky**2 + y_sky**2)
-    
-    # Position Angle (theta) is measured from North (positive Y-axis) towards East (positive X-axis).
-    # np.arctan2(x, y) follows this astronomical convention.
     position_angle_rad = np.arctan2(x_sky, y_sky) 
     position_angle_deg = np.degrees(position_angle_rad)
     
-    # 9. Normalize the Position Angle to the conventional [0, 360) degree range.
-    # Using modulo operation ensures proper handling of all angles (negative and > 360)
+    # Normalize to [0, 360) range
     position_angle_deg = position_angle_deg % 360.0
     
     return (position_angle_deg, separation_arcsec)
@@ -381,16 +287,12 @@ def compute_orbital_anomalies(orbital_elements: Dict[str, float], dates: np.ndar
     mean_motion = 2 * np.pi / P
     M_array = mean_motion * (dates - T)
     
-    # FIXED: solve_kepler is already vectorized - no need for np.vectorize!
-    # This was the major inefficiency in the original code
+    # Calculate anomalies for all epochs
     E_array = solve_kepler(M_array, e)
     
-    # Calculate True Anomaly for the array of E values
-    # This uses the numerically stable atan2 formulation.
+    # Convert Eccentric to True Anomaly using stable formula
     tan_nu_half_array = np.sqrt((1 + e) / (1 - e)) * np.tan(E_array / 2)
     nu_array = 2 * np.arctan(tan_nu_half_array)
-    
-    logger.debug(f"Computed anomalies for {len(dates)} epochs with e={e:.{KEPLER_LOGGING_PRECISION}f}")
     
     return {
         'M': M_array % (2 * np.pi), # Normalize M to [0, 2π]
