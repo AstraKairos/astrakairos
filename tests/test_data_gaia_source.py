@@ -81,18 +81,11 @@ class TestGaiaValidator:
             'pmra_pmdec_corr': [0.1, 0.1]
         })
         
-        # Mock the query to return individual rows
-        async def mock_query_star_data(wds_id, position, radius=5.0):
-            # Return each row in sequence
-            if not hasattr(mock_query_star_data, 'call_count'):
-                mock_query_star_data.call_count = 0
-            if mock_query_star_data.call_count < len(mock_table):
-                row = mock_table[mock_query_star_data.call_count]
-                mock_query_star_data.call_count += 1
-                return row
-            return None
+        # Mock the query to return the full table
+        async def mock_query_gaia_for_pair_async(ra_deg, dec_deg, radius_arcsec):
+            return mock_table
         
-        with patch.object(gaia_validator, 'query_star_data', side_effect=mock_query_star_data):
+        with patch.object(gaia_validator, '_query_gaia_for_pair_async', side_effect=mock_query_gaia_for_pair_async):
             result = await gaia_validator.validate_physicality(wds_summary)
             
             # The result should be a PhysicalityAssessment with proper structure
@@ -134,83 +127,95 @@ class TestGaiaValidator:
     
     def test_validate_physicality_sync_success(self, gaia_validator):
         """Test synchronous physicality validation."""
+        from astrakairos.data.source import PhysicalityLabel, ValidationMethod
+        
         with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
             with patch.object(gaia_validator, '_identify_components_by_mag') as mock_identify:
                 with patch.object(gaia_validator, '_calculate_chi2_3d') as mock_chi2:
+                    with patch.object(gaia_validator, '_validate_astrometric_quality', return_value=True):
                     
-                    # Mock Gaia query results
-                    mock_star1 = Mock()
-                    mock_star2 = Mock()
-                    mock_query.return_value = [mock_star1, mock_star2]
-                    
-                    # Mock component identification
-                    mock_identify.return_value = (mock_star1, mock_star2)
-                    
-                    # Mock chi-squared calculation
-                    mock_chi2.return_value = (5.0, 3)  # chi2 value, dof
-                    
-                    result = gaia_validator._validate_physicality_sync(
-                        [mock_star1, mock_star2],  # gaia_results
-                        (8.5, 9.2)  # wds_mags
-                    )
-                    
-                    assert result['label'] == 'Likely Physical'  # p > 0.05
-                    assert result['p_value'] is not None
-                    assert result['test_used'] == '3D (plx+pm)'
-    
-    def test_validate_physicality_sync_not_enough_sources(self, gaia_validator):
-        """Test synchronous physicality validation with insufficient sources."""
-        with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
-            mock_query.return_value = [Mock()]  # Only one source
-            
-            result = gaia_validator._validate_physicality_sync(
-                [Mock()],  # Only one source
-                (8.5, 9.2)  # wds_mags
-            )
-            
-            assert result['label'] == 'Unknown'
-            assert result['p_value'] is None
-            assert result['test_used'] == 'Not enough Gaia sources'
-    
-    def test_validate_physicality_sync_component_matching_failed(self, gaia_validator):
-        """Test synchronous physicality validation with component matching failure."""
-        with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
-            with patch.object(gaia_validator, '_identify_components_by_mag') as mock_identify:
-                
-                mock_query.return_value = [Mock(), Mock()]
-                mock_identify.return_value = (None, None)
-                
-                result = gaia_validator._validate_physicality_sync(
-                    [Mock(), Mock()],  # gaia_results
-                    (8.5, 9.2)  # wds_mags
-                )
-                
-                assert result['label'] == 'Ambiguous'
-                assert result['p_value'] is None
-                assert result['test_used'] == 'Component matching failed'
-    
-    def test_validate_physicality_sync_fallback_tests(self, gaia_validator):
-        """Test synchronous physicality validation with fallback to 2D and 1D tests."""
-        with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
-            with patch.object(gaia_validator, '_identify_components_by_mag') as mock_identify:
-                with patch.object(gaia_validator, '_calculate_chi2_3d') as mock_chi2_3d:
-                    with patch.object(gaia_validator, '_calculate_chi2_2d_pm') as mock_chi2_2d:
-                        
+                        # Mock Gaia query results
                         mock_star1 = Mock()
                         mock_star2 = Mock()
                         mock_query.return_value = [mock_star1, mock_star2]
+                        
+                        # Mock component identification
                         mock_identify.return_value = (mock_star1, mock_star2)
                         
-                        # 3D test fails, 2D test succeeds
-                        mock_chi2_3d.return_value = None
-                        mock_chi2_2d.return_value = (3.0, 2)
+                        # Mock chi-squared calculation
+                        mock_chi2.return_value = (5.0, 3)  # chi2 value, dof
                         
                         result = gaia_validator._validate_physicality_sync(
                             [mock_star1, mock_star2],  # gaia_results
                             (8.5, 9.2)  # wds_mags
                         )
                         
-                        assert result['test_used'] == '2D (pm_only)'
+                        assert result['label'] == PhysicalityLabel.LIKELY_PHYSICAL  # p > 0.05
+                        assert result['p_value'] is not None
+                        assert result['method'] == ValidationMethod.GAIA_3D_PARALLAX_PM
+    
+    def test_validate_physicality_sync_not_enough_sources(self, gaia_validator):
+        """Test synchronous physicality validation with insufficient sources."""
+        from astrakairos.data.source import PhysicalityLabel, ValidationMethod
+        
+        with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
+            with patch.object(gaia_validator, '_validate_astrometric_quality', return_value=False):
+                mock_query.return_value = [Mock()]  # Only one source
+                
+                result = gaia_validator._validate_physicality_sync(
+                    [Mock()],  # Only one source
+                    (8.5, 9.2)  # wds_mags
+                )
+                
+                assert result['label'] == PhysicalityLabel.UNKNOWN
+                assert result['p_value'] is None
+                assert result['method'] == ValidationMethod.INSUFFICIENT_DATA
+    
+    def test_validate_physicality_sync_component_matching_failed(self, gaia_validator):
+        """Test synchronous physicality validation with component matching failure."""
+        from astrakairos.data.source import PhysicalityLabel, ValidationMethod
+        
+        with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
+            with patch.object(gaia_validator, '_identify_components_by_mag') as mock_identify:
+                with patch.object(gaia_validator, '_validate_astrometric_quality', return_value=True):
+                    
+                    mock_query.return_value = [Mock(), Mock()]
+                    mock_identify.return_value = (None, None)
+                    
+                    result = gaia_validator._validate_physicality_sync(
+                        [Mock(), Mock()],  # gaia_results
+                        (8.5, 9.2)  # wds_mags
+                    )
+                    
+                    assert result['label'] == PhysicalityLabel.AMBIGUOUS
+                    assert result['p_value'] is None
+                    assert result['method'] == ValidationMethod.INSUFFICIENT_DATA
+    
+    def test_validate_physicality_sync_fallback_tests(self, gaia_validator):
+        """Test synchronous physicality validation with fallback to 2D and 1D tests."""
+        from astrakairos.data.source import PhysicalityLabel, ValidationMethod
+        
+        with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
+            with patch.object(gaia_validator, '_identify_components_by_mag') as mock_identify:
+                with patch.object(gaia_validator, '_calculate_chi2_3d') as mock_chi2_3d:
+                    with patch.object(gaia_validator, '_calculate_chi2_2d_pm') as mock_chi2_2d:
+                        with patch.object(gaia_validator, '_validate_astrometric_quality', return_value=True):
+                            
+                            mock_star1 = Mock()
+                            mock_star2 = Mock()
+                            mock_query.return_value = [mock_star1, mock_star2]
+                            mock_identify.return_value = (mock_star1, mock_star2)
+                            
+                            # 3D test fails, 2D test succeeds
+                            mock_chi2_3d.return_value = None
+                            mock_chi2_2d.return_value = (3.0, 2)
+                            
+                            result = gaia_validator._validate_physicality_sync(
+                                [mock_star1, mock_star2],  # gaia_results
+                                (8.5, 9.2)  # wds_mags
+                            )
+                            
+                            assert result['method'] == ValidationMethod.PROPER_MOTION_ONLY
                         assert result['p_value'] is not None
     
     def test_get_params_and_check_validity(self, gaia_validator):
