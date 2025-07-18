@@ -31,6 +31,10 @@ MAX_RA_DEG = 360.0
 MIN_DEC_DEG = -90.0
 MAX_DEC_DEG = 90.0
 
+# WDS Designation Parsing
+MIN_WDS_ID_LENGTH = 10
+WDS_COORDINATE_PATTERN = r'^[0-9]{5}[+-][0-9]{4}([A-Z]{1,3})?$'
+
 # Logging Configuration
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

@@ -10,19 +10,21 @@ import astropy.units as u
 from ..config import (
     MIN_RA_DEG, MAX_RA_DEG, MIN_DEC_DEG, MAX_DEC_DEG,
     CSV_SNIFFER_SAMPLE_SIZE, DEFAULT_COORDINATE_PRECISION,
-    COORDINATE_ERROR_BEHAVIOR
+    COORDINATE_ERROR_BEHAVIOR, MIN_WDS_ID_LENGTH, WDS_COORDINATE_PATTERN
 )
 
 log = logging.getLogger(__name__)
 
-def load_csv_data(filepath: str) -> Optional[pd.DataFrame]:
+class DataLoadError(Exception):
+    """Exception raised when data cannot be loaded from a file."""
+    pass
+
+def load_csv_data(filepath: str) -> pd.DataFrame:
     """
     Loads astronomical star data from a CSV file with robust delimiter detection.
 
-    This function implements a multi-stage approach to CSV parsing specifically
-    designed for astronomical catalogs which may use different delimiter conventions:
-    1. Auto-detection using csv.Sniffer with configurable sample size
-    2. Fallback to common astronomical catalog delimiters (comma, semicolon)
+    This function uses pandas' built-in delimiter detection capabilities
+    designed for astronomical catalogs which may use different delimiter conventions.
     
     Scientific Use Cases:
     - WDS catalog files (typically comma-separated)
@@ -35,57 +37,41 @@ def load_csv_data(filepath: str) -> Optional[pd.DataFrame]:
 
     Returns:
         pandas.DataFrame: Loaded astronomical data with proper column types
-        None: Reserved for future use (currently raises exception on failure)
         
     Raises:
-        IOError: If the file cannot be loaded with any supported delimiter
+        DataLoadError: If the file cannot be loaded or parsed
         
     Notes:
-        - Sample size for auto-detection is configurable via CSV_SNIFFER_SAMPLE_SIZE
-        - UTF-8 encoding is enforced for international catalog compatibility
-        - Progress is logged for debugging large catalog operations
+        - Uses pandas' automatic delimiter detection (sep=None)
+        - UTF-8 encoding with fallback to latin-1 for older catalogs
     """
-    delimiters_to_try = [None, ',', ';'] # None will trigger csv.Sniffer
-
-    for i, delimiter in enumerate(delimiters_to_try):
+    encodings_to_try = ['utf-8', 'latin-1']
+    
+    for encoding in encodings_to_try:
         try:
-            current_delimiter = delimiter
-            if i == 0: # First attempt with Sniffer
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    try:
-                        sample = f.read(CSV_SNIFFER_SAMPLE_SIZE)
-                        dialect = csv.Sniffer().sniff(sample)
-                        current_delimiter = dialect.delimiter
-                    except csv.Error:
-                        log.debug("CSV Sniffer failed, proceeding to fallback delimiters.")
-                        continue # Sniffer failed, try next delimiter in list
-            
-            log.info(f"Attempting to read CSV with delimiter: '{current_delimiter}'")
-            df = pd.read_csv(filepath, delimiter=current_delimiter, encoding='utf-8')
+            log.info(f"Attempting to read CSV with encoding: {encoding}")
+            # Let pandas handle delimiter detection automatically
+            df = pd.read_csv(filepath, sep=None, engine='python', encoding=encoding)
             
             # Validate that required 'wds_id' column exists
             if 'wds_id' not in df.columns:
-                raise ValueError(f"Required 'wds_id' column not found in {filepath}")
+                raise DataLoadError(f"Required 'wds_id' column not found in {filepath}")
             
-            log.info(f"CSV loaded successfully. Rows: {len(df)}")
+            log.info(f"CSV loaded successfully. Rows: {len(df)}, Encoding: {encoding}")
             return df
             
-        except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
-            log.warning(f"Failed to parse CSV with delimiter '{current_delimiter}': {e}")
+        except UnicodeDecodeError:
+            log.debug(f"Encoding {encoding} failed, trying next...")
+            continue
         except (FileNotFoundError, PermissionError) as e:
-            log.error(f"File access error with '{filepath}': {e}")
-            raise  # Re-raise file access errors immediately
-        except UnicodeDecodeError as e:
-            log.warning(f"Encoding error with delimiter '{current_delimiter}': {e}")
-        except ValueError as e:
-            log.error(f"Data validation error with '{filepath}': {e}")
-            raise  # Re-raise validation errors immediately
-        except Exception as e:
-            log.error(f"Unexpected error with delimiter '{current_delimiter}': {e}")
-            # Continue to next delimiter for unexpected errors
+            log.error(f"File access error: {e}")
+            raise DataLoadError(f"Could not access file '{filepath}': {e}")
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError) as e:
+            log.error(f"Data parsing error: {e}")
+            raise DataLoadError(f"Could not parse file '{filepath}': {e}")
             
-    log.error(f"Could not load CSV file: {filepath}. All parsing attempts failed.")
-    raise IOError(f"Could not load or parse the input file '{filepath}'.")
+    log.error(f"Could not decode file with any supported encoding: {filepath}")
+    raise DataLoadError(f"Could not decode file '{filepath}' with any supported encoding")
 
 
 def save_results_to_csv(results: List[Dict[str, Any]], filepath: str) -> None:
@@ -112,12 +98,12 @@ def save_results_to_csv(results: List[Dict[str, Any]], filepath: str) -> None:
         filepath: Output path for the CSV file (will be created/overwritten)
         
     Raises:
-        Exception: If file writing fails (disk space, permissions, etc.)
+        IOError: If file writing fails (disk space, permissions, etc.)
+        ValueError: If results structure is invalid
         
     Notes:
         - Empty results lists are handled gracefully with warning
         - File operations are atomic (complete or fail, no partial writes)
-        - Progress logging for large result sets
     """
     if not results:
         log.warning("No results to save.")
@@ -129,20 +115,20 @@ def save_results_to_csv(results: List[Dict[str, Any]], filepath: str) -> None:
         log.info(f"Results successfully saved to {filepath} ({len(df)} rows)")
     except (FileNotFoundError, PermissionError) as e:
         log.error(f"File access error when saving to {filepath}: {e}")
-        raise
+        raise IOError(f"Could not access file '{filepath}': {e}")
     except UnicodeEncodeError as e:
         log.error(f"Encoding error when saving to {filepath}: {e}")
-        raise
+        raise IOError(f"Encoding error when saving to '{filepath}': {e}")
+    except ValueError as e:
+        log.error(f"Data structure error when saving to {filepath}: {e}")
+        raise ValueError(f"Invalid results structure: {e}")
     except Exception as e:
         log.error(f"Unexpected error when saving to {filepath}: {e}")
-        raise
+        raise IOError(f"Unexpected error when saving to '{filepath}': {e}")
 
 def format_coordinates_astropy(ra_hours: float, dec_degrees: float, precision: Optional[int] = None) -> str:
     """
     Formats celestial coordinates for display using the astropy library.
-    
-    This is the canonical coordinate formatting function for AstraKairos.
-    All coordinate display should use this function or the unified wrappers.
     
     Args:
         ra_hours: Right ascension in hours (0-24)
@@ -181,21 +167,21 @@ def format_coordinates_astropy(ra_hours: float, dec_degrees: float, precision: O
 def parse_wds_designation(wds_id: str) -> Optional[Dict[str, float]]:
     """
     Parses a WDS designation string (e.g., "00013+1234") to extract
-    approximate J2000 coordinates with scientific validation.
+    approximate J2000 coordinates with validation.
 
     Args:
         wds_id: The WDS identifier string.
 
     Returns:
-        A dictionary with 'ra_deg' and 'dec_deg', or None if parsing fails or
-        coordinates are outside valid astronomical ranges.
+        A dictionary with 'ra_deg' and 'dec_deg', or None if parsing fails
+        or coordinates are outside valid astronomical ranges.
     """
-    if not isinstance(wds_id, str) or len(wds_id) < 10:
+    if not isinstance(wds_id, str) or len(wds_id) < MIN_WDS_ID_LENGTH:
         return None
         
     # WDS designation format validation: HHMMM[+-]DDMM[AB-like components]
     # Components after coordinates are optional (e.g., AB, AC, ABC)
-    if not re.match(r'^[0-9]{5}[+-][0-9]{4}([A-Z]{1,2})?$', wds_id[:12]):
+    if not re.match(WDS_COORDINATE_PATTERN, wds_id[:12]):
         log.debug(f"WDS ID '{wds_id}' does not match the coordinate format.")
         return None
         
@@ -210,7 +196,7 @@ def parse_wds_designation(wds_id: str) -> Optional[Dict[str, float]]:
         dec_m = int(wds_id[8:10])
         dec_deg = dec_sign * (dec_d + dec_m / 60.0)
         
-        # Validate astronomical coordinate ranges
+        # Validate astronomical coordinate ranges immediately
         if not (MIN_RA_DEG <= ra_deg <= MAX_RA_DEG):
             log.warning(f"WDS ID '{wds_id}' has RA {ra_deg:.3f}° outside valid range [{MIN_RA_DEG}, {MAX_RA_DEG}]")
             return None
@@ -225,13 +211,10 @@ def parse_wds_designation(wds_id: str) -> Optional[Dict[str, float]]:
         log.warning(f"Failed to parse WDS designation '{wds_id}': {e}")
         return None
 
-# Unified coordinate formatting functions (to replace duplicated implementations)
+# Coordinate formatting functions
 def format_coordinates(ra_hours: float, dec_degrees: float, precision: Optional[int] = None) -> str:
     """
-    Universal coordinate formatting function - single source of truth.
-    
-    This function replaces the multiple duplicated coordinate formatting 
-    implementations found in planner/calculations.py and planner/gui.py.
+    Universal coordinate formatting function.
     
     Args:
         ra_hours: Right ascension in hours
@@ -242,40 +225,3 @@ def format_coordinates(ra_hours: float, dec_degrees: float, precision: Optional[
         Formatted coordinate string in HMS/DMS format
     """
     return format_coordinates_astropy(ra_hours, dec_degrees, precision)
-
-def format_ra_hours_unified(hours: float) -> str:
-    """
-    Unified RA formatting function to replace duplicated implementations.
-    
-    This function should replace the duplicated format_ra_hours functions
-    in planner/calculations.py and planner/gui.py modules.
-    """
-    if hours is None:
-        return "N/A"
-    
-    # Normalize hours to [0, 24) range
-    normalized_hours = hours % 24.0
-    
-    h = int(normalized_hours)
-    m = int((normalized_hours - h) * 60)
-    s = ((normalized_hours - h) * 60 - m) * 60
-    
-    return f"{h:02d}h{m:02d}m{s:05.2f}s"
-
-def format_dec_degrees_unified(degrees: float) -> str:
-    """
-    Unified Dec formatting function to replace duplicated implementations.
-    
-    This function should replace the duplicated format_dec_degrees functions
-    in planner/calculations.py and planner/gui.py modules.
-    """
-    if degrees is None:
-        return "N/A"
-    
-    sign = "+" if degrees >= 0 else "-"
-    abs_deg = abs(degrees)
-    d = int(abs_deg)
-    m = int((abs_deg - d) * 60)
-    s = ((abs_deg - d) * 60 - m) * 60
-    
-    return f"{sign}{d:02d}°{m:02d}'{s:05.2f}\""
