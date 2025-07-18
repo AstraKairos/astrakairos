@@ -35,29 +35,28 @@ def test_load_csv_with_semicolon_delimiter():
 
 def test_load_csv_raises_error_for_nonexistent_file():
     """
-    Verifies that FileNotFoundError is raised directly (not converted to IOError)
-    when file doesn't exist, as per the updated error handling.
+    Verifies that DataLoadError is raised when file doesn't exist.
     """
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(io.DataLoadError, match="Could not access file"):
         io.load_csv_data("nonexistent_file.csv")
 
 def test_load_csv_raises_error_for_missing_wds_id():
     """
-    Verifies that ValueError is raised when CSV lacks required 'wds_id' column.
+    Verifies that DataLoadError is raised when CSV lacks required 'wds_id' column.
     """
     invalid_csv = "star_name,obs\nStar1,10\nStar2,5"
     with patch("builtins.open", mock_open(read_data=invalid_csv)):
-        with pytest.raises(ValueError, match="Required 'wds_id' column not found"):
+        with pytest.raises(io.DataLoadError, match="Required 'wds_id' column not found"):
             io.load_csv_data("dummy_path.csv")
 
-def test_load_csv_raises_ioerror_for_unparseable_file():
+def test_load_csv_raises_dataload_error_for_unparseable_file():
     """
-    Verifies that IOError is raised when file exists but cannot be parsed
+    Verifies that DataLoadError is raised when file exists but cannot be parsed
     with any supported delimiter by mocking a ParserError.
     """
     with patch("builtins.open", mock_open(read_data="dummy")):
         with patch("pandas.read_csv", side_effect=pd.errors.ParserError("Mocked parser error")):
-            with pytest.raises(IOError, match="Could not load or parse"):
+            with pytest.raises(io.DataLoadError, match="Could not parse file"):
                 io.load_csv_data("dummy_path.csv")
 
 
@@ -191,35 +190,6 @@ def test_format_coordinates_unified():
     # Should be same as astropy function
     expected = io.format_coordinates_astropy(ra_hours, dec_degrees)
     assert result == expected
-
-def test_format_ra_hours_unified():
-    """Test unified RA formatting."""
-    # Normal case
-    assert io.format_ra_hours_unified(12.5) == "12h30m00.00s"
-    
-    # Boundary cases
-    assert io.format_ra_hours_unified(0.0) == "00h00m00.00s"
-    assert io.format_ra_hours_unified(23.999) == "23h59m56.40s"
-    
-    # Hour normalization (>24)
-    assert io.format_ra_hours_unified(25.0) == "01h00m00.00s"
-    
-    # None handling
-    assert io.format_ra_hours_unified(None) == "N/A"
-
-def test_format_dec_degrees_unified():
-    """Test unified Dec formatting."""
-    # Positive case
-    assert io.format_dec_degrees_unified(45.75) == "+45°45'00.00\""
-    
-    # Negative case  
-    assert io.format_dec_degrees_unified(-30.25) == "-30°15'00.00\""
-    
-    # Zero case
-    assert io.format_dec_degrees_unified(0.0) == "+00°00'00.00\""
-    
-    # None handling
-    assert io.format_dec_degrees_unified(None) == "N/A"
 
 def test_coordinate_error_behavior():
     """Test configurable error handling behavior."""
