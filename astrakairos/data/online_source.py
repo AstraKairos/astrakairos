@@ -3,16 +3,17 @@ import asyncio
 from typing import Optional
 import numpy as np
 
-import aiohttp
 from astropy.table import Table
 from astroquery.vizier import Vizier
 from astroquery.exceptions import TimeoutError as AstroqueryTimeoutError
 
 from .source import DataSource, WdsSummary, OrbitalElements, PhysicalityAssessment
+from ..utils.io import parse_wds_designation
 from ..config import (
     DEFAULT_VIZIER_ROW_LIMIT, DEFAULT_VIZIER_TIMEOUT, DEFAULT_VIZIER_RETRY_ATTEMPTS,
     DEFAULT_VIZIER_RETRY_DELAY, VIZIER_WDS_CATALOG, VIZIER_ORBITAL_CATALOG,
-    VIZIER_BACKOFF_BASE, VIZIER_BACKOFF_MAX_DELAY
+    VIZIER_BACKOFF_BASE, VIZIER_BACKOFF_MAX_DELAY, VIZIER_WDS_COLUMNS, 
+    VIZIER_ORBITAL_COLUMNS
 )
 
 log = logging.getLogger(__name__)
@@ -26,30 +27,22 @@ class OnlineDataSource(DataSource):
     retrieving canonical data with proper error handling and scientific validation.
     
     Note: This source does not support complete measurement history retrieval
-    due to VizieR limitations. Use LocalFileDataSource for comprehensive
+    due to VizieR limitations. Use LocalDataSource for comprehensive
     historical analysis.
     """
 
-    def __init__(self, session: aiohttp.ClientSession, 
+    def __init__(self, 
                  vizier_row_limit: int = DEFAULT_VIZIER_ROW_LIMIT,
                  vizier_timeout: int = DEFAULT_VIZIER_TIMEOUT):
         """
         Initialize the online data source.
 
         Args:
-            session: An active aiohttp.ClientSession for making HTTP requests.
             vizier_row_limit: Maximum number of rows to retrieve from VizieR queries.
             vizier_timeout: Timeout in seconds for VizieR queries.
         """
-        self.session = session
         self.vizier_row_limit = vizier_row_limit
         self.vizier_timeout = vizier_timeout
-        
-        # Initialize VizieR client with configurable parameters
-        self.vizier = Vizier(
-            row_limit=self.vizier_row_limit,
-            timeout=self.vizier_timeout
-        )
 
     async def get_wds_summary(self, wds_id: str) -> Optional[WdsSummary]:
         """
@@ -57,13 +50,16 @@ class OnlineDataSource(DataSource):
         """
         log.info(f"Querying VizieR ({VIZIER_WDS_CATALOG}) for summary of {wds_id}...")
         try:
-            # Configure the existing VizieR instance for WDS query
-            self.vizier.catalog = VIZIER_WDS_CATALOG
-            self.vizier.columns = ['WDS', 'Name', 'RAJ2000', 'DEJ2000', 'Obs1', 'Obs2', 'Nobs', 
-                                  'pa1', 'pa2', 'sep1', 'sep2', 'mag1', 'mag2', 'SpType']
+            # Create thread-safe VizieR instance for this specific query
+            vizier = Vizier(
+                row_limit=self.vizier_row_limit,
+                timeout=self.vizier_timeout,
+                catalog=VIZIER_WDS_CATALOG,
+                columns=VIZIER_WDS_COLUMNS
+            )
             
             result_tables = await self._retry_vizier_query(
-                self.vizier.query_constraints, WDS=f"={wds_id}"
+                vizier.query_constraints, WDS=f"={wds_id}"
             )
             
             if result_tables and len(result_tables[0]) > 0:
@@ -75,8 +71,8 @@ class OnlineDataSource(DataSource):
                     # Use the canonical WDS identifier from VizieR and validate format
                     canonical_wds_id = str(star_data['WDS']).strip()
                     
-                    # Basic WDS ID format validation (HHMM±DDMM pattern)
-                    if len(canonical_wds_id) < 10 or not canonical_wds_id[5] in ['+', '-']:
+                    # Validate WDS ID format using centralized function
+                    if not parse_wds_designation(canonical_wds_id):
                         log.warning(f"Invalid WDS ID format from VizieR: {canonical_wds_id}")
                         return None
                     
@@ -100,6 +96,7 @@ class OnlineDataSource(DataSource):
                     
                 except (ValueError, TypeError) as e:
                     log.error(f"Error converting WDS data for {wds_id}: {e}")
+                    log.debug(f"Problematic data fields: {dict(star_data)}")
                     return None
 
             log.info(f"No WDS summary found on VizieR for {wds_id}.")
@@ -115,11 +112,11 @@ class OnlineDataSource(DataSource):
         
         Note: VizieR does not provide access to complete historical measurements
         for double stars programmatically. This method returns None and logs
-        the limitation. For comprehensive measurement analysis, use LocalFileDataSource
+        the limitation. For comprehensive measurement analysis, use LocalDataSource
         with full catalog files.
         """
         log.info(f"Measurement retrieval for {wds_id} not supported via VizieR.")
-        log.info("For complete historical measurements, use LocalFileDataSource with full catalog files.")
+        log.info("For complete historical measurements, use LocalDataSource with full catalog files.")
         return None
 
     async def get_orbital_elements(self, wds_id: str) -> Optional[OrbitalElements]:
@@ -129,12 +126,16 @@ class OnlineDataSource(DataSource):
         """
         log.info(f"Querying VizieR ({VIZIER_ORBITAL_CATALOG}) for orbital elements of {wds_id}...")
         try:
-            # Configure the existing VizieR instance for orbital elements query
-            self.vizier.catalog = VIZIER_ORBITAL_CATALOG
-            self.vizier.columns = ['WDS', 'P', 'e_P', 'Axis', 'e_Axis', 'i', 'Node', 'T', 'e', 'omega']
+            # Create thread-safe VizieR instance for this specific query
+            vizier = Vizier(
+                row_limit=self.vizier_row_limit,
+                timeout=self.vizier_timeout,
+                catalog=VIZIER_ORBITAL_CATALOG,
+                columns=VIZIER_ORBITAL_COLUMNS
+            )
             
             result_tables = await self._retry_vizier_query(
-                self.vizier.query_constraints, WDS=f"={wds_id}"
+                vizier.query_constraints, WDS=f"={wds_id}"
             )
             
             if not result_tables or len(result_tables[0]) == 0:
@@ -150,8 +151,8 @@ class OnlineDataSource(DataSource):
                 # Use the canonical WDS identifier from VizieR and validate format
                 canonical_wds_id = str(orbit_data['WDS']).strip()
                 
-                # Basic WDS ID format validation
-                if len(canonical_wds_id) < 10 or not canonical_wds_id[5] in ['+', '-']:
+                # Validate WDS ID format using centralized function
+                if not parse_wds_designation(canonical_wds_id):
                     log.warning(f"Invalid WDS ID format in orbital catalog: {canonical_wds_id}")
                     return None
 
@@ -179,7 +180,7 @@ class OnlineDataSource(DataSource):
                     e=extract_float_value(orbit_data['e']),
                     omega=extract_float_value(orbit_data['omega']),
                     
-                    # Scientific uncertainties for rigorous error analysis
+                    # Scientific uncertainties for error analysis
                     e_P=extract_float_value(orbit_data['e_P']),
                     e_a=extract_float_value(orbit_data['e_Axis']),
                 )
@@ -188,6 +189,7 @@ class OnlineDataSource(DataSource):
                 
             except (ValueError, TypeError, KeyError) as e:
                 log.error(f"Error converting orbital data for {wds_id}: {e}")
+                log.debug(f"Problematic data fields: {dict(orbit_data)}")
                 return None
                 
         except Exception as e:
@@ -196,10 +198,9 @@ class OnlineDataSource(DataSource):
 
     async def validate_physicality(self, system_data: WdsSummary) -> Optional[PhysicalityAssessment]:
         """
-        This data source delegates physicality validation to dedicated validators.
+        This implementation does not validate physicality.
         
-        Online sources typically lack the detailed astrometric data needed for
-        statistical physicality assessment, so we return a neutral assessment.
+        Returns a neutral assessment indicating insufficient data for validation.
         """
         from .source import PhysicalityLabel, ValidationMethod
         
@@ -236,7 +237,7 @@ class OnlineDataSource(DataSource):
                     )
                     await asyncio.sleep(backoff_delay)
             except Exception as e:
-                log.error(f"VizieR query failed (attempt {attempt + 1}/{DEFAULT_VIZIER_RETRY_ATTEMPTS}): {e}")
+                log.error(f"VizieR query failed (attempt {attempt + 1}/{DEFAULT_VIZIER_RETRY_ATTEMPTS}): {type(e).__name__}: {e}")
                 if attempt < DEFAULT_VIZIER_RETRY_ATTEMPTS - 1:
                     await asyncio.sleep(DEFAULT_VIZIER_RETRY_DELAY)
         
@@ -244,7 +245,7 @@ class OnlineDataSource(DataSource):
 
 # Helper functions for VizieR data extraction
 def extract_float_value(masked_value) -> Optional[float]:
-    """Extract float value from potentially masked VizieR data."""
+    """Extract float value from VizieR data."""
     if np.ma.is_masked(masked_value):
         return None
     try:
@@ -253,7 +254,7 @@ def extract_float_value(masked_value) -> Optional[float]:
         return None
 
 def extract_int_value(masked_value) -> Optional[int]:
-    """Extract int value from potentially masked VizieR data."""
+    """Extract int value from VizieR data."""
     if np.ma.is_masked(masked_value):
         return None
     try:
@@ -262,7 +263,7 @@ def extract_int_value(masked_value) -> Optional[int]:
         return None
 
 def extract_string_value(masked_value) -> Optional[str]:
-    """Extract string value from potentially masked VizieR data."""
+    """Extract string value from VizieR data."""
     if np.ma.is_masked(masked_value):
         return None
     try:

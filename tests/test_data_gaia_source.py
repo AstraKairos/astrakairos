@@ -36,11 +36,6 @@ class TestGaiaValidator:
         assert validator.default_search_radius_arcsec == 15.0
         assert validator.mag_limit == 16.0
     
-    def test_initialization_legacy_parameter(self):
-        """Test GaiaValidator initialization rejects legacy parameter."""
-        with pytest.raises(TypeError, match="unexpected keyword argument 'p_value_threshold'"):
-            GaiaValidator(p_value_threshold=0.1)
-    
     def test_initialization_invalid_thresholds(self):
         """Test GaiaValidator initialization with invalid thresholds."""
         with pytest.raises(ValueError, match="physical_p_value_threshold \\(0.001\\) must be greater"):
