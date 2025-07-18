@@ -13,7 +13,7 @@ Institution: Universidad Técnica Federico Santa María, Departamento de Física
 import sys
 import argparse
 
-# Version information for scientific reproducibility
+# Version information for reproducibility
 __version__ = "1.0.0"
 __author__ = "Martín Rubina Scapini"
 __institution__ = "Universidad Técnica Federico Santa María, Departamento de Física"

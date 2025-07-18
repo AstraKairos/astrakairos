@@ -8,7 +8,7 @@ from skyfield.api import load, wgs84
 from skyfield.almanac import find_discrete, risings_and_settings
 from skyfield import almanac
 
-# Centralized configuration imports for scientific consistency
+# Centralized configuration imports for consistency
 from ..config import (
     # Grid resolution parameters
     DEFAULT_GRID_RESOLUTION_ARCMIN,
@@ -67,7 +67,7 @@ earth = eph['earth']
 sun = eph['sun']
 moon = eph['moon']
 
-# Configure scientific logging
+# Configure logging
 logger = logging.getLogger(__name__)
 
 
@@ -90,7 +90,7 @@ def get_observer_location(latitude_deg: float, longitude_deg: float, altitude_m:
         Validation ranges based on practical limits for ground-based astronomy.
         Coordinates must be within Earth's surface and reasonable altitude limits.
     """
-    # Scientific validation of observatory coordinates
+    # Validation of observatory coordinates
     if not (MIN_OBSERVATORY_LATITUDE_DEG <= latitude_deg <= MAX_OBSERVATORY_LATITUDE_DEG):
         raise ValueError(f"Latitude {latitude_deg}° outside valid range [{MIN_OBSERVATORY_LATITUDE_DEG}°, {MAX_OBSERVATORY_LATITUDE_DEG}°]")
     
@@ -400,7 +400,7 @@ def calculate_airmass(altitude_deg):
         - For more accurate calculations at low altitudes, consider Pickering's formula
         - Returns np.inf for targets below horizon (altitude <= 0°)
         
-    Scientific Context:
+    Context:
         Airmass quantifies atmospheric extinction path length. At zenith (90°),
         airmass = 1.0. At 60° altitude, airmass ≈ 2.0. Professional observations
         typically avoid airmass > 2.5 due to systematic errors.
@@ -435,11 +435,11 @@ def generate_sky_quality_map(observer_location, time_utc: datetime,
                                sky_brightness_mag_arcsec2: float = None,
                                grid_resolution_arcmin: int = None) -> Dict[str, Any]:
     """
-    Generates a comprehensive sky quality map for observatory planning.
+    Generates a sky quality map for observatory planning.
 
-    Implements a scientifically rigorous model combining atmospheric extinction,
-    lunar contamination (Krisciunas & Schaefer 1991), and observational quality
-    metrics to identify optimal sky regions for astronomical observations.
+    Combines atmospheric extinction, lunar contamination (Krisciunas & Schaefer 1991), 
+    and observational quality metrics to identify optimal sky regions for astronomical 
+    observations.
 
     Args:
         observer_location: Skyfield topos object representing observatory
@@ -457,7 +457,7 @@ def generate_sky_quality_map(observer_location, time_utc: datetime,
         - best_quality_score: Maximum quality score achieved
         - sky_map_data: Complete grid data for visualization
         
-    Scientific Method:
+    Method:
         1. Model atmospheric extinction using site-specific coefficients
         2. Calculate lunar sky brightness contribution via Krisciunas & Schaefer (1991)
         3. Combine extinction and scattering using proper flux arithmetic
@@ -469,7 +469,7 @@ def generate_sky_quality_map(observer_location, time_utc: datetime,
         - Garstang, R.H. (1989), PASP, 101, 306
         - Burki et al. (1995), A&AS, 112, 383
     """
-    # Apply scientific defaults from centralized configuration
+    # Apply defaults from centralized configuration
     if min_altitude_deg is None:
         min_altitude_deg = OPTIMAL_MIN_ALTITUDE_DEG
     if sky_brightness_mag_arcsec2 is None:
@@ -508,7 +508,7 @@ def generate_sky_quality_map(observer_location, time_utc: datetime,
     # Base sky brightness from natural + light pollution sources
     sky_brightness = np.full(alt_grid.shape, sky_brightness_mag_arcsec2)
     
-    # Apply atmospheric extinction using scientifically validated coefficients
+    # Apply atmospheric extinction using validated coefficients
     airmass = calculate_airmass(alt_grid)
     extinction_v = get_extinction_coefficient('V')
     sky_brightness += extinction_v * (airmass - 1)
@@ -569,7 +569,7 @@ def generate_sky_quality_map(observer_location, time_utc: datetime,
                                     sky_brightness)
     
     # 4. Calculate observational quality metric
-    # Scientific weighting based on signal-to-noise considerations
+    # Weighting based on signal-to-noise considerations
     with np.errstate(divide='ignore', invalid='ignore'):
         # For sky brightness: lower values (brighter sky) = worse conditions
         # Invert sky brightness for quality calculation (darker = better)
@@ -599,7 +599,7 @@ def generate_sky_quality_map(observer_location, time_utc: datetime,
                                                    az_degrees=float(best_az))
     best_ra_obj, best_dec_obj, _ = best_patch_apparent.radec()
     
-    # Log scientific summary
+    # Log summary
     logger.info(f"Optimal sky region: RA={best_ra_obj.hours:.2f}h, "
                f"Dec={best_dec_obj.degrees:.1f}°, Alt={best_alt:.1f}°, "
                f"Quality={best_quality:.3f}")

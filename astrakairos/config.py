@@ -84,7 +84,7 @@ STELLE_DOPPIE_SEARCH_METHODS = {
     'ends_with': 4
 }
 
-# Advanced Search Parameters
+# Search Parameters
 # Stelle Doppie search method mapping
 STELLE_DOPPIE_METHODS = {
     1: 'equal to',
@@ -243,14 +243,14 @@ EXPORT_FORMATS = {
 CATALOG_SOURCES = {
     'stelle_doppie': {
         'name': 'Stelle Doppie',
-        'description': 'Italian catalog of visual binary stars',
+        'description': 'Online grouping of binary star catalogs',
         'url': 'https://www.stelledoppie.it',
         'enabled': True,
         'priority': 1
     },
     'wds': {
         'name': 'Washington Double Star Catalog',
-        'description': 'Comprehensive catalog of double and multiple stars',
+        'description': 'The main catalog of double and multiple stars',
         'url': 'https://www.usno.navy.mil/USNO/astrometry/optical-IR-prod/wds',
         'enabled': True,
         'priority': 2
@@ -271,7 +271,7 @@ CATALOG_SOURCES = {
     }
 }
 
-# Advanced UI Configuration
+# UI Configuration
 UI_THEMES = {
     'default': {
         'name': 'Default',
@@ -320,8 +320,8 @@ DEFAULT_SORT_KEYS = {
 
 # === PLANNER Module Configuration - Observatory Planning & Sky Quality ===
 
-# Sky Quality Map Configuration (Scientific Standards)
-DEFAULT_GRID_RESOLUTION_ARCMIN = 60  # 1° grid resolution for professional planning
+# Sky Quality Map Configuration
+DEFAULT_GRID_RESOLUTION_ARCMIN = 60  # 1° grid resolution for planning
 FINE_GRID_RESOLUTION_ARCMIN = 15     # 0.25° for high-precision applications
 COARSE_GRID_RESOLUTION_ARCMIN = 180  # 3° for quick surveys
 
@@ -342,7 +342,7 @@ GOOD_SKY_BRIGHTNESS_V_MAG_ARCSEC2 = 21.0      # Good suburban site
 MODERATE_SKY_BRIGHTNESS_V_MAG_ARCSEC2 = 19.5   # Moderate light pollution
 POOR_SKY_BRIGHTNESS_V_MAG_ARCSEC2 = 17.0       # Urban environment
 
-# Observational Limits (Professional Astronomy Standards)
+# Observational Limits (Astronomy Standards)
 MIN_OBSERVABLE_ALTITUDE_DEG = 15.0    # Below this, atmospheric effects dominate
 OPTIMAL_MIN_ALTITUDE_DEG = 30.0       # Standard minimum for quality observations
 ZENITH_AVOIDANCE_ZONE_DEG = 5.0       # Degrees from zenith to avoid for tracking
@@ -374,7 +374,7 @@ SKY_QUALITY_WEIGHT_AIRMASS = 0.4      # Relative importance of low airmass
 MIN_QUALITY_SCORE_THRESHOLD = 0.1     # Minimum quality for recommendations
 
 # Coordinate Precision for Observatory Planning
-COORDINATE_PRECISION_DEGREES = 4      # Decimal places for RA/Dec (professional standard)
+COORDINATE_PRECISION_DEGREES = 4      # Decimal places for RA/Dec (standard)
 ALTITUDE_PRECISION_DEGREES = 2       # Decimal places for altitude display
 AZIMUTH_PRECISION_DEGREES = 1        # Decimal places for azimuth display
 TIME_PRECISION_MINUTES = 1           # Temporal precision for event predictions
@@ -432,7 +432,7 @@ MAX_ECCENTRICITY_STABLE = 0.99              # Maximum stable eccentricity
 
 # Kepler Solver Quality Control
 KEPLER_CONVERGENCE_WARNING_THRESHOLD = 95.0  # Percentage threshold for convergence warnings
-KEPLER_LOGGING_PRECISION = 6                # Decimal places for scientific logging
+KEPLER_LOGGING_PRECISION = 6                # Decimal places for logging
 
 # Orbital Element Validation Ranges (Additional)
 MIN_LONGITUDE_ASCENDING_NODE_DEG = 0.0      # Minimum Omega (degrees)
@@ -466,20 +466,13 @@ MAX_RMSE_FOR_LINEAR_FIT_ARCSEC = 1.0  # RMSE threshold for acceptable linear fit
 MIN_RESIDUAL_SIGNIFICANCE = 0.001  # Minimum residual for statistical significance
 MAX_EXTRAPOLATION_FACTOR = 2.0     # Maximum safe extrapolation beyond observation baseline
 
-# Default sort keys for each analysis mode
-DEFAULT_SORT_KEYS = {
-    'orbital': 'opi',
-    'characterize': 'rmse',  # Updated to match dynamics.py output
-    'discovery': 'physicality_p_value'
-}
-
-# === CLI Configuration - Scientific Display Parameters ===
+# === CLI Configuration - Display Parameters ===
 # Terminal Display Configuration
 CLI_RESULTS_SEPARATOR_WIDTH = 80  # Width for result display separators
 CLI_HEADER_CHAR = "="  # Character for main headers
 CLI_SUBHEADER_CHAR = "-"  # Character for sub-headers
 
-# Scientific Formatting Precision
+# Formatting Precision
 CLI_OPI_PRECISION = 3  # Decimal places for Observation Priority Index
 CLI_RMSE_PRECISION = 4  # Decimal places for RMSE (arcsec)
 CLI_VELOCITY_PRECISION = 3  # Decimal places for proper motion (arcsec/yr)
@@ -496,8 +489,8 @@ CLI_OBS_COUNT_WIDTH = 3  # Width for observation count display
 CLI_VALUE_NOT_AVAILABLE = "N/A"  # Standard text for missing values
 CLI_COLUMN_SEPARATOR = " | "  # Separator between table columns
 
-# === CLI Scientific Validation Configuration ===
-# Argument Validation Ranges - Scientific Bounds
+# === CLI Validation Configuration ===
+# Argument Validation Ranges - Bounds
 MIN_OBSERVATION_COUNT = 1  # Minimum meaningful observation count
 MAX_OBSERVATION_COUNT = 10000  # Upper bound for observation filtering
 MIN_CONCURRENT_REQUESTS = 1  # Minimum for single-threaded operation
@@ -544,7 +537,7 @@ MAX_EPOCH_YEAR = 2100.0  # Maximum reasonable future epoch
 MIN_SEPARATION_ARCSEC = 0.001  # Minimum measurable angular separation
 MAX_SEPARATION_ARCSEC = 100.0  # Maximum reasonable angular separation for binary stars
 
-# Warning Thresholds for Scientific Validation
+# Warning Thresholds for Validation
 MAX_DEVIATION_WARNING_ARCSEC = 10.0  # Threshold for large positional deviation warning
 MAX_OLD_OBSERVATION_WARNING_YEARS = 50.0  # Threshold for very old observation warning
 
@@ -559,6 +552,11 @@ MILLIARCSEC_PER_ARCSEC = 1000.0  # Milliarcsecond to arcsecond conversion
 VIZIER_WDS_CATALOG = "B/wds/wds"
 VIZIER_ORBITAL_CATALOG = "J/MNRAS/517/2925/tablea3"  # ORB6 catalog
 
+# VizieR Column Mappings - configurable to handle catalog schema changes
+VIZIER_WDS_COLUMNS = ['WDS', 'Name', 'RAJ2000', 'DEJ2000', 'Obs1', 'Obs2', 'Nobs', 
+                      'pa1', 'pa2', 'sep1', 'sep2', 'mag1', 'mag2', 'SpType']
+VIZIER_ORBITAL_COLUMNS = ['WDS', 'P', 'e_P', 'Axis', 'e_Axis', 'i', 'Node', 'T', 'e', 'omega']
+
 # Backoff Strategy Configuration
 VIZIER_BACKOFF_BASE = 2.0  # Exponential backoff base
 VIZIER_BACKOFF_MAX_DELAY = 30.0  # Maximum delay in seconds
@@ -566,12 +564,6 @@ VIZIER_BACKOFF_MAX_DELAY = 30.0  # Maximum delay in seconds
 # Validation Ranges for External Data
 MIN_MAGNITUDE = -5.0  # Minimum reasonable magnitude
 MAX_MAGNITUDE = 25.0  # Maximum reasonable magnitude
-
-# CLI Configuration
-DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
-DEFAULT_HTTP_CONNECTIONS_PER_HOST = 5
-DEFAULT_HTTP_TOTAL_CONNECTIONS = 50
-DEFAULT_USER_AGENT = 'AstraKairos/1.0 (https://github.com/AstraKairos/astrakairos)'
 
 # Analysis Configuration
 DEFAULT_CONCURRENT_REQUESTS = 5
@@ -582,7 +574,7 @@ DEFAULT_GAIA_RADIUS_FACTOR = 1.5
 DEFAULT_GAIA_MIN_RADIUS = 2.0
 DEFAULT_GAIA_MAX_RADIUS = 60.0
 
-# Validation Constants for Scientific Rigor
+# Validation Constants
 MIN_EPOCH_YEAR = 1800.0
 MAX_EPOCH_YEAR = 2100.0
 MIN_SEPARATION_ARCSEC = 0.1

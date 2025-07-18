@@ -20,7 +20,7 @@ from sklearn.linear_model import TheilSenRegressor
 from .kepler import predict_position
 from ..data.source import WdsSummary, OrbitalElements
 
-# Centralized configuration imports for scientific consistency
+# Centralized configuration imports for consistency
 from ..config import (
     OPI_DEVIATION_THRESHOLD_ARCSEC,
     OPI_INFINITE_THRESHOLD,
@@ -42,7 +42,7 @@ from ..config import (
     MAX_OLD_OBSERVATION_WARNING_YEARS
 )
 
-# Configure scientific logging
+# Configure logging
 logger = logging.getLogger(__name__)
 
 def calculate_observation_priority_index(

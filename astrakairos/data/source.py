@@ -66,7 +66,7 @@ class OrbitalElements(TypedDict, total=False):
     Omega: float  # Longitude of ascending node (degrees)
     omega: float  # Argument of periastron (degrees)
     
-    # Complete uncertainty set - all 7 elements for scientific completeness
+    # Complete uncertainty set - all 7 elements for completeness
     e_P: float    # Period uncertainty (years)
     e_T: float    # Epoch of periastron uncertainty (years)
     e_e: float    # Eccentricity uncertainty (dimensionless)
@@ -75,7 +75,7 @@ class OrbitalElements(TypedDict, total=False):
     e_Omega: float # Longitude of ascending node uncertainty (degrees)
     e_omega: float # Argument of periastron uncertainty (degrees)
     
-    # Scientific metadata
+    # Metadata
     reference: str  # Source reference/publication
     grade: int      # Orbit quality grade (MIN_ORBIT_GRADE=best to MAX_ORBIT_GRADE=worst)
     last_updated: str  # ISO format date string
@@ -137,7 +137,7 @@ class DataSource(ABC):
     async def get_all_measurements(self, wds_id: str) -> Optional[Table]:
         """
         Obtains all historical astrometric measurements for a star.
-        This queries the comprehensive measurement catalog (e.g., WDSS I/313).
+        This queries the comprehensive measurement catalog (e.g., WDS B/wds/wds).
 
         Args:
             wds_id: The WDS identifier for the star.

@@ -1,242 +1,262 @@
+"""
+Tests for LocalDataSource implementation.
+"""
+
 import pytest
-import pandas as pd
-from unittest.mock import patch, mock_open
-from astropy.table import Table
+import sqlite3
+import tempfile
+from pathlib import Path
 
-from astrakairos.data.local_source import LocalFileDataSource
-from astrakairos.data.source import WdsSummary, OrbitalElements, PhysicalityAssessment
+from astrakairos.data.local_source import LocalDataSource
+from astrakairos.data.source import WdsSummary, OrbitalElements
 
-# Test data formatted according to official catalog specifications
-
-# WDS Summary format based on wdsweb_format.txt
-WDS_SUMM_CONTENT = """00002+0146WEI  AB      1879 2015   26  89  83   1.8   1.8 10.09 10.52 G0                                        000012.14+014617.2
-00003-4417I  1477AB    1926 2022   33 261 183   0.5   0.2  6.80  7.56 G3IV                                      000019.10-441726.0
-"""
-
-# WDS Measurements format based on wdss_format.txt
-WDS_MEASURES_CONTENT = """00002+0146              2010.123    85.500          1.75000  
-00002+0146              2015.456    83.000          1.80000  
-00003-4417              2020.500    180.100        m250.00000
-"""
-
-# ORB6 format based on orb6format.txt
-ORB6_CONTENT = """                   00002+0146                                                    100.0y                  0.5a                 45.0              90.0               2000.0y                  0.5               30.0      
-                   00003-4417                                                    36525.0d                250.0m               90.0              180.0              2010.0y                  0.1               60.0      
-"""
 
 @pytest.fixture
-def mock_fs_and_source():
-    """Mocks the filesystem and returns an instance of LocalFileDataSource."""
-    mock_files = {
-        "wds_summary.txt": WDS_SUMM_CONTENT,
-        "wds_measures.txt": WDS_MEASURES_CONTENT,
-        "orb6.txt": ORB6_CONTENT,
-    }
+def sample_sqlite_db():
+    """Create a temporary SQLite database with test data."""
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+        db_path = f.name
     
-    def mock_open_handler(filename, *args, **kwargs):
-        for path, content in mock_files.items():
-            if path in filename:
-                return mock_open(read_data=content).return_value
-        raise FileNotFoundError(f"File not found: {filename}")
+    conn = sqlite3.connect(db_path)
     
-    with patch("builtins.open", side_effect=mock_open_handler), \
-         patch("os.path.exists", return_value=True):
-        source = LocalFileDataSource(
-            wds_filepath="wds_summary.txt",
-            orb6_filepath="orb6.txt",
-            wds_measures_filepath="wds_measures.txt"
-        )
-        yield source
-
-@pytest.fixture
-def mock_fs_and_source_no_measures():
-    """Mocks the filesystem without measurements file."""
-    mock_files = {
-        "wds_summary.txt": WDS_SUMM_CONTENT,
-        "orb6.txt": ORB6_CONTENT,
-    }
+    # Create WDS summary table
+    conn.execute("""
+CREATE TABLE wds_summary (
+    wds_id TEXT PRIMARY KEY,
+    discoverer TEXT,
+    components TEXT,
+    date_first REAL,
+    date_last REAL,
+    obs INTEGER,
+    pa_first REAL,
+    pa_last REAL,
+    sep_first REAL,
+    sep_last REAL,
+    mag_pri REAL,
+    mag_sec REAL,
+    spec_type TEXT,
+    ra_deg REAL,
+    dec_deg REAL
+)
+    """)
     
-    def mock_open_handler(filename, *args, **kwargs):
-        for path, content in mock_files.items():
-            if path in filename:
-                return mock_open(read_data=content).return_value
-        raise FileNotFoundError(f"File not found: {filename}")
+    # Create orbital elements table
+    conn.execute("""
+CREATE TABLE orbital_elements (
+    wds_id TEXT PRIMARY KEY,
+    P REAL,
+    a REAL,
+    i REAL,
+    Omega REAL,
+    T REAL,
+    e REAL,
+    omega_arg REAL
+)
+    """)
     
-    with patch("builtins.open", side_effect=mock_open_handler), \
-         patch("os.path.exists", return_value=True):
-        
-        source = LocalFileDataSource(
-            wds_filepath="wds_summary.txt",
-            orb6_filepath="orb6.txt"
-        )
-        yield source
-
-# Catalog Loading Tests
-
-def test_init_success():
-    """Test successful instantiation with valid files."""
-    with patch("os.path.exists", return_value=True), \
-         patch("builtins.open", mock_open(read_data=WDS_SUMM_CONTENT)), \
-         patch("astrakairos.data.local_source.LocalFileDataSource._load_wds_summary_catalog") as mock_wds, \
-         patch("astrakairos.data.local_source.LocalFileDataSource._load_orb6_catalog") as mock_orb6, \
-         patch("astrakairos.data.local_source.LocalFileDataSource._load_wds_measurements_catalog") as mock_measures:
-        
-        mock_wds.return_value = pd.DataFrame()
-        mock_orb6.return_value = pd.DataFrame()
-        mock_measures.return_value = pd.DataFrame()
-        
-        source = LocalFileDataSource(
-            wds_filepath="wds_summary.txt",
-            orb6_filepath="orb6.txt",
-            wds_measures_filepath="wds_measures.txt"
-        )
-        
-        assert source.wds_df is not None
-        assert source.orb6_df is not None
-        assert source.wds_measures_df is not None
-
-def test_init_optional_measures():
-    """Test instantiation without measurements file."""
-    with patch("os.path.exists", return_value=True), \
-         patch("builtins.open", mock_open(read_data=WDS_SUMM_CONTENT)), \
-         patch("astrakairos.data.local_source.LocalFileDataSource._load_wds_summary_catalog") as mock_wds, \
-         patch("astrakairos.data.local_source.LocalFileDataSource._load_orb6_catalog") as mock_orb6:
-        
-        mock_wds.return_value = pd.DataFrame()
-        mock_orb6.return_value = pd.DataFrame()
-        
-        source = LocalFileDataSource(
-            wds_filepath="wds_summary.txt",
-            orb6_filepath="orb6.txt"
-        )
-        
-        assert source.wds_df is not None
-        assert source.orb6_df is not None
-        assert source.wds_measures_df is None
-
-def test_init_file_not_found():
-    """Test exception when required files don't exist."""
-    with patch("os.path.exists", return_value=False):
-        with pytest.raises(FileNotFoundError):
-            LocalFileDataSource(
-                wds_filepath="nonexistent.txt",
-                orb6_filepath="orb6.txt"
-            )
-
-# WDS Summary Tests
-
-@pytest.mark.asyncio
-async def test_get_wds_summary_success(mock_fs_and_source):
-    """Tests retrieving a valid WDS summary entry."""
-    summary = await mock_fs_and_source.get_wds_summary("00002+0146")
-    assert summary is not None
-    # WdsSummary is a dict-like object, access using dictionary notation
-    assert summary.get('date_last') == 2015
-    assert summary.get('wds_id') == "00002+0146"
-
-
-@pytest.mark.asyncio
-async def test_get_wds_summary_coordinate_parsing(mock_fs_and_source):
-    """Tests coordinate parsing from precise_coords_str."""
-    summary = await mock_fs_and_source.get_wds_summary("00002+0146")
-    assert summary is not None
-    # Corrected expected values for "000012.14+014617.2"
-    # RA: 00h 00m 12.14s = 12.14/3600 * 15 = 0.050583333 degrees
-    # Dec: +01° 46' 17.2" = 1 + 46/60 + 17.2/3600 = 1.771444 degrees
-    assert pytest.approx(summary.get('ra_deg'), abs=0.001) == 0.050583333
-    assert pytest.approx(summary.get('dec_deg'), abs=0.001) == 1.771444
-
-@pytest.mark.asyncio
-async def test_get_wds_summary_not_found(mock_fs_and_source):
-    """Tests retrieving a non-existent WDS summary entry."""
-    summary = await mock_fs_and_source.get_wds_summary("99999+9999")
-    assert summary is None
-
-# Measurements Tests
-
-@pytest.mark.asyncio
-async def test_get_all_measurements_success(mock_fs_and_source):
-    """Tests retrieving all measurements for a known star."""
-    measurements = await mock_fs_and_source.get_all_measurements("00002+0146")
-    assert isinstance(measurements, Table)
-    assert len(measurements) == 2
-    assert 'epoch' in measurements.colnames
-    assert 'theta' in measurements.colnames
-    assert 'rho' in measurements.colnames
-    assert pytest.approx(measurements[0]['rho']) == 1.75
-
-@pytest.mark.asyncio
-async def test_get_all_measurements_unit_conversion(mock_fs_and_source):
-    """Tests that milliarcsecond to arcsecond conversion for rho is correct."""
-    measurements = await mock_fs_and_source.get_all_measurements("00003-4417")
-    assert measurements is not None
-    # File value is 250.0 with 'm' flag, should be converted to 0.250
-    assert pytest.approx(measurements[0]['rho']) == 0.250
-
-@pytest.mark.asyncio
-async def test_get_all_measurements_not_found(mock_fs_and_source):
-    """Tests retrieving measurements for a non-existent star."""
-    measurements = await mock_fs_and_source.get_all_measurements("99999+9999")
-    assert measurements is None
-
-@pytest.mark.asyncio
-async def test_get_all_measurements_no_catalog(mock_fs_and_source_no_measures):
-    """Tests behavior when measurements catalog is not loaded."""
-    measurements = await mock_fs_and_source_no_measures.get_all_measurements("00002+0146")
-    assert measurements is None
-
-# Orbital Elements Tests
-
-@pytest.mark.asyncio
-async def test_get_orbital_elements_success(mock_fs_and_source):
-    """Tests retrieving orbital elements with standard units."""
-    orbit = await mock_fs_and_source.get_orbital_elements("00002+0146")
-    assert orbit is not None
-    # Access orbital elements using dictionary notation
-    assert pytest.approx(orbit.get('P')) == 100.0
-    assert pytest.approx(orbit.get('a')) == 0.5
-
-@pytest.mark.asyncio
-async def test_get_orbital_elements_unit_conversion(mock_fs_and_source):
-    """Tests unit conversion for orbital elements (days to years, mas to arcsec)."""
-    orbit = await mock_fs_and_source.get_orbital_elements("00003-4417")
-    assert orbit is not None
-    # 36525.0d / 365.25 = 100.0 years, 250.0m / 1000 = 0.250 arcsec
-    assert pytest.approx(orbit.get('P'), abs=0.1) == 100.0
-    assert pytest.approx(orbit.get('a'), abs=0.01) == 0.250
-
-@pytest.mark.asyncio
-async def test_get_orbital_elements_not_found(mock_fs_and_source):
-    """Tests retrieving orbital elements for a non-existent star."""
-    orbit = await mock_fs_and_source.get_orbital_elements("99999+9999")
-    assert orbit is None
-
-# Physicality Validation Tests
-
-@pytest.mark.asyncio
-async def test_validate_physicality_stub(mock_fs_and_source):
-    """Tests that validate_physicality returns expected stub response."""
-    # Create a proper WdsSummary dict with required fields
-    test_summary = {
-        'wds_id': '00002+0146',
-        'ra_deg': 0.0,
-        'dec_deg': 0.0,
-        'date_last': 2015
-    }
+    # Create measurements table
+    conn.execute("""
+CREATE TABLE measurements (
+    wds_id TEXT,
+    epoch REAL,
+    theta REAL,
+    rho REAL
+)
+    """)
     
-    result = await mock_fs_and_source.validate_physicality(test_summary)
-    assert result is not None
+    # Insert test data
+    conn.execute("""
+INSERT INTO wds_summary VALUES (
+    '00001+0001', 'STF', 'AB', 2000.0, 2020.0, 150,
+    45.0, 50.0, 1.5, 1.6, 8.5, 9.2, 'G0V',
+    0.25, 0.5
+)
+    """)
     
-    # Check that the result is a proper PhysicalityAssessment with enum values
-    from astrakairos.data.source import PhysicalityLabel, ValidationMethod
-    assert result['label'] == PhysicalityLabel.UNKNOWN
-    assert result['p_value'] is None
-    assert result['method'] == ValidationMethod.INSUFFICIENT_DATA
-    assert result['confidence'] == 0.0
-    assert 'validation_date' in result
-
-@pytest.mark.asyncio
-async def test_validate_physicality_none_input(mock_fs_and_source):
-    """Tests validate_physicality with None input."""
-    result = await mock_fs_and_source.validate_physicality(None)
-    assert result is None
+    conn.execute("""
+INSERT INTO orbital_elements VALUES (
+    '00001+0001', 100.0, 1.5, 60.0, 45.0, 2010.0, 0.3, 90.0
+)
+    """)
+    
+    # Insert multiple measurements
+    measurements = [
+        ('00001+0001', 2000.0, 45.0, 1.5),
+        ('00001+0001', 2010.0, 47.5, 1.55),
+        ('00001+0001', 2020.0, 50.0, 1.6)
+    ]
+    conn.executemany("INSERT INTO measurements VALUES (?, ?, ?, ?)", measurements)
+    
+    # Create indexes
+    conn.execute("CREATE INDEX idx_wds_summary_id ON wds_summary(wds_id)")
+    conn.execute("CREATE INDEX idx_orbital_elements_id ON orbital_elements(wds_id)")
+    conn.execute("CREATE INDEX idx_measurements_id ON measurements(wds_id)")
+    
+    # Commit changes and close connection
+    conn.commit()
+    conn.close()
+    
+    yield db_path
+    
+    # Cleanup - use try/except for Windows file permission issues
+    try:
+        Path(db_path).unlink()
+    except PermissionError:
+        # On Windows, try again after a brief delay
+        import time
+        time.sleep(0.1)
+        try:
+            Path(db_path).unlink()
+        except PermissionError:
+            # If still fails, just log the issue
+            print(f"Warning: Could not delete temporary file {db_path}")
+class TestLocalDataSource:
+    """Test LocalDataSource functionality."""
+    
+    def test_initialization_success(self, sample_sqlite_db):
+        """Test successful initialization."""
+        source = LocalDataSource(sample_sqlite_db)
+        assert source.conn is not None
+        assert source.has_measurements is True
+        source.close()
+    
+    def test_initialization_file_not_found(self):
+        """Test initialization with non-existent file."""
+        with pytest.raises((FileNotFoundError, sqlite3.Error)):
+            LocalDataSource("nonexistent.db")
+    
+    def test_get_catalog_statistics(self, sample_sqlite_db):
+        """Test catalog statistics retrieval."""
+        source = LocalDataSource(sample_sqlite_db)
+        
+        stats = source.get_catalog_statistics()
+        assert stats['wds_summary_count'] == 1
+        assert stats['orbital_elements_count'] == 1
+        assert stats['measurements_count'] == 3
+        assert stats['systems_with_measurements'] == 1
+        
+        source.close()
+    
+    @pytest.mark.asyncio
+    async def test_get_wds_summary_success(self, sample_sqlite_db):
+        """Test successful WDS summary retrieval."""
+        source = LocalDataSource(sample_sqlite_db)
+        
+        result = await source.get_wds_summary("00001+0001")
+        assert result is not None
+        assert result['wds_id'] == "00001+0001"
+        assert result['date_first'] == 2000.0
+        assert result['date_last'] == 2020.0
+        assert result['n_observations'] == 150
+        assert result['pa_first'] == 45.0
+        assert result['pa_last'] == 50.0
+        assert result['sep_first'] == 1.5
+        assert result['sep_last'] == 1.6
+        assert result['mag_pri'] == 8.5
+        assert result['mag_sec'] == 9.2
+        assert result['ra_deg'] == 0.25
+        assert result['dec_deg'] == 0.5
+        
+        source.close()
+    
+    @pytest.mark.asyncio
+    async def test_get_wds_summary_not_found(self, sample_sqlite_db):
+        """Test WDS summary retrieval for non-existent system."""
+        source = LocalDataSource(sample_sqlite_db)
+        
+        result = await source.get_wds_summary("99999+9999")
+        assert result is None
+        
+        source.close()
+    
+    @pytest.mark.asyncio
+    async def test_get_orbital_elements_success(self, sample_sqlite_db):
+        """Test successful orbital elements retrieval."""
+        source = LocalDataSource(sample_sqlite_db)
+        
+        result = await source.get_orbital_elements("00001+0001")
+        assert result is not None
+        assert result['wds_id'] == "00001+0001"
+        assert result['P'] == 100.0
+        assert result['a'] == 1.5
+        assert result['e'] == 0.3
+        
+        source.close()
+    
+    @pytest.mark.asyncio
+    async def test_get_orbital_elements_not_found(self, sample_sqlite_db):
+        """Test orbital elements retrieval for non-existent system."""
+        source = LocalDataSource(sample_sqlite_db)
+        
+        result = await source.get_orbital_elements("99999+9999")
+        assert result is None
+        
+        source.close()
+    
+    @pytest.mark.asyncio
+    async def test_get_all_measurements_success(self, sample_sqlite_db):
+        """Test successful measurements retrieval."""
+        source = LocalDataSource(sample_sqlite_db)
+        
+        result = await source.get_all_measurements("00001+0001")
+        assert result is not None
+        assert len(result) == 3
+        assert result['epoch'][0] == 2000.0
+        assert result['theta'][0] == 45.0
+        assert result['rho'][0] == 1.5
+        
+        source.close()
+    
+    @pytest.mark.asyncio
+    async def test_get_all_measurements_not_found(self, sample_sqlite_db):
+        """Test measurements retrieval for non-existent system."""
+        source = LocalDataSource(sample_sqlite_db)
+        
+        result = await source.get_all_measurements("99999+9999")
+        assert result is None
+        
+        source.close()
+    
+    @pytest.mark.asyncio
+    async def test_validate_physicality_stub(self, sample_sqlite_db):
+        """Test physicality validation returns unknown status."""
+        source = LocalDataSource(sample_sqlite_db)
+        
+        wds_summary = await source.get_wds_summary("00001+0001")
+        result = await source.validate_physicality(wds_summary)
+        
+        assert result is not None
+        assert result['label'].value == 'Unknown'
+        assert result['confidence'] == 0.0
+        assert result['method'].value == 'Insufficient Data'
+        
+        source.close()
+    
+    def test_get_all_wds_ids(self, sample_sqlite_db):
+        """Test getting all WDS IDs."""
+        source = LocalDataSource(sample_sqlite_db)
+        
+        ids = source.get_all_wds_ids()
+        assert len(ids) == 1
+        assert ids[0] == "00001+0001"
+        
+        # Test with limit
+        ids_limited = source.get_all_wds_ids(limit=1)
+        assert len(ids_limited) == 1
+        
+        source.close()
+    
+    def test_close_and_cleanup(self, sample_sqlite_db):
+        """Test proper resource cleanup."""
+        source = LocalDataSource(sample_sqlite_db)
+        
+        # Should work before close
+        stats = source.get_catalog_statistics()
+        assert stats is not None
+        
+        # Close connection
+        source.close()
+        
+        # Should return None after close (due to error handling)
+        stats_after_close = source.get_catalog_statistics()
+        assert stats_after_close is None

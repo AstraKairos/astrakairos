@@ -24,7 +24,7 @@ class OnlineDataSource(DataSource):
     
     This implementation uses the VizieR service to access official astronomical
     catalogs (WDS, ORB6) programmatically. It provides a robust interface for
-    retrieving canonical data with proper error handling and scientific validation.
+    retrieving canonical data with proper error handling and validation.
     
     Note: This source does not support complete measurement history retrieval
     due to VizieR limitations. Use LocalDataSource for comprehensive
@@ -180,7 +180,7 @@ class OnlineDataSource(DataSource):
                     e=extract_float_value(orbit_data['e']),
                     omega=extract_float_value(orbit_data['omega']),
                     
-                    # Scientific uncertainties for error analysis
+                    # Errors
                     e_P=extract_float_value(orbit_data['e_P']),
                     e_a=extract_float_value(orbit_data['e_Axis']),
                 )

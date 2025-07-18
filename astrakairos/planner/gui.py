@@ -286,8 +286,8 @@ class AstraKairosPlannerApp:
         return row + 1
 
     def _create_search_options_section(self, parent):
-        """Create advanced search options section matching Stelle Doppie capabilities."""
-        frame = ttk.LabelFrame(parent, text="5. Advanced Search Options", padding="10")
+        """Create search options section matching Stelle Doppie capabilities."""
+        frame = ttk.LabelFrame(parent, text="5. Search Options", padding="10")
         frame.grid(row=6, column=0, sticky="ew", pady=5)
         frame.columnconfigure(1, weight=1)
         
@@ -829,7 +829,7 @@ AstraKairos → Browser → Stelle Doppie → CSV → AstraKairos Analysis
                 ra_min_decimal, ra_max_decimal, dec_min_decimal, dec_max_decimal
             )
             
-            # Add advanced filters if enabled
+            # Add filters if enabled
             active_filters = []
             
             # Process all configurable filters dynamically

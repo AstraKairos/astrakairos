@@ -26,7 +26,7 @@ def load_csv_data(filepath: str) -> pd.DataFrame:
     This function uses pandas' built-in delimiter detection capabilities
     designed for astronomical catalogs which may use different delimiter conventions.
     
-    Scientific Use Cases:
+    Use Cases:
     - WDS catalog files (typically comma-separated)
     - ORB6 orbital element catalogs (space-separated, converted to CSV)
     - Custom observation logs (various formats)
@@ -79,7 +79,7 @@ def save_results_to_csv(results: List[Dict[str, Any]], filepath: str) -> None:
     Saves astronomical analysis results to a publication-ready CSV file.
 
     This function creates standardized output files suitable for:
-    - Scientific publication supplementary data
+    - Publication supplementary data
     - Further analysis in astronomical software (e.g., TOPCAT, DS9)
     - Sharing with observational collaborators
     

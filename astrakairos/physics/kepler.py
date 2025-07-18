@@ -18,7 +18,7 @@ import logging
 import numpy as np
 from typing import Dict, Tuple, Union, Optional
 
-# Centralized configuration imports for scientific consistency
+# Centralized configuration imports for consistency
 from astrakairos.config import (
     DEFAULT_KEPLER_TOLERANCE,
     DEFAULT_KEPLER_MAX_ITERATIONS,
@@ -44,7 +44,7 @@ from astrakairos.config import (
     MAX_EPOCH_PERIASTRON_YEAR
 )
 
-# Configure scientific logging
+# Configure logging
 logger = logging.getLogger(__name__)
 
 def solve_kepler(M_rad: Union[float, np.ndarray],
@@ -180,7 +180,7 @@ def predict_position(orbital_elements: Dict[str, float], date: float) -> Tuple[f
     except KeyError as exc:
         raise ValueError(f"Missing required orbital element in dictionary: {exc}")
 
-    # Scientific validation using centralized configuration
+    # Validation using centralized configuration
     if not (MIN_PERIOD_YEARS <= P <= MAX_PERIOD_YEARS):
         raise ValueError(f"Orbital period {P:.3f} years outside valid range [{MIN_PERIOD_YEARS}, {MAX_PERIOD_YEARS}]")
     

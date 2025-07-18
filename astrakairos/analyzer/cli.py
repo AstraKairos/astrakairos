@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import aiohttp
 import sys
 import pandas as pd
 import logging
@@ -9,15 +8,13 @@ import functools
 from astropy.time import Time
 
 from ..data.source import DataSource, WdsSummary, OrbitalElements, PhysicalityAssessment
-from ..data.local_source import LocalFileDataSource
+from ..data.local_source import LocalDataSource
 from ..data.online_source import OnlineDataSource
 from ..data.gaia_source import GaiaValidator
 from ..physics.dynamics import estimate_velocity_from_endpoints, calculate_observation_priority_index
 from ..physics.kepler import predict_position
 from ..utils.io import load_csv_data, save_results_to_csv
 from ..config import (
-    DEFAULT_HTTP_TIMEOUT_SECONDS, DEFAULT_HTTP_CONNECTIONS_PER_HOST,
-    DEFAULT_HTTP_TOTAL_CONNECTIONS, DEFAULT_USER_AGENT,
     DEFAULT_CONCURRENT_REQUESTS, DEFAULT_MIN_OBSERVATIONS,
     DEFAULT_SORT_BY, DEFAULT_GAIA_P_VALUE, DEFAULT_GAIA_RADIUS_FACTOR,
     DEFAULT_GAIA_MIN_RADIUS, DEFAULT_GAIA_MAX_RADIUS,
@@ -380,7 +377,7 @@ def create_argument_parser():
         epilog="""
 Examples:
   %(prog)s stars.csv --source web --limit 10
-  %(prog)s stars.csv --source local --wds-file wds.txt --orb6-file orb6.txt
+  %(prog)s stars.csv --source local --database-path catalogs.db
   %(prog)s stars.csv --source web --output results.csv --validate-gaia
         """
     )
@@ -395,11 +392,8 @@ Examples:
                        default='web',
                        help='Data source to use (default: web)')
     
-    parser.add_argument('--wds-file',
-                       help='Path to local WDS catalog file (required for local source)')
-    
-    parser.add_argument('--orb6-file',
-                       help='Path to local ORB6 catalog file (required for local source)')
+    parser.add_argument('--database-path',
+                       help='Path to local SQLite catalog database (required for local source)')
     
     # Processing options
     parser.add_argument('--mode', '-m',
@@ -504,20 +498,14 @@ async def main_async(args: argparse.Namespace):
     data_source: DataSource
     session = None
     if args.source == 'local':
-        if not args.wds_file or not args.orb6_file:
-            log.error("--wds-file and --orb6-file are required for local source")
+        if not args.database_path:
+            log.error("--database-path is required for local source")
+            log.error("Run: python scripts/convert_catalogs_to_sqlite.py to create the database first")
             sys.exit(1)
-        data_source = LocalFileDataSource(wds_filepath=args.wds_file, orb6_filepath=args.orb6_file)
+            
+        data_source = LocalDataSource(database_path=args.database_path)
     else:  # 'web' source
-        # FIXED: Configure HTTP session using constants
-        headers = {'User-Agent': DEFAULT_USER_AGENT}
-        timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT_SECONDS)
-        connector = aiohttp.TCPConnector(
-            limit_per_host=DEFAULT_HTTP_CONNECTIONS_PER_HOST,
-            limit=DEFAULT_HTTP_TOTAL_CONNECTIONS
-        )
-        session = aiohttp.ClientSession(connector=connector, timeout=timeout, headers=headers)
-        data_source = OnlineDataSource(session)
+        data_source = OnlineDataSource()
     
     # 3. Initialize the Gaia validator if requested
     gaia_validator = None
@@ -589,8 +577,7 @@ async def main_async(args: argparse.Namespace):
             
     finally:
         # 7. Clean up resources
-        if session:
-            await session.close()
+        pass  # No cleanup needed for current implementation
 
 def load_csv_data(filepath: str) -> pd.DataFrame:
     """

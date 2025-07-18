@@ -129,7 +129,7 @@ The development of AstraKairos is phased to deliver a valuable tool at each stag
 - [x] **Web Source:** VizieR integration
 - [x] **Catalog Hub:** Cross-matching and **SIMBAD** name resolution
 
-**Scientific Engine**
+**Engine**
 - [x] **Kepler's Equation Solver:** High-precision numerical solver with hybrid initial guess strategy
 - [x] **Orbital Prediction:** Precise ephemerides (PA/Sep) from orbital elements
 - [x] **Dynamics Analysis:** Apparent motion vectors (`v_total`, `PA_v`) with endpoint method
