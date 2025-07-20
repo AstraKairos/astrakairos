@@ -121,12 +121,11 @@ python main.py analyzer --help
 The development of AstraKairos is phased to deliver a valuable tool at each stage.
 
 ### v1.0: The Binary Star Research Suite
-*Production-ready tool for binary star validation, analysis, and observation planning.*
+*Binary star validation, analysis, and observation planning tool.*
 
 **Core Architecture & Data Layer**
 - [x] **Data Source Abstraction:** Modular `DataSource` interface implemented
 - [x] **Local Source:** Parsers for offline **WDSS** and **ORB6** catalogs  
-- [x] **Web Source:** VizieR integration
 - [x] **Catalog Hub:** Cross-matching and **SIMBAD** name resolution
 
 **Engine**

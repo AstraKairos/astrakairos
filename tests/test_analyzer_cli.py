@@ -31,11 +31,11 @@ class MockPhysicalityResult:
 # --- Pruebas para el Argument Parser ---
 
 def test_parser_default_arguments():
-    """Verifica que los valores por defecto de los argumentos son los esperados."""
+    """Test that argument defaults work with required database path."""
     parser = create_argument_parser()
-    args = parser.parse_args(['dummy_input.csv']) # Se necesita un input file posicional
+    args = parser.parse_args(['dummy_input.csv', '--database-path', 'test.db'])
 
-    assert args.source == 'web'
+    assert args.source == 'local'
     assert args.limit is None
     assert not args.validate_gaia
     assert args.gaia_p_value == 0.01
@@ -60,9 +60,9 @@ def test_parser_custom_arguments():
     assert args.gaia_p_value == 0.05
     assert args.limit == 50
 
-# --- Pruebas de Integración para main_async ---
+# Integration tests for main_async
 
-# Datos simulados que devolverían nuestras funciones 'mockeadas'
+# Mock data that would be returned by our mocked functions
 MOCK_CSV_DATA = pd.DataFrame([{'wds_id': '00001+0001', 'obs': 10}])
 MOCK_WDS_DATA = {
     'wds_id': '00001+0001', 'ra_deg': 0.1, 'dec_deg': 0.1,

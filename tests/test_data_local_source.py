@@ -19,24 +19,24 @@ def sample_sqlite_db():
     
     conn = sqlite3.connect(db_path)
     
-    # Create WDS summary table
+    # Create WDSS summary table (matching real schema)
     conn.execute("""
-CREATE TABLE wds_summary (
+CREATE TABLE wdss_summary (
     wds_id TEXT PRIMARY KEY,
-    discoverer TEXT,
-    components TEXT,
+    discoverer_designation TEXT,
     date_first REAL,
     date_last REAL,
-    obs INTEGER,
+    n_obs INTEGER,
     pa_first REAL,
     pa_last REAL,
     sep_first REAL,
     sep_last REAL,
-    mag_pri REAL,
-    mag_sec REAL,
-    spec_type TEXT,
+    vmag REAL,
+    kmag REAL,
+    spectral_type TEXT,
     ra_deg REAL,
-    dec_deg REAL
+    dec_deg REAL,
+    wdss_id TEXT
 )
     """)
     
@@ -54,10 +54,10 @@ CREATE TABLE orbital_elements (
 )
     """)
     
-    # Create measurements table
+    # Create measurements table (using wdss_id to match local_source.py)
     conn.execute("""
 CREATE TABLE measurements (
-    wds_id TEXT,
+    wdss_id TEXT,
     epoch REAL,
     theta REAL,
     rho REAL
@@ -66,10 +66,10 @@ CREATE TABLE measurements (
     
     # Insert test data
     conn.execute("""
-INSERT INTO wds_summary VALUES (
-    '00001+0001', 'STF', 'AB', 2000.0, 2020.0, 150,
+INSERT INTO wdss_summary VALUES (
+    '00001+0001', 'STF', 2000.0, 2020.0, 150,
     45.0, 50.0, 1.5, 1.6, 8.5, 9.2, 'G0V',
-    0.25, 0.5
+    0.25, 0.5, 'WDS00001'
 )
     """)
     
@@ -79,18 +79,18 @@ INSERT INTO orbital_elements VALUES (
 )
     """)
     
-    # Insert multiple measurements
+    # Insert multiple measurements (using wdss_id)
     measurements = [
-        ('00001+0001', 2000.0, 45.0, 1.5),
-        ('00001+0001', 2010.0, 47.5, 1.55),
-        ('00001+0001', 2020.0, 50.0, 1.6)
+        ('WDS00001', 2000.0, 45.0, 1.5),
+        ('WDS00001', 2010.0, 47.5, 1.55),
+        ('WDS00001', 2020.0, 50.0, 1.6)
     ]
     conn.executemany("INSERT INTO measurements VALUES (?, ?, ?, ?)", measurements)
     
     # Create indexes
-    conn.execute("CREATE INDEX idx_wds_summary_id ON wds_summary(wds_id)")
+    conn.execute("CREATE INDEX idx_wdss_summary_id ON wdss_summary(wds_id)")
     conn.execute("CREATE INDEX idx_orbital_elements_id ON orbital_elements(wds_id)")
-    conn.execute("CREATE INDEX idx_measurements_id ON measurements(wds_id)")
+    conn.execute("CREATE INDEX idx_measurements_id ON measurements(wdss_id)")
     
     # Commit changes and close connection
     conn.commit()
@@ -130,7 +130,7 @@ class TestLocalDataSource:
         source = LocalDataSource(sample_sqlite_db)
         
         stats = source.get_catalog_statistics()
-        assert stats['wds_summary_count'] == 1
+        assert stats['wdss_summary_count'] == 1  # Use wdss_summary since that's the table name
         assert stats['orbital_elements_count'] == 1
         assert stats['measurements_count'] == 3
         assert stats['systems_with_measurements'] == 1

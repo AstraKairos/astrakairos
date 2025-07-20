@@ -10,7 +10,6 @@ from astropy.time import Time
 
 from ..data.source import DataSource, WdsSummary, OrbitalElements, PhysicalityAssessment
 from ..data.local_source import LocalDataSource
-from ..data.online_source import OnlineDataSource
 from ..data.gaia_source import GaiaValidator
 from ..physics.dynamics import (
     estimate_velocity_from_endpoints, 
@@ -131,7 +130,7 @@ def _get_current_decimal_year() -> float:
 
 def _calculate_search_radius(wds_summary: WdsSummary, cli_args: argparse.Namespace) -> float:
     """
-    Calculate Gaia search radius using scientific constraints.
+    Calculate Gaia search radius based on system separation.
     
     Calculates the appropriate search radius for Gaia catalog queries
     based on the last separation measurement and CLI configuration parameters.
@@ -437,9 +436,8 @@ def create_argument_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s stars.csv --source web --limit 10
-  %(prog)s stars.csv --source local --database-path catalogs.db
-  %(prog)s stars.csv --source web --output results.csv --validate-gaia
+  %(prog)s stars.csv --database-path catalogs.db --limit 10
+  %(prog)s --all --database-path catalogs.db --output results.csv --validate-gaia
         """
     )
     
@@ -450,14 +448,15 @@ Examples:
     parser.add_argument('--all', action='store_true',
                     help='Analyze all systems in the local database.')
     
-    # Data source options
+    # Data source options - Only local source supported
     parser.add_argument('--source', 
-                       choices=['web', 'local'], 
-                       default='web',
-                       help='Data source to use (default: web)')
+                       choices=['local'], 
+                       default='local',
+                       help='Data source to use (only local supported)')
     
     parser.add_argument('--database-path',
-                       help='Path to local SQLite catalog database (required for local source)')
+                       required=True,
+                       help='Path to local SQLite catalog database')
     
     # Processing options
     parser.add_argument('--mode', '-m',
@@ -520,7 +519,7 @@ async def main_async(args: argparse.Namespace):
     
     This function handles:
     1. Loading and filtering the input data.
-    2. Setting up the appropriate data source (local or web).
+    2. Setting up the local data source.
     3. Initializing the GaiaValidator with command-line configurations.
     4. Creating a pre-configured processing function for cleaner execution.
     5. Running the analysis concurrently.
@@ -529,19 +528,13 @@ async def main_async(args: argparse.Namespace):
     # Configure logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    # 1. Set up the data source (se mueve aquí para usarlo en la carga de datos)
+    # 1. Set up the data source (only local source supported)
     data_source: DataSource
-    if args.source == 'local':
-        if not args.database_path:
-            log.error("--database-path is required for local source.")
-            log.error("Run: python scripts/convert_catalogs_to_sqlite.py to create the database first.")
-            sys.exit(1)
-        data_source = LocalDataSource(database_path=args.database_path)
-    else:  # 'web' source
-        if args.all:
-            log.error("--all flag is only supported with --source local.")
-            sys.exit(1)
-        data_source = OnlineDataSource()
+    if not args.database_path:
+        log.error("--database-path is required for local source.")
+        log.error("Run: python scripts/convert_catalogs_to_sqlite.py to create the database first.")
+        sys.exit(1)
+    data_source = LocalDataSource(database_path=args.database_path)
 
     # 2. Determine target list (from file or --all flag)
     df_targets = None

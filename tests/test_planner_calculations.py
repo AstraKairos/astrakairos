@@ -5,16 +5,16 @@ from datetime import datetime
 import pytz
 import numpy as np
 
-# Importamos el módulo completo para probar sus funciones
+# Import the complete module to test its functions
 from astrakairos.planner import calculations
 
-# --- Fixtures de Prueba ---
+# Test Fixtures
 
 @pytest.fixture(scope="module")
 def paris_observatory():
-    """Una fixture de ubicación de Skyfield reutilizable para las pruebas."""
-    # Usamos una ubicación conocida para que los resultados sean predecibles.
-    # Latitud, Longitud, Altitud para el Observatorio de París.
+    """Reusable Skyfield location fixture for tests."""
+    # Using a known location for predictable results.
+    # Latitude, Longitude, Altitude for Paris Observatory.
     return calculations.get_observer_location(48.8368, 2.3358, 67)
 
 @pytest.fixture(scope="module")
@@ -45,21 +45,21 @@ def test_get_nightly_events_returns_correct_structure(paris_observatory, test_da
     for key in expected_keys:
         assert key in events
     
-    # --- Assertión Robusta ---
-    # Solo comprueba la lógica de los tiempos si ambos eventos (atardecer y amanecer) ocurren.
-    # En latitudes altas durante el verano, el atardecer o el amanecer (o los crepúsculos)
-    # podrían no ocurrir, y la función devolvería None correctamente.
+    # Robust assertion
+    # Only check time logic if both events (sunset and sunrise) occur.
+    # At high latitudes during summer, sunset or sunrise (or twilights)
+    # might not occur, and the function would correctly return None.
     if events['sunset_utc'] and events['sunrise_utc']:
         assert events['sunset_utc'] < events['sunrise_utc']
     
     if events['astronomical_twilight_end_utc'] and events['astronomical_twilight_start_utc']:
         assert events['astronomical_twilight_end_utc'] < events['astronomical_twilight_start_utc']
 
-# --- Pruebas para calculate_sky_conditions_at_time ---
+# Tests for calculate_sky_conditions_at_time
 
 def test_sky_conditions_at_time_new_moon(paris_observatory, test_date_new_moon):
-    """Verifica las condiciones del cielo durante una luna nueva."""
-    # Tomamos la medianoche local en París para la prueba
+    """Test sky conditions during new moon."""
+    # Take local midnight in Paris for the test
     local_tz = pytz.timezone('Europe/Paris')
     midnight_local = local_tz.localize(datetime(2024, 1, 12, 0, 0))
     midnight_utc = midnight_local.astimezone(pytz.utc)
@@ -67,7 +67,7 @@ def test_sky_conditions_at_time_new_moon(paris_observatory, test_date_new_moon):
     conditions = calculations.calculate_sky_conditions_at_time(paris_observatory, midnight_utc)
     
     assert isinstance(conditions, dict)
-    # Durante la luna nueva, la fase debe ser muy cercana a 0%
+    # During new moon, the phase should be very close to 0%
     assert conditions['moon_phase_percent'] < 2.0 
     assert 'zenith_ra_hours' in conditions
 
@@ -79,9 +79,9 @@ def test_sky_conditions_at_time_full_moon(paris_observatory, test_date_full_moon
     
     conditions = calculations.calculate_sky_conditions_at_time(paris_observatory, midnight_utc)
     
-    # Durante la luna llena, la fase debe ser muy cercana a 100%
+    # During full moon, the phase should be very close to 100%
     assert conditions['moon_phase_percent'] > 98.0
-    # La luna llena suele estar alta en el cielo a medianoche
+    # Full moon is usually high in the sky at midnight
     assert conditions['moon_alt_deg'] > 30.0
 
 # --- Pruebas para generate_sky_quality_map ---
@@ -94,7 +94,7 @@ def test_sky_quality_map_no_moon(paris_observatory, test_date_new_moon):
     midnight_local = local_tz.localize(datetime(2024, 1, 12, 0, 0))
     midnight_utc = midnight_local.astimezone(pytz.utc)
     
-    # Obtenemos las coordenadas del cénit para comparar
+    # Get zenith coordinates for comparison
     zenith_conditions = calculations.calculate_sky_conditions_at_time(paris_observatory, midnight_utc)
     
     result_map = calculations.generate_sky_quality_map(
@@ -102,8 +102,8 @@ def test_sky_quality_map_no_moon(paris_observatory, test_date_new_moon):
     )
     
     assert isinstance(result_map, dict)
-    # Sin luna, el mejor punto debe estar muy cerca del cénit (la mayor altitud)
-    assert np.isclose(result_map['best_alt_deg'], 85.0, atol=5.0) # El grid es de 5 grados
+    # Without moon, the best point should be very close to zenith (highest altitude)
+    assert np.isclose(result_map['best_alt_deg'], 85.0, atol=5.0) # Grid is 5 degrees
     assert np.isclose(result_map['best_ra_hours'], zenith_conditions['zenith_ra_hours'], atol=0.5)
 
 def test_sky_quality_map_with_moon(paris_observatory, test_date_full_moon):
@@ -120,18 +120,18 @@ def test_sky_quality_map_with_moon(paris_observatory, test_date_full_moon):
         paris_observatory, midnight_utc, min_altitude_deg=30.0
     )
     
-    # El mejor punto (best_az) NO debe estar cerca del azimut de la luna.
+    # The best point (best_az) should NOT be close to the moon's azimuth.
     azimuth_difference = abs(result_map['best_az_deg'] - conditions['moon_az_deg'])
-    # La diferencia debería ser grande, idealmente cercana a 180 grados, pero comprobamos que no sea pequeña.
+    # The difference should be large, ideally close to 180 degrees, but we check it's not small.
     assert min(azimuth_difference, 360 - azimuth_difference) > 90.0
 
-# --- Pruebas para Funciones Auxiliares ---
+# Tests for auxiliary functions
 
 def test_airmass_calculation():
-    """Verifica el cálculo de la masa de aire en puntos clave."""
-    assert np.isclose(calculations.calculate_airmass(90), 1.0) # En el cénit
+    """Test airmass calculation at key points."""
+    assert np.isclose(calculations.calculate_airmass(90), 1.0) # At zenith
     assert np.isclose(calculations.calculate_airmass(60), 1.1547, atol=1e-4)
-    assert np.isclose(calculations.calculate_airmass(30), 2.0) # A 30 grados de altitud
+    assert np.isclose(calculations.calculate_airmass(30), 2.0) # At 30 degrees altitude
     assert calculations.calculate_airmass(0) == np.inf
     
     # Prueba con un array

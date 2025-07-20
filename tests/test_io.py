@@ -2,14 +2,13 @@ import pytest
 import pandas as pd
 import numpy as np
 from unittest.mock import patch, mock_open
-
-# Importar las funciones del módulo a probar
+# Import functions from the module to test
 from astrakairos.utils import io
-# Importar dependencias necesarias para las pruebas
+# Import necessary dependencies for tests
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
-# --- Test data for simulating CSV files ---
+# Test data for simulating CSV files
 csv_content_comma = "wds_id,n_observations\n00001+0001,10\n00002+0002,5"
 csv_content_semicolon = "wds_id;n_observations\n00003+0003;12\n00004+0004;8"
 
@@ -90,7 +89,7 @@ def test_format_coordinates_astropy_normal():
     """
     ra_hours = 12.53
     dec_degrees = 25.5
-    # Generar la cadena de referencia con el mismo método y formato corregido
+    # Generate reference string with the same method and corrected format
     expected_str = SkyCoord(ra=ra_hours*u.hourangle, dec=dec_degrees*u.deg).to_string(
         'hmsdms', sep=' ', precision=1, pad=True
     )
@@ -100,7 +99,7 @@ def test_format_coordinates_astropy_negative_dec():
     """Tests formatting for negative declinations."""
     ra_hours = 1.0
     dec_degrees = -5.75
-    # Generar la cadena de referencia con el mismo método y formato corregido
+    # Generate reference string with the same method and corrected format
     expected_str = SkyCoord(ra=ra_hours*u.hourangle, dec=dec_degrees*u.deg).to_string(
         'hmsdms', sep=' ', precision=1, pad=True
     )
@@ -129,12 +128,12 @@ def test_parse_wds_designation_valid(wds_id, expected_ra_deg, expected_dec_deg):
     assert result['dec_deg'] == expected_dec_deg
 
 @pytest.mark.parametrize("invalid_wds_id", [
-    "1234+5678",      # Formato incorrecto
-    "J12345+6789",    # No es el formato numérico
-    "12345+678",      # Longitud incorrecta
-    None,             # Entrada nula
-    12345,            # Tipo de dato incorrecto
-    "ABCDE+FGHI"      # No son números
+    "1234+5678",      # Incorrect format
+    "J12345+6789",    # Not numeric format
+    "12345+678",      # Incorrect length
+    None,             # Null input
+    12345,            # Incorrect data type
+    "ABCDE+FGHI"      # Not numbers
 ])
 def test_parse_wds_designation_invalid(invalid_wds_id):
     """Tests that the function returns None for invalid inputs."""

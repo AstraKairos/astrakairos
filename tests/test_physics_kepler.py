@@ -4,7 +4,7 @@ import math
 import numpy as np
 from astrakairos.physics.kepler import solve_kepler, predict_position, compute_orbital_anomalies
 
-# --- Tests básicos existentes ---
+# Basic existing tests
 def test_solve_kepler_circular_orbit():
     """Verifies that for a circular orbit (e=0), E equals M."""
     mean_anomaly_rad = np.radians(45.0)  # M in radians
@@ -44,7 +44,7 @@ def test_predict_position_circular_face_on_orbit():
     assert np.isclose(pa_deg, 90.0, atol=1e-6)
     assert np.isclose(sep_arcsec, 2.0, atol=1e-6)
 
-# --- NUEVOS TESTS CIENTÍFICOS ---
+# Additional scientific tests
 
 def test_solve_kepler_vectorized_consistency():
     """Test that vectorized and scalar calls give consistent results."""
