@@ -6,16 +6,13 @@ Main application class that coordinates all GUI components.
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime
 import threading
-import json
 
 from .utilities import GUIUtilities
 from .location_widgets import LocationManager
 from .calculation_widgets import CalculationManager
 from .search_widgets import SearchManager
 from .data_export import ExportManager
-from .. import calculations
 
 
 class AstraKairosApp:

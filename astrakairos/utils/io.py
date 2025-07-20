@@ -1,6 +1,5 @@
 import pandas as pd
 import re
-import csv
 import logging
 from typing import List, Dict, Any, Optional
 from astropy.coordinates import SkyCoord

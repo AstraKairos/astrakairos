@@ -278,42 +278,6 @@ CATALOG_SOURCES = {
     }
 }
 
-# UI Configuration
-UI_THEMES = {
-    'default': {
-        'name': 'Default',
-        'bg_color': '#f0f0f0',
-        'fg_color': '#000000',
-        'select_color': '#0078d4',
-        'font_family': 'Arial',
-        'font_size': 10
-    },
-    'dark': {
-        'name': 'Dark Mode',
-        'bg_color': '#2d2d2d',
-        'fg_color': '#ffffff',
-        'select_color': '#4a9eff',
-        'font_family': 'Arial',
-        'font_size': 10
-    },
-    'publication': {
-        'name': 'Publication',
-        'bg_color': '#ffffff',
-        'fg_color': '#000000',
-        'select_color': '#1f77b4',
-        'font_family': 'Times New Roman',
-        'font_size': 11
-    }
-}
-
-# Progress Tracking Configuration
-PROGRESS_INDICATORS = {
-    'search_timeout': 30,  # seconds
-    'export_chunk_size': 1000,  # records per chunk
-    'ui_update_interval': 100,  # milliseconds
-    'auto_save_interval': 300   # seconds
-}
-
 # Analysis Mode Configuration
 DEFAULT_ANALYSIS_MODE = 'discovery'
 AVAILABLE_ANALYSIS_MODES = ['discovery', 'characterize', 'orbital']
@@ -553,15 +517,6 @@ MAX_OLD_OBSERVATION_WARNING_YEARS = 50.0  # Threshold for very old observation w
 DAYS_PER_JULIAN_YEAR = 365.25  # Standard Julian year for astronomical epoch conversions
 CENTURIES_PER_YEAR = 100.0     # Century to year conversion factor
 MILLIARCSEC_PER_ARCSEC = 1000.0  # Milliarcsecond to arcsecond conversion
-
-# Analysis Configuration (CLI imports)
-DEFAULT_CONCURRENT_REQUESTS = 5
-DEFAULT_MIN_OBSERVATIONS = 2
-DEFAULT_SORT_BY = 'v_total'
-DEFAULT_GAIA_P_VALUE = 0.01
-DEFAULT_GAIA_RADIUS_FACTOR = 1.5
-DEFAULT_GAIA_MIN_RADIUS = 2.0
-DEFAULT_GAIA_MAX_RADIUS = 60.0
 
 # Validation Constants (CLI imports)
 MIN_EPOCH_YEAR = 1800.0

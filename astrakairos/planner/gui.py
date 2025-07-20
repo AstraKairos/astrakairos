@@ -7,11 +7,8 @@ This module maintains backwards compatibility while using the new
 modular GUI components.
 """
 
-import tkinter as tk
-from tkinter import ttk
-
 # Import the new modular GUI components
-from .gui.main_app import AstraKairosApp, AstraKairosWindow
+from .gui.main_app import AstraKairosWindow
 
 
 class AstraKairosPlannerApp(AstraKairosWindow):

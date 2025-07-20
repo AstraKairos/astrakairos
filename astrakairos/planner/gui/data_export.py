@@ -9,7 +9,7 @@ from tkinter import ttk, messagebox, filedialog
 import csv
 import json
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 from ...config import EXPORT_FORMATS
 

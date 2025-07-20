@@ -9,11 +9,8 @@ from tkinter import ttk, messagebox, filedialog
 from tkinter.scrolledtext import ScrolledText
 import webbrowser
 import urllib.parse
-import random
 import pandas as pd
 import os
-from typing import Dict, Any, List, Optional
-from datetime import datetime
 
 from ...config import (
     STELLE_DOPPIE_BASE_URL, STELLE_DOPPIE_FILTERS, DEFAULT_SEARCH_OPTIONS,

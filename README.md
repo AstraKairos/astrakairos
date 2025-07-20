@@ -95,25 +95,37 @@ The GUI provides:
 
 ### 2. Data Analyzer (CLI)
 
-Process star catalogs to find high-priority observation targets:
+Process star catalogs to find high-priority observation targets using local databases:
 
 ```bash
-python main.py analyzer targets.csv --source web --mode discovery --limit 10 --sort-by velocity
-```
+# Basic analysis with discovery mode (motion analysis)
+python -m astrakairos.analyzer.cli targets.csv --database-path catalogs.db --limit 10
 
-For analysis with local catalogs:
-```bash
-python main.py analyzer targets.csv --source local --wdss-summary wdss.txt --orb6-file orb6.txt --mode orbital --validate-gaia
+# Orbital analysis with Gaia validation
+python -m astrakairos.analyzer.cli targets.csv --database-path catalogs.db --mode orbital --validate-gaia --output results.csv
+
+# Analyze all systems in database with characterization mode
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode characterize --limit 100
+
+# Discovery mode with custom sorting
+python -m astrakairos.analyzer.cli targets.csv --database-path catalogs.db --mode discovery --sort-by v_total_arcsec_yr
 ```
 
 **Analysis modes:**
-- `discovery`: Motion analysis and velocity calculations
-- `characterize`: Orbital fitting and parameter estimation  
-- `orbital`: OPI calculation for observation priority ranking
+- `discovery`: Motion analysis and velocity calculations (default)
+- `characterize`: Robust linear fitting with Theil-Sen regression  
+- `orbital`: Observation Priority Index (OPI) calculation for ranking
 
-For complete CLI documentation:
+**Key options:**
+- `--database-path`: Required path to local SQLite catalog database 
+- `--validate-gaia`: Enable Gaia DR3 physicality validation (requires network)
+- `--mode`: Analysis type (discovery/characterize/orbital)
+- `--limit`: Maximum number of systems to process
+- `--output`: Output CSV file for results
+
+For complete documentation:
 ```bash
-python main.py analyzer --help
+python -m astrakairos.analyzer.cli --help
 ```
 
 ## Project Roadmap

@@ -7,9 +7,8 @@ Calculation parameters and astronomical results widgets for the GUI.
 import tkinter as tk
 from tkinter import ttk, messagebox
 from tkinter.scrolledtext import ScrolledText
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
-import pytz
+from datetime import datetime
+from typing import Dict
 
 from ...planner import calculations
 from ...config import (
@@ -18,7 +17,7 @@ from ...config import (
     MIN_LIGHT_POLLUTION_MAG, MAX_LIGHT_POLLUTION_MAG,
     DEFAULT_MIN_ALTITUDE_DEG, DEFAULT_RA_WINDOW_HOURS, DEFAULT_LIGHT_POLLUTION_MAG
 )
-from .utilities import format_time, format_time_utc, format_ra_hours, format_dec_degrees
+from .utilities import format_ra_hours, format_dec_degrees
 
 
 class CalculationManager:
