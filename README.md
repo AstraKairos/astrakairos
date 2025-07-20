@@ -4,36 +4,76 @@
 [![Tests](https://github.com/AstraKairos/astrakairos/actions/workflows/ci.yml/badge.svg)](https://github.com/AstraKairos/astrakairos/actions/workflows/ci.yml)
 <!-- [![PyPI version](https://badge.fury.io/py/astrakairos.svg)](https://badge.fury.io/py/astrakairos) -->
 
-**AstraKairos is an integrated scientific framework to find the *kairos*—the opportune moment—for astronomical discovery. From validating binary star orbits to planning variable star photometry, this open-source Python suite bridges the gap between massive astronomical catalogs and practical night-to-night observation.**
+**NOTE**: *AstraKairos is currently under development for version 1.0. If you want to track the current progress of the project, please check out the [development](https://github.com/AstraKairos/astrakairos/tree/development) branch.*
 
-AstraKairos empowers researchers and amateur astronomers to identify, prioritize, and analyze the most scientifically valuable targets in the night sky.
+**AstraKairos is an integrated framework to find the *kairos*—the opportune moment—for astronomical discovery. v1.0 focuses on Binary Stars projects by presenting several QOL-improving as well as analysis tools. This open-source Python suite bridges the gap between massive astronomical catalogs (Such as the WDS, WDSS, and the ORB6) and practical night-to-night observation.**
 
-## Key Features
+AstraKairos brings researchers and amateur astronomers modern tools to identify, prioritize, and analyze targets in the Binary Stars realm.
 
-- **Intelligent Observation Planner (GUI):** A user-friendly desktop application that recommends the optimal sky region for observation by analyzing your location, date, moon position, and other local conditions.
-- **Data-Driven Target Prioritization:** A powerful command-line tool that analyzes star catalogs to find high-priority targets. It calculates:
-    - **Apparent Motion Vectors:** Identifies high-velocity systems or pairs with significant relative motion.
-    - **Observation Priority Index (OPI):** A novel metric that quantifies how much a star's observed position deviates from its published orbit, highlighting systems that urgently need new measurements.
-- **Physicality Validation Engine:** Uses high-precision data from the Gaia satellite to help determine if a star pair is a true physical binary or a chance optical alignment.
-- **Orbital Prediction Engine:** Implements a robust Kepler's equation solver to predict the future positions of stars in known orbits.
-- **Modular Data Sources:** Can operate using local, offline catalogs (for performance and reproducibility) or by scraping up-to-date web sources.
+## Key Features (v1.0)
+
+### 🔭 **Observation Planner (GUI)**
+A desktop application that optimizes astronomical observations by analyzing:
+- **Location-aware calculations:** Over 3,000+ observatory locations worldwide  
+- **Twilight calculations:** Civil, nautical, and astronomical twilight times with timezone support
+- **Sky quality mapping:** Atmospheric extinction and lunar contamination models
+- **Target search generation:** Filtering with 18 search methods based on [Stelle Doppie](https://www.stelledoppie.it/)'s searching tool
+- **CSV import & analysis:** Parsing of downloaded Stelle Doppie's data with format auto-detection
+- **Multi-platform compatibility:** Compatible with Windows, macOS, and Linux distributions
+
+### 🚀 **Velocity Analysis Engine** 
+- **Binary velocity calculation:** Calculates total observed angular velocity for imported results from Stelle Doppie
+- **Endpoint velocity calculations:** Uses first/last observation epochs for motion analysis
+- **Velocity statistics:** Statistics and high-priority target identification
+- **Column mapping:** Handles both basic and full CSV formats from Stelle Doppie
+
+### 🌙 **Astronomical Calculations**
+- **Precise ephemeris:** Powered by Skyfield with JPL DE421 ephemeris data
+- **Sky brightness modeling:** Krisciunas & Schaefer (1991) lunar scattering implementation
+- **Atmospheric extinction:** Site-specific extinction coefficients for photometry
+- **Time-domain optimization:** Finds optimal observing windows considering environmental factors
+
+### 📊 **Data-Driven Target Prioritization (CLI)**
+A command-line tool that analyzes star catalogs to find high-priority targets:
+- **Apparent Motion Vectors:** Identifies high-velocity systems with significant relative motion
+- **Observation Priority Index (OPI):** Metric quantifying orbital deviation urgency
+- **Physicality Validation:** Uses Gaia DR3 data to distinguish physical binaries from optical alignments
+
+### 🔧 **Data Handling**
+- **Multiple export formats:** CSV, JSON, LaTeX tables with metadata
+- **File processing:** Handles various encodings and CSV formats with error handling
+- **Modular data sources:** Local catalogs (WDSS, ORB6) or real-time web scraping
+- **Orbital Prediction Engine:** Implements Kepler's equation solver to predict future positions of stars in known orbits
+- **Modular Data Sources:** Can operate using local, offline catalogs (for performance and reproducibility) or by scraping up-to-date web sources
 
 ## Installation
 
-AstraKairos is designed for easy installation via pip. A virtual environment is highly recommended.
+AstraKairos requires Python 3.8+ and is designed for easy installation. A virtual environment is recommended.
 
 ```bash
 # Create and activate a virtual environment
 python -m venv venv
-# On Windows:   .\venv\Scripts\activate
+# On Windows:   .\venv\Scripts\activate  
 # On macOS/Linux: source venv/bin/activate
 
-# Install from PyPI (once published)
-# pip install astrakairos
-
-# Install the latest development version directly from GitHub
+# Install from the repository
 pip install git+https://github.com/AstraKairos/astrakairos.git
+
+# Or install in development mode
+git clone https://github.com/AstraKairos/astrakairos.git
+cd astrakairos
+pip install -e .
 ```
+
+**Dependencies automatically installed:**
+- `skyfield` - High-precision astronomical calculations
+- `pandas` - Data analysis and CSV processing
+- `astropy` - Astronomical data structures and utilities
+- `astroquery` - Access to astronomical databases  
+- `pytz` - Timezone calculations
+- `numpy`, `scipy` - Numerical computations
+
+**First-time setup:** On first run, Skyfield will automatically download the JPL DE421 ephemeris file (~17MB) for precise planetary positions.
 
 ## Usage
 
@@ -41,75 +81,108 @@ AstraKairos provides two main entry points: a graphical planner and a command-li
 
 ### 1. Observation Planner (GUI)
 
-Launch the user-friendly observation planner from your terminal:
+Launch the observation planning interface:
 
 ```bash
-astrakairos-plan
+python main.py planner
 ```
-This will open a desktop application where you can select your observatory, a date, and get recommendations for where to point your telescope.
+
+The GUI provides:
+- **Observatory selection** from 3,000+ worldwide locations
+- **Optimal sky region calculation** using atmospheric models  
+- **Stelle Doppie search generation** with 18 filtering methods
+- **CSV data import & analysis** with automatic format detection
+- **Velocity analysis** for identifying high-motion binary systems
+- **Export capabilities** in multiple formats
 
 ### 2. Data Analyzer (CLI)
 
-Process a list of stars from a CSV file to find high-priority targets. For example, to analyze `targets.csv`, sort by the highest OPI, and limit to the top 10 results:
+Process star catalogs to find high-priority observation targets using local databases:
 
 ```bash
-astrakairos-analyze targets.csv --source local --wds-file wds.txt --orb6-file orb6.txt --sort-by opi --limit 10
+# Basic analysis with discovery mode (motion analysis)
+python -m astrakairos.analyzer.cli targets.csv --database-path catalogs.db --limit 10
+
+# Orbital analysis with Gaia validation
+python -m astrakairos.analyzer.cli targets.csv --database-path catalogs.db --mode orbital --validate-gaia --output results.csv
+
+# Analyze all systems in database with characterization mode
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode characterize --limit 100
+
+# Discovery mode with custom sorting
+python -m astrakairos.analyzer.cli targets.csv --database-path catalogs.db --mode discovery --sort-by v_total_arcsec_yr
 ```
 
-For a full list of options and commands, use the help flag:
+**Analysis modes:**
+- `discovery`: Motion analysis and velocity calculations (default)
+- `characterize`: Robust linear fitting with Theil-Sen regression  
+- `orbital`: Observation Priority Index (OPI) calculation for ranking
+
+**Key options:**
+- `--database-path`: Required path to local SQLite catalog database 
+- `--validate-gaia`: Enable Gaia DR3 physicality validation (requires network)
+- `--mode`: Analysis type (discovery/characterize/orbital)
+- `--limit`: Maximum number of systems to process
+- `--output`: Output CSV file for results
+
+For complete documentation:
 ```bash
-astrakairos-analyze --help
+python -m astrakairos.analyzer.cli --help
 ```
 
 ## Project Roadmap
 
-The development of AstraKairos is phased to deliver a robust and scientifically valuable tool at each stage.
+The development of AstraKairos is phased to deliver a valuable tool at each stage.
 
 ### v1.0: The Binary Star Research Suite
-*The goal of v1.0 is to be a world-class open-source tool for the validation, analysis, and observation planning of visual double stars.*
+*Binary star validation, analysis, and observation planning tool.*
 
-**Core Architecture & Data Layer (`[ ]` In Progress)**
-- [x] Establish professional project structure with `pyproject.toml`.
-- [ ] **Data Source Abstraction:** Define a modular `DataSource` interface.
-- [ ] **Local Source:** Implement robust, fixed-width parsers for offline **WDS** and **ORB6** catalogs.
-- [ ] **Web Source:** Implement a web-scraping source for up-to-date data.
-- [ ] **Catalog Hub:** Implement cross-matching and **SIMBAD** name resolution.
+**Core Architecture & Data Layer**
+- [x] **Data Source Abstraction:** Modular `DataSource` interface implemented
+- [x] **Local Source:** Parsers for offline **WDSS** and **ORB6** catalogs  
+- [x] **Catalog Hub:** Cross-matching and **SIMBAD** name resolution
 
-**Scientific Engine (`[x]` Core Complete)**
-- [x] **Kepler's Equation Solver:** Implement a high-precision, robust numerical solver with a hybrid initial guess strategy.
-- [x] **Orbital Prediction:** Predict precise ephemerides (PA/Sep) from orbital elements.
-- [x] **Dynamics Analysis:** Calculate apparent motion vectors (`v_total`, `PA_v`).
-- [x] **Observation Priority Index (OPI):** Implement the OPI to rank targets based on orbital deviation.
-- [ ] **Physicality Validation:** Fully integrate **Gaia** parallax and proper motion checks.
-- [ ] **Mass Calculation:** Implement dynamic mass calculation using Kepler's Third Law.
+**Engine**
+- [x] **Kepler's Equation Solver:** High-precision numerical solver with hybrid initial guess strategy
+- [x] **Orbital Prediction:** Precise ephemerides (PA/Sep) from orbital elements
+- [x] **Dynamics Analysis:** Apparent motion vectors (`v_total`, `PA_v`) with endpoint method
+- [x] **Observation Priority Index (OPI):** Complete implementation for ranking orbital deviations
+- [x] **Physicality Validation:** Fully integrated **Gaia DR3** parallax and proper motion validation
+- [ ] **Mass Calculation:** Dynamic mass calculation using Kepler's Third Law
 
-**User Interfaces & Workflow (`[ ]` In Progress)**
-- [x] **Planner (GUI):** Core functionality for location, date, and local conditions (sun/moon) is implemented.
-- [ ] Refine Planner GUI to display generated target lists directly.
-- [x] **Analyzer (CLI):** Core functionality for batch processing from CSV is implemented.
-- [ ] Refine Analyzer CLI with comprehensive report generation and CSV export.
+**User Interfaces & Workflow**
+- [x] **Planner (GUI):** Complete interface with location selection, twilight calculations, and CSV analysis
+- [x] **Analyzer (CLI):** Full batch processing with report generation and export
+- [x] **Features:** Velocity analysis, high-motion detection, and multi-format export
 
-**Project Quality & Publication (`[ ]` To Do)**
-- [ ] Achieve >80% test coverage with `pytest`.
-- [ ] Configure and pass a Continuous Integration (CI) workflow with GitHub Actions.
-- [ ] Write comprehensive user tutorials and API reference documentation with Sphinx.
-- [ ] **Submit v1.0 manuscript to a suitable journal (e.g., JOSS).**
+**Project Quality**
+- [x] Test coverage with `pytest` (>80% of functions tested)
+- [x] Error handling and file processing
+- [x] Documentation with proper citations and methodology  
+- [ ] Configure Continuous Integration (CI) workflow with GitHub Actions
+- [ ] Complete API reference documentation with Sphinx
 
 ---
 
-### v2.0 & Beyond: The Time-Domain Astrophysics Framework
+### v2.0 & Beyond: The Time-Domain Astrophysics Framework 🔮
 *Expand AstraKairos into a general-purpose platform for time-domain astrophysics.*
 
-- [ ] **Variable Stars Module:**
-    - [ ] Integrate with the AAVSO VSX catalog and predict minima/maxima.
-    - [ ] Implement a "Comparison Star Finder" tool.
-    - [ ] Add time-series analysis tools (e.g., Lomb-Scargle Periodogram).
-- [ ] **Advanced Analysis & Visualization:**
-    - [ ] Implement an **Orbit Fitting Engine** (e.g., using MCMC) to derive new orbits.
-    - [ ] Implement a **Universal Variable Solver** for parabolic/hyperbolic orbits (comets, interstellar objects).
-    - [ ] Add a **Statistical Analysis Module** with error propagation for all calculations.
-    - [ ] Create an advanced visualization suite with interactive plots and sky-chart overlays.
-- [ ] **Asteroid/Comet Module:** Add tools for orbit determination and ephemeris prediction.
+**Variable Stars Module:**
+- [ ] **AAVSO VSX Integration:** Automatic period prediction and minima/maxima calculations
+- [ ] **Comparison Star Finder:** Automated selection of photometric comparison stars  
+- [ ] **Time-Series Analysis:** Lomb-Scargle periodograms and phase-folding tools
+- [ ] **Light Curve Modeling:** Template fitting for eclipsing binaries and pulsating variables
+
+**Analysis & Visualization:**
+- [ ] **MCMC Orbit Fitting:** Bayesian orbit determination with uncertainty quantification
+- [ ] **Universal Solver:** Support for parabolic/hyperbolic orbits (comets, interstellar objects)
+- [ ] **Statistical Framework:** Complete error propagation and uncertainty analysis
+- [ ] **Interactive Visualization:** 3D orbit displays and sky chart overlays with real-time updates
+
+**Minor Planet Module:** 
+- [ ] **Asteroid ephemeris:** Integration with MPC database for accurate position predictions
+- [ ] **Orbit determination:** Least-squares and differential correction algorithms
+- [ ] **Discovery tools:** Automated moving object detection in image sequences
 
 ## Contributing
 
@@ -117,15 +190,21 @@ Contributions are welcome! Whether you're reporting a bug, proposing a new featu
 
 ## Acknowledgements & Transparency Notice
 
-This project would not be possible without the foundational work of the astronomical community and the availability of open data.
+This project builds upon the foundational work of the astronomical community and the availability of open data.
 
-Special thanks to the creators and maintainers of **Stelle Doppie** for providing a wonderfully accessible, centralized resource for astronomical data. We also extend our gratitude to the **U.S. Naval Observatory (USNO)** for their tireless curation of the **Washington Double Star (WDS) Catalog** and the **Sixth Catalog of Orbits of Visual Binary Stars (ORB6)**, which form the backbone of this work. This research has made use of the **Gaia** data from the European Space Agency (ESA) mission, processed by the Gaia Data Processing and Analysis Consortium (DPAC).
+**Special recognition to:**
+- **U.S. Naval Observatory (USNO)** for curation of the **Washington Double Star (WDS) Catalog**, the **Washington Double Star Supplemental (WDSS) Catalog**, and the **Sixth Catalog of Orbits of Visual Binary Stars (ORB6)**
+- **Stelle Doppie** project for providing accessible, centralized astronomical data resources
+- **ESA Gaia Mission** and the **Gaia Data Processing and Analysis Consortium (DPAC)** for astrometric data
+- **Stellarium project** for the observatory location database used in `/locations.json`
 
-The locations found at /locations.json are derived from **Stellarium**'s location database. Thanks to them too!
+**Software foundation:**
+This project leverages the Python ecosystem, particularly **NumPy**, **SciPy**, **Pandas**, **Astropy**, **Skyfield**, and **AstroQuery**.
 
-This project also stands on the shoulders of giants in the open-source scientific Python ecosystem, including **NumPy**, **SciPy**, **Pandas**, **Astropy**, and **Skyfield**.
+Additionally, this project was developed with the assistance of AI-powered tools such as OpenAI's ChatGPT. These tools were used for tasks including generating boilerplate code, debugging algorithms, and writing/translating documentation. All AI-assisted output was carefully reviewed, tested, and adapted by the human author to ensure its viability and correctness for real-world research environments.
 
-Additionally, this project was developed with the assistance of AI-powered tools such as OpenAI's **ChatGPT**. These tools were used for tasks including generating boilerplate code, debugging algorithms, and writing/translating documentation. All AI-assisted output was carefully reviewed, tested, and adapted by the human author to ensure its viability and correctness for real-world research environments.
+**Methodology:**
+All astronomical calculations implement peer-reviewed algorithms with proper citations. Ephemeris calculations use JPL DE421, twilight calculations follow standard astronomical definitions, and sky brightness modeling implements the Krisciunas & Schaefer (1991) lunar scattering model.
 
 ## License
 
