@@ -50,12 +50,18 @@ def load_csv_data(filepath: str) -> pd.DataFrame:
     for encoding in encodings_to_try:
         try:
             log.info(f"Attempting to read CSV with encoding: {encoding}")
-            # Let pandas handle delimiter detection automatically
-            df = pd.read_csv(filepath, sep=None, engine='python', encoding=encoding)
-            
-            # Validate that required 'wds_id' column exists
-            if 'wds_id' not in df.columns:
-                raise DataLoadError(f"Required 'wds_id' column not found in {filepath}")
+            # Try first with automatic delimiter detection
+            try:
+                df = pd.read_csv(filepath, sep=None, engine='python', encoding=encoding)
+                # Validate that required 'wds_id' column exists
+                if 'wds_id' not in df.columns:
+                    raise ValueError("wds_id column not found with automatic delimiter detection")
+            except (ValueError, Exception):
+                # Fallback to comma delimiter for single-column files
+                df = pd.read_csv(filepath, sep=',', encoding=encoding)
+                # Validate that required 'wds_id' column exists
+                if 'wds_id' not in df.columns:
+                    raise DataLoadError(f"Required 'wds_id' column not found in {filepath}")
             
             log.info(f"CSV loaded successfully. Rows: {len(df)}, Encoding: {encoding}")
             return df

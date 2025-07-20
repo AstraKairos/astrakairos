@@ -68,16 +68,24 @@ class LocalDataSource(DataSource):
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tables = {row[0] for row in cursor.fetchall()}
         
-        required_tables = {'wds_summary', 'orbital_elements'}
-        missing_tables = required_tables - tables
+        # Check for either WDSS format or traditional WDS format
+        has_wdss = 'wdss_summary' in tables
+        has_wds = 'wds_summary' in tables
+        has_orbital = 'orbital_elements' in tables
         
-        if missing_tables:
-            raise sqlite3.Error(f"Database missing required tables: {missing_tables}")
+        if not (has_wdss or has_wds):
+            raise sqlite3.Error(f"Database missing summary table: need either 'wdss_summary' or 'wds_summary'")
+        
+        if not has_orbital:
+            raise sqlite3.Error(f"Database missing required table: 'orbital_elements'")
+        
+        # Set the table name to use for queries
+        self.summary_table = 'wdss_summary' if has_wdss else 'wds_summary'
         
         # Check if measurements table exists (optional)
         self.has_measurements = 'measurements' in tables
         
-        log.info(f"Database verified. Has measurements: {self.has_measurements}")
+        log.info(f"Database verified. Using {self.summary_table}. Has measurements: {self.has_measurements}")
 
     def close(self) -> None:
         """Close database connection."""
@@ -114,10 +122,12 @@ class LocalDataSource(DataSource):
         
         try:
             cursor = self.conn.execute(
-                """SELECT wds_id, discoverer, components, date_first, date_last, 
-                          obs as n_observations, pa_first, pa_last, sep_first, sep_last, 
-                          mag_pri, mag_sec, spec_type, ra_deg, dec_deg 
-                   FROM wds_summary WHERE wds_id = ?""",
+                f"""SELECT wds_id, discoverer_designation as discoverer, '' as components, 
+                          date_first, date_last, n_obs as n_observations, 
+                          pa_first, pa_last, sep_first, sep_last, 
+                          vmag as mag_pri, kmag as mag_sec, spectral_type as spec_type, ra_deg, dec_deg,
+                          wdss_id, discoverer_designation
+                   FROM {self.summary_table} WHERE wds_id = ?""",
                 (normalized_id,)
             )
             
@@ -157,16 +167,29 @@ class LocalDataSource(DataSource):
         normalized_id = wds_id.strip()
         
         try:
-            cursor = self.conn.execute(
-                "SELECT wds_id, epoch, theta, rho FROM measurements WHERE wds_id = ? ORDER BY epoch",
+            # First get the wdss_id for this wds_id
+            wdss_cursor = self.conn.execute(
+                f"SELECT wdss_id FROM {self.summary_table} WHERE wds_id = ?",
                 (normalized_id,)
+            )
+            wdss_row = wdss_cursor.fetchone()
+            
+            if not wdss_row:
+                return None
+                
+            wdss_id = wdss_row['wdss_id']
+            
+            # Now get measurements using wdss_id
+            cursor = self.conn.execute(
+                "SELECT wdss_id, epoch, theta, rho FROM measurements WHERE wdss_id = ? ORDER BY epoch",
+                (wdss_id,)
             )
             
             rows = cursor.fetchall()
             if rows:
                 # Convert to astropy table
                 data = {
-                    'wds_id': [row['wds_id'] for row in rows],
+                    'wds_id': [normalized_id] * len(rows),  # Use normalized wds_id
                     'epoch': [row['epoch'] for row in rows],
                     'theta': [row['theta'] for row in rows],
                     'rho': [row['rho'] for row in rows]
@@ -192,7 +215,7 @@ class LocalDataSource(DataSource):
         
         try:
             cursor = self.conn.execute(
-                "SELECT wds_id, P, a, i, Omega, T, e, omega_arg as omega FROM orbital_elements WHERE wds_id = ?",
+                "SELECT wds_id, P, a, i, Omega, T, e, omega_arg as argument_of_periastron FROM orbital_elements WHERE wds_id = ?",
                 (normalized_id,)
             )
             
@@ -200,6 +223,10 @@ class LocalDataSource(DataSource):
             if row:
                 # Convert row to dict and filter None values
                 data = {k: v for k, v in dict(row).items() if v is not None}
+                
+                # Rename argument_of_periastron back to omega for OrbitalElements
+                if 'argument_of_periastron' in data:
+                    data['omega'] = data.pop('argument_of_periastron')
                 
                 # Validate against OrbitalElements schema
                 valid_fields = {k: v for k, v in data.items() 
@@ -255,9 +282,9 @@ class LocalDataSource(DataSource):
         try:
             stats = {}
             
-            # WDS summary count
-            cursor = self.conn.execute("SELECT COUNT(*) FROM wds_summary")
-            stats['wds_summary_count'] = cursor.fetchone()[0]
+            # Summary table count
+            cursor = self.conn.execute(f"SELECT COUNT(*) FROM {self.summary_table}")
+            stats[f'{self.summary_table}_count'] = cursor.fetchone()[0]
             
             # Orbital elements count
             cursor = self.conn.execute("SELECT COUNT(*) FROM orbital_elements")
@@ -268,7 +295,7 @@ class LocalDataSource(DataSource):
                 cursor = self.conn.execute("SELECT COUNT(*) FROM measurements")
                 stats['measurements_count'] = cursor.fetchone()[0]
                 
-                cursor = self.conn.execute("SELECT COUNT(DISTINCT wds_id) FROM measurements")
+                cursor = self.conn.execute("SELECT COUNT(DISTINCT wdss_id) FROM measurements")
                 stats['systems_with_measurements'] = cursor.fetchone()[0]
             
             return stats
@@ -287,7 +314,7 @@ class LocalDataSource(DataSource):
             List of WDS identifiers
         """
         try:
-            query = "SELECT wds_id FROM wds_summary ORDER BY wds_id"
+            query = f"SELECT wds_id FROM {self.summary_table} ORDER BY wds_id"
             if limit:
                 query += f" LIMIT {limit}"
             

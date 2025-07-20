@@ -42,6 +42,11 @@ WDS_COORDINATE_PATTERN = r'^[0-9]{5}[+-][0-9]{4}([A-Z]{1,3})?$'
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
+# Validation Logging Control
+ENABLE_VALIDATION_WARNINGS = True  # Set to False to reduce spam
+VALIDATION_WARNING_SAMPLE_RATE = 0.01  # Log only 1% of validation warnings
+ALLOW_SINGLE_EPOCH_SYSTEMS = True  # Allow systems with date_first == date_last
+
 # I/O Configuration
 CSV_SNIFFER_SAMPLE_SIZE = 2048  # bytes
 DEFAULT_COORDINATE_PRECISION = 2  # decimal places for coordinate display

@@ -40,7 +40,7 @@ A command-line tool that analyzes star catalogs to find high-priority targets:
 ### 🔧 **Data Handling**
 - **Multiple export formats:** CSV, JSON, LaTeX tables with metadata
 - **File processing:** Handles various encodings and CSV formats with error handling
-- **Modular data sources:** Local catalogs (WDS, ORB6) or real-time web scraping
+- **Modular data sources:** Local catalogs (WDSS, ORB6) or real-time web scraping
 - **Orbital Prediction Engine:** Implements Kepler's equation solver to predict future positions of stars in known orbits
 - **Modular Data Sources:** Can operate using local, offline catalogs (for performance and reproducibility) or by scraping up-to-date web sources
 
@@ -103,7 +103,7 @@ python main.py analyzer targets.csv --source web --mode discovery --limit 10 --s
 
 For analysis with local catalogs:
 ```bash
-python main.py analyzer targets.csv --source local --wds-file wds.txt --orb6-file orb6.txt --mode orbital --validate-gaia
+python main.py analyzer targets.csv --source local --wdss-summary wdss.txt --orb6-file orb6.txt --mode orbital --validate-gaia
 ```
 
 **Analysis modes:**
@@ -125,7 +125,7 @@ The development of AstraKairos is phased to deliver a valuable tool at each stag
 
 **Core Architecture & Data Layer**
 - [x] **Data Source Abstraction:** Modular `DataSource` interface implemented
-- [x] **Local Source:** Parsers for offline **WDS**, **WDSS**, and **ORB6** catalogs  
+- [x] **Local Source:** Parsers for offline **WDSS** and **ORB6** catalogs  
 - [x] **Web Source:** VizieR integration
 - [x] **Catalog Hub:** Cross-matching and **SIMBAD** name resolution
 

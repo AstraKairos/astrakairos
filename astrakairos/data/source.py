@@ -40,7 +40,9 @@ class ValidationMethod(Enum):
 
 class WdsSummary(TypedDict, total=False):
     """Data structure for a single-line entry from the WDS summary catalog."""
-    wds_id: str
+    wds_id: str            # Primary WDS identifier
+    discoverer: str        # Discoverer designation  
+    components: str        # Component designations (e.g., "AB", "A,B,C")
     ra_deg: float
     dec_deg: float
     date_first: float
@@ -52,6 +54,9 @@ class WdsSummary(TypedDict, total=False):
     sep_last: float
     mag_pri: float
     mag_sec: float
+    spec_type: str         # Spectral type
+    wdss_id: str          # Original WDSS ID for reference (WDSS only)
+    discoverer_designation: str # Full discoverer designation (WDSS only)
 
 class OrbitalElements(TypedDict, total=False):
     """Data structure for complete Keplerian orbital elements with uncertainties."""

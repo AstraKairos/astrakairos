@@ -3,6 +3,7 @@ import asyncio
 import sys
 import pandas as pd
 import logging
+import random
 from typing import List, Dict, Any, Optional, Callable
 import functools
 from astropy.time import Time
@@ -25,7 +26,8 @@ from ..config import (
     MIN_EPOCH_YEAR, MAX_EPOCH_YEAR, MIN_SEPARATION_ARCSEC, MAX_SEPARATION_ARCSEC,
     MIN_POSITION_ANGLE_DEG, MAX_POSITION_ANGLE_DEG,
     DEFAULT_ANALYSIS_MODE, AVAILABLE_ANALYSIS_MODES, DEFAULT_SORT_KEYS,
-    AMBIGUOUS_P_VALUE_RATIO
+    AMBIGUOUS_P_VALUE_RATIO, ENABLE_VALIDATION_WARNINGS, 
+    VALIDATION_WARNING_SAMPLE_RATE, ALLOW_SINGLE_EPOCH_SYSTEMS
 )
 
 # CLI-specific display constants
@@ -37,6 +39,10 @@ METRIC_COLUMN_WIDTH = 25
 log = logging.getLogger(__name__)
 
 # Helper Functions
+def _should_log_validation_warning() -> bool:
+    """Determine if a validation warning should be logged based on sampling rate."""
+    return ENABLE_VALIDATION_WARNINGS and random.random() < VALIDATION_WARNING_SAMPLE_RATE
+
 def _validate_wds_summary_for_analysis(wds_summary: WdsSummary) -> bool:
     """
     Validate WDS summary data for analysis.
@@ -44,7 +50,7 @@ def _validate_wds_summary_for_analysis(wds_summary: WdsSummary) -> bool:
     Performs validation of WDS summary data including:
     - Required field presence
     - Value range validation
-    - Temporal consistency checks
+    - Temporal consistency checks (relaxed for WDSS single-epoch systems)
     
     Args:
         wds_summary: WDS summary data to validate
@@ -52,42 +58,65 @@ def _validate_wds_summary_for_analysis(wds_summary: WdsSummary) -> bool:
     Returns:
         bool: True if data is valid for analysis, False otherwise
     """
-    required_fields = ['date_first', 'date_last', 'pa_first', 'pa_last', 'sep_first', 'sep_last']
+    # Minimal required fields for any analysis
+    essential_fields = ['wds_id', 'date_first']
     
-    # Check required fields exist and are not None
-    for field in required_fields:
+    # Check essential fields exist and are not None
+    for field in essential_fields:
         if field not in wds_summary or wds_summary[field] is None:
-            log.warning(f"Missing required field: {field}")
+            if _should_log_validation_warning():
+                log.warning(f"Missing essential field: {field}")
             return False
     
-    # Value range validation
-    if not (MIN_EPOCH_YEAR <= wds_summary['date_first'] <= MAX_EPOCH_YEAR):
-        log.warning(f"Invalid first epoch: {wds_summary['date_first']}")
-        return False
-    if not (MIN_EPOCH_YEAR <= wds_summary['date_last'] <= MAX_EPOCH_YEAR):
-        log.warning(f"Invalid last epoch: {wds_summary['date_last']}")
-        return False
-    if wds_summary['date_first'] >= wds_summary['date_last']:
-        log.warning(f"Invalid epoch sequence: {wds_summary['date_first']} >= {wds_summary['date_last']}")
+    # Value range validation for existing fields
+    if wds_summary.get('date_first') and not (MIN_EPOCH_YEAR <= wds_summary['date_first'] <= MAX_EPOCH_YEAR):
+        if _should_log_validation_warning():
+            log.warning(f"Invalid first epoch: {wds_summary['date_first']}")
         return False
     
-    # Separation validation
-    if not (MIN_SEPARATION_ARCSEC <= wds_summary['sep_first'] <= MAX_SEPARATION_ARCSEC):
-        log.warning(f"Invalid first separation: {wds_summary['sep_first']}")
-        return False
-    if not (MIN_SEPARATION_ARCSEC <= wds_summary['sep_last'] <= MAX_SEPARATION_ARCSEC):
-        log.warning(f"Invalid last separation: {wds_summary['sep_last']}")
+    if wds_summary.get('date_last') and not (MIN_EPOCH_YEAR <= wds_summary['date_last'] <= MAX_EPOCH_YEAR):
+        if _should_log_validation_warning():
+            log.warning(f"Invalid last epoch: {wds_summary['date_last']}")
         return False
     
-    # Position angle validation (normalized to 0-360)
-    pa_first = wds_summary['pa_first'] % 360
-    pa_last = wds_summary['pa_last'] % 360
-    if not (MIN_POSITION_ANGLE_DEG <= pa_first <= MAX_POSITION_ANGLE_DEG):
-        log.warning(f"Invalid first position angle: {pa_first}")
+    # Temporal consistency check - only if both dates exist
+    if wds_summary.get('date_first') and wds_summary.get('date_last'):
+        if ALLOW_SINGLE_EPOCH_SYSTEMS:
+            # For single epoch systems, allow date_first == date_last
+            if wds_summary['date_first'] > wds_summary['date_last']:
+                if _should_log_validation_warning():
+                    log.warning(f"Invalid epoch sequence: {wds_summary['date_first']} > {wds_summary['date_last']}")
+                return False
+        else:
+            # Original strict validation
+            if wds_summary['date_first'] >= wds_summary['date_last']:
+                if _should_log_validation_warning():
+                    log.warning(f"Invalid epoch sequence: {wds_summary['date_first']} >= {wds_summary['date_last']}")
+                return False
+    
+    # Separation validation - only if fields exist
+    if wds_summary.get('sep_first') and not (MIN_SEPARATION_ARCSEC <= wds_summary['sep_first'] <= MAX_SEPARATION_ARCSEC):
+        if _should_log_validation_warning():
+            log.warning(f"Invalid first separation: {wds_summary['sep_first']}")
         return False
-    if not (MIN_POSITION_ANGLE_DEG <= pa_last <= MAX_POSITION_ANGLE_DEG):
-        log.warning(f"Invalid last position angle: {pa_last}")
+    if wds_summary.get('sep_last') and not (MIN_SEPARATION_ARCSEC <= wds_summary['sep_last'] <= MAX_SEPARATION_ARCSEC):
+        if _should_log_validation_warning():
+            log.warning(f"Invalid last separation: {wds_summary['sep_last']}")
         return False
+    
+    # Position angle validation - only if fields exist (normalized to 0-360)
+    if wds_summary.get('pa_first'):
+        pa_first = wds_summary['pa_first'] % 360
+        if not (MIN_POSITION_ANGLE_DEG <= pa_first <= MAX_POSITION_ANGLE_DEG):
+            if _should_log_validation_warning():
+                log.warning(f"Invalid first position angle: {pa_first}")
+            return False
+    if wds_summary.get('pa_last'):
+        pa_last = wds_summary['pa_last'] % 360
+        if not (MIN_POSITION_ANGLE_DEG <= pa_last <= MAX_POSITION_ANGLE_DEG):
+            if _should_log_validation_warning():
+                log.warning(f"Invalid last position angle: {pa_last}")
+            return False
     
     return True
 
@@ -121,8 +150,6 @@ def _calculate_search_radius(wds_summary: WdsSummary, cli_args: argparse.Namespa
         return radius
     
     return DEFAULT_GAIA_MIN_RADIUS
-
-# Analysis Functions
 
 # Analysis Functions
 
@@ -216,7 +243,8 @@ async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_s
         # Get orbital elements (required for this mode)
         orbital_elements = await data_source.get_orbital_elements(wds_id)
         if not orbital_elements:
-            log.warning(f"No orbital elements found for {wds_id}")
+            if _should_log_validation_warning():
+                log.warning(f"No orbital elements found for {wds_id}")
             return None
         
         # Calculate OPI
@@ -236,7 +264,15 @@ async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_s
         try:
             all_measurements = await data_source.get_all_measurements(wds_id)
             if all_measurements and len(all_measurements) >= 3:
-                curvature_index = calculate_curvature_index(all_measurements, orbital_elements)
+                # PASO 1: Calcular el modelo lineal primero
+                linear_fit_results = calculate_robust_linear_fit(all_measurements)
+                if linear_fit_results:
+                    # PASO 2: Comparar modelo orbital vs lineal
+                    curvature_index = calculate_curvature_index(
+                        orbital_elements, 
+                        linear_fit_results, 
+                        current_year
+                    )
         except Exception as e:
             log.debug(f"Curvature calculation failed for {wds_id}: {e}")
         
@@ -330,7 +366,8 @@ async def process_star(row: pd.Series,
 
             # Validate data
             if not _validate_wds_summary_for_analysis(wds_summary):
-                log.warning(f"Invalid WDS data for {wds_id}")
+                if _should_log_validation_warning():
+                    log.warning(f"Invalid WDS data for {wds_id}")
                 return None
 
             # Initialize result with common fields
@@ -338,7 +375,7 @@ async def process_star(row: pd.Series,
                 'wds_id': wds_id,
                 'mode': cli_args.mode,
                 'obs_wds': wds_summary.get('obs'),
-                'date_last': wds_summary['date_last'],
+                'date_last': wds_summary.get('date_last', wds_summary.get('date_first')),
             }
 
             # 2. Mode-specific analysis using specialized functions
@@ -407,8 +444,11 @@ Examples:
     )
     
     # Positional arguments
-    parser.add_argument('input_file', 
-                       help='CSV file containing star list with wds_id column')
+    parser.add_argument('input_file', nargs='?', default=None,
+                    help='CSV file with wds_id column. Omit if using --all.')
+
+    parser.add_argument('--all', action='store_true',
+                    help='Analyze all systems in the local database.')
     
     # Data source options
     parser.add_argument('--source', 
@@ -487,49 +527,69 @@ async def main_async(args: argparse.Namespace):
     6. Sorting and presenting the final results.
     """
     # Configure logging
-    logging.basicConfig(level=logging.INFO)
-    
-    # 1. Load and filter input data from CSV
-    log.info(f"Loading data from: {args.input_file}")
-    try:
-        df = load_csv_data(args.input_file)
-    except Exception as e:
-        log.error(f"Could not load or parse the input file '{args.input_file}': {e}")
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # 1. Set up the data source (se mueve aquí para usarlo en la carga de datos)
+    data_source: DataSource
+    if args.source == 'local':
+        if not args.database_path:
+            log.error("--database-path is required for local source.")
+            log.error("Run: python scripts/convert_catalogs_to_sqlite.py to create the database first.")
+            sys.exit(1)
+        data_source = LocalDataSource(database_path=args.database_path)
+    else:  # 'web' source
+        if args.all:
+            log.error("--all flag is only supported with --source local.")
+            sys.exit(1)
+        data_source = OnlineDataSource()
+
+    # 2. Determine target list (from file or --all flag)
+    df_targets = None
+    if args.all:
+        if args.input_file:
+            log.warning("Ignoring input_file because --all flag was specified.")
+        
+        log.info("Fetching all WDS IDs from the local database...")
+
+        all_ids = data_source.get_all_wds_ids()
+        if not all_ids:
+            log.error("Could not retrieve any WDS IDs from the database.")
+            sys.exit(1)
+        df_targets = pd.DataFrame(all_ids, columns=['wds_id'])
+        log.info(f"Found {len(df_targets)} total systems to analyze.")
+
+    elif args.input_file:
+        log.info(f"Loading data from: {args.input_file}")
+        try:
+            df_targets = load_csv_data(args.input_file)
+        except Exception as e:
+            log.error(f"Could not load or parse the input file '{args.input_file}': {e}")
+            sys.exit(1)
+    else:
+        log.error("You must specify either an input_file or the --all flag.")
         sys.exit(1)
-    
+
     # Verify required wds_id column exists
-    if 'wds_id' not in df.columns:
-        log.error("Input file must contain a 'wds_id' column")
+    if 'wds_id' not in df_targets.columns:
+        log.error("Input data must contain a 'wds_id' column.")
         sys.exit(1)
         
     # Filter by minimum number of observations if the column exists
-    if 'obs' in df.columns and args.min_obs > 0:
-        df_filtered = df[df['obs'] >= args.min_obs].copy()
-        log.info(f"Filtered to {len(df_filtered)} stars with >= {args.min_obs} observations")
+    if 'obs' in df_targets.columns and args.min_obs > 0:
+        df_filtered = df_targets[df_targets['obs'] >= args.min_obs].copy()
+        log.info(f"Filtered to {len(df_filtered)} stars with >= {args.min_obs} observations.")
     else:
-        df_filtered = df.copy()
+        df_filtered = df_targets.copy()
     
     # Apply limit to the number of stars to process if specified
     if args.limit:
         df_filtered = df_filtered.head(args.limit)
-        log.info(f"Limited to processing a maximum of {len(df_filtered)} stars")
+        log.info(f"Limiting analysis to a maximum of {len(df_filtered)} stars.")
     
     if df_filtered.empty:
         log.warning("No stars to process after filtering. Exiting.")
         return
 
-    # 2. Set up the data source
-    data_source: DataSource
-    if args.source == 'local':
-        if not args.database_path:
-            log.error("--database-path is required for local source")
-            log.error("Run: python scripts/convert_catalogs_to_sqlite.py to create the database first")
-            sys.exit(1)
-            
-        data_source = LocalDataSource(database_path=args.database_path)
-    else:  # 'web' source
-        data_source = OnlineDataSource()
-    
     # 3. Initialize the Gaia validator if requested
     gaia_validator = None
     if args.validate_gaia:
@@ -549,7 +609,7 @@ async def main_async(args: argparse.Namespace):
     
     try:
         # 5. Run the concurrent analysis
-        log.info(f"Processing {len(df_filtered)} stars with up to {args.concurrent} concurrent tasks")
+        log.info(f"Processing {len(df_filtered)} stars with up to {args.concurrent} concurrent tasks...")
         results = await analyze_stars(df_filtered, configured_process_star, args.concurrent)
         
         # 6. Sort and present the results
@@ -558,15 +618,9 @@ async def main_async(args: argparse.Namespace):
             sort_key = args.sort_by if args.sort_by else DEFAULT_SORT_KEYS[args.mode]
             log.info(f"Sorting results by: {sort_key}")
             
-            # Handle different sorting requirements
-            if sort_key == 'opi_arcsec_yr':
-                # For OPI, None values should go to the end
-                results_sorted = sorted(results, key=lambda x: x.get(sort_key, -1) or -1, reverse=True)
-            else:
-                # For other numeric fields, use standard sorting
-                results_sorted = sorted(results, 
-                                      key=lambda x: x.get(sort_key, 0) if x.get(sort_key) is not None else 0, 
-                                      reverse=True)
+            results_sorted = sorted(results, 
+                                  key=lambda x: x.get(sort_key, -1) or -1, 
+                                  reverse=True)
             
             # Display summary in the console
             print("\n" + "=" * DISPLAY_LINE_WIDTH)
@@ -595,14 +649,14 @@ async def main_async(args: argparse.Namespace):
                 save_results_to_csv(results_sorted, args.output)
                 log.info(f"Results saved to {args.output}")
         else:
-            log.warning("No stars were successfully processed")
+            log.warning("No stars were successfully processed.")
             
     finally:
         # 7. Clean up resources
-        if args.source == 'local' and 'data_source' in locals():
+        if args.source == 'local' and 'data_source' in locals() and hasattr(data_source, 'close'):
             try:
                 data_source.close()
-                log.debug("Local database connection closed")
+                log.debug("Local database connection closed.")
             except Exception as e:
                 log.warning(f"Error closing local database connection: {e}")
 

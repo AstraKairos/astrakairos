@@ -5,6 +5,7 @@ Provides tools for:
 - Observation Priority Index (OPI): Quantifies orbital solution degradation rate
 - Robust linear fitting: Theil-Sen regression for outlier-resistant motion analysis  
 - Curvature index: Measures deviation between orbital and linear motion models
+- Total observed angular velocity: Two-point velocity estimate for sparse data scenarios
 
 Functions return None for invalid inputs rather than raising exceptions.
 All validation thresholds are sourced from centralized configuration.
@@ -71,9 +72,10 @@ def calculate_observation_priority_index(
     if not orbital_elements or not wds_summary:
         return None
         
-    t_last_obs = wds_summary.get('date_last')
-    theta_last_obs_deg = wds_summary.get('pa_last')
-    rho_last_obs = wds_summary.get('sep_last')
+    # Get observation data with fallback to first observation if last is not available
+    t_last_obs = wds_summary.get('date_last') or wds_summary.get('date_first')
+    theta_last_obs_deg = wds_summary.get('pa_last') or wds_summary.get('pa_first')
+    rho_last_obs = wds_summary.get('sep_last') or wds_summary.get('sep_first')
 
     if None in [t_last_obs, theta_last_obs_deg, rho_last_obs]:
         return None
@@ -302,9 +304,10 @@ def estimate_velocity_from_endpoints(
     wds_summary: WdsSummary
 ) -> Optional[Dict[str, Any]]:
     """
-    Calculates velocity estimate using only the first and last observations.
+    Calculates velocity estimate (aka. total observed angular velocity) using 
+    only the first and last observations.
     
-    This is a fallback method for when insufficient measurements are available
+    This is a method for when insufficient measurements are available
     for robust analysis. It provides a simple two-point velocity estimate
     with proper validation using framework configuration.
     

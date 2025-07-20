@@ -66,77 +66,326 @@ def detect_wds_format(filepath: str) -> dict:
     return format_info
 
 
-def parse_wds_summary_catalog(filepath: str) -> pd.DataFrame:
-    """Parse WDS summary catalog with robust error handling."""
-    log.info(f"Parsing WDS summary catalog: {filepath}")
+def parse_wdss_master_catalog(filepath: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Parse WDSS master catalog into three clean DataFrames using optimized approach.
     
-    # Configurable column specifications
-    colspecs = [
-        (0, 10),    # wds_id
-        (10, 17),   # discoverer
-        (17, 22),   # components
-        (23, 27),   # date_first
-        (28, 32),   # date_last
-        (33, 37),   # obs
-        (38, 41),   # pa_first
-        (42, 45),   # pa_last
-        (46, 51),   # sep_first
-        (52, 57),   # sep_last
-        (58, 63),   # mag_pri
-        (64, 69),   # mag_sec
-        (70, 79),   # spec_type
-        (112, 130)  # precise_coords_str
-    ]
+    This function reads the master WDSS file once and extracts all data types efficiently.
     
-    names = [
-        'wds_id', 'discoverer', 'components', 'date_first', 'date_last', 'obs',
-        'pa_first', 'pa_last', 'sep_first', 'sep_last', 'mag_pri', 'mag_sec',
-        'spec_type', 'precise_coords_str'
-    ]
+    Args:
+        filepath: Path to the master WDSS catalog file
+        
+    Returns:
+        Tuple of (df_components, df_measurements, df_correspondence)
+    """
+    log.info(f"Parsing WDSS master catalog: {filepath}")
+    
+    components_data = []
+    measurements_data = []
+    correspondence_data = []
+    
+    # Use a set for fast correspondence lookup instead of list search
+    correspondence_seen = set()
+    
+    total_lines = 0
+    systems_processed = set()
     
     try:
-        df = pd.read_fwf(filepath, colspecs=colspecs, names=names, dtype=str)
-        log.info(f"Read {len(df)} raw entries from WDS summary")
+        with open(filepath, 'r', encoding='latin-1') as f:
+            for line_num, line in enumerate(f, 1):
+                total_lines += 1
+                if total_lines % 100000 == 0:
+                    log.info(f"Processed {total_lines} lines, {len(systems_processed)} systems")
+                
+                # Skip empty lines and headers
+                if not line.strip() or line.startswith('=') or len(line) < 160:
+                    continue
+                
+                # Extract basic identifiers
+                wdss_id = line[0:14].strip()
+                component = line[15:18].strip()
+                
+                if not wdss_id:
+                    continue
+                
+                systems_processed.add(wdss_id)
+                
+                # Parse WDS correspondence efficiently (once per system)
+                wds_correspondence = None
+                discoverer_designation = None
+                if len(line) >= 147:
+                    wds_corr = line[137:147].strip()
+                    if wds_corr and wds_corr != '' and not wds_corr.isspace():
+                        wds_correspondence = wds_corr
+                
+                if len(line) >= 155:
+                    disc_des = line[148:155].strip()
+                    if disc_des and disc_des != '' and not disc_des.isspace():
+                        discoverer_designation = disc_des
+                
+                # Add correspondence mapping using set for O(1) lookup instead of O(N) list search
+                if wds_correspondence and wdss_id not in correspondence_seen:
+                    correspondence_seen.add(wdss_id)
+                    correspondence_data.append({
+                        'wdss_id': wdss_id,
+                        'wds_id': wds_correspondence,
+                        'discoverer_designation': discoverer_designation
+                    })
+                
+                # Determine line type and parse accordingly
+                if component and len(component) == 1 and component.isalpha():
+                    # Component line (A, B, C, etc.)
+                    comp_data = _parse_component_line_data(line, wdss_id, component)
+                    if comp_data:
+                        components_data.append(comp_data)
+                        
+                elif component and len(component) >= 2:
+                    # Measurement line (AB, AC, BC, etc.)
+                    meas_data = _parse_measurement_line_data(line, wdss_id, component)
+                    if meas_data:
+                        measurements_data.append(meas_data)
         
-        # Clean and validate data
-        df.dropna(subset=['wds_id'], inplace=True)
-        df['wds_id'] = df['wds_id'].str.strip()
+        log.info(f"Extracted {len(components_data)} components, {len(measurements_data)} measurements, {len(correspondence_data)} correspondences")
         
-        # Convert numeric columns with error handling
-        numeric_cols = ['date_first', 'date_last', 'obs', 'pa_first', 'pa_last',
-                        'sep_first', 'sep_last', 'mag_pri', 'mag_sec']
+        # Convert to DataFrames efficiently
+        df_components = pd.DataFrame(components_data)
+        df_measurements = pd.DataFrame(measurements_data)
+        df_correspondence = pd.DataFrame(correspondence_data)
         
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # Parse coordinates with validation
-        coords_str = df['precise_coords_str'].fillna('')
-        
-        # Parse RA: HHMMSS.SS
-        ra_str = df['precise_coords_str'].str[:9].str.strip()
-        ra_h = pd.to_numeric(ra_str.str[:2], errors='coerce')
-        ra_m = pd.to_numeric(ra_str.str[2:4], errors='coerce')
-        ra_s = pd.to_numeric(ra_str.str[4:], errors='coerce')
-        df['ra_deg'] = (ra_h + ra_m / 60.0 + ra_s / 3600.0) * 15.0
-        
-        # Parse Dec: +DDMMSS.S or -DDMMSS.S
-        dec_str = df['precise_coords_str'].str[9:].str.strip()
-        dec_sign = np.where(dec_str.str.startswith('-'), -1.0, 1.0)
-        dec_d = pd.to_numeric(dec_str.str[1:3], errors='coerce')
-        dec_m = pd.to_numeric(dec_str.str[3:5], errors='coerce')
-        dec_s = pd.to_numeric(dec_str.str[5:], errors='coerce')
-        df['dec_deg'] = dec_sign * (dec_d + dec_m / 60.0 + dec_s / 3600.0)
-        
-        # Remove duplicate entries (keep most observations)
-        df.sort_values('obs', ascending=False, inplace=True)
-        df.drop_duplicates(subset=['wds_id'], keep='first', inplace=True)
-        
-        log.info(f"Processed {len(df)} valid WDS summary entries")
-        return df
+        log.info(f"Created DataFrames from {total_lines} input lines")
+        return df_components, df_measurements, df_correspondence
         
     except Exception as e:
-        log.error(f"Failed to parse WDS summary catalog: {e}")
+        log.error(f"Failed to parse WDSS master catalog: {e}")
         raise
+
+
+def _parse_component_line_data(line: str, wdss_id: str, component: str) -> dict:
+    """Extract component data from a WDSS component line."""
+    try:
+        # Parse coordinates from line (cols 119-136)
+        coordinates = line[118:136].strip() if len(line) > 136 else ''
+        ra_deg, dec_deg = parse_coordinates(coordinates)
+        
+        # Fallback to WDSS ID coordinates if needed
+        if ra_deg is None or dec_deg is None:
+            ra_deg, dec_deg = parse_wdss_coordinates(wdss_id)
+        
+        return {
+            'wdss_id': wdss_id,
+            'component': component,
+            'date_first': safe_int(line[24:28]),
+            'n_obs': safe_int(line[29:32]),
+            'pa_first': safe_float(line[33:36]),
+            'sep_first': safe_float(line[37:43]),
+            'vmag': safe_float(line[45:50]),
+            'kmag': safe_float(line[52:57]),
+            'spectral_type': line[59:64].strip() if len(line) > 64 else '',
+            'pm_ra': safe_float(line[65:73]) if len(line) > 73 else None,
+            'pm_dec': safe_float(line[73:81]) if len(line) > 81 else None,
+            'parallax': safe_float(line[82:89]) if len(line) > 89 else None,
+            'name': line[90:114].strip() if len(line) > 114 else '',
+            'ra_deg': ra_deg,
+            'dec_deg': dec_deg
+        }
+    except Exception as e:
+        log.debug(f"Error parsing component line: {e}")
+        return None
+
+
+def _parse_measurement_line_data(line: str, wdss_id: str, pair: str) -> dict:
+    """Extract measurement data from a WDSS measurement line."""
+    try:
+        return {
+            'wdss_id': wdss_id,
+            'pair': pair,
+            'epoch': safe_float(line[24:34]),
+            'theta': safe_float(line[36:43]),
+            'rho': safe_float(line[52:61]),
+            'mag1': safe_float(line[72:78]),
+            'mag2': safe_float(line[86:92]),
+            'reference': line[119:127].strip() if len(line) > 127 else '',
+            'technique': line[128:130].strip() if len(line) > 130 else ''
+        }
+    except Exception as e:
+        log.debug(f"Error parsing measurement line: {e}")
+        return None
+
+
+
+
+
+def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.DataFrame, df_correspondence: pd.DataFrame) -> pd.DataFrame:
+    log.info("Generating summary table using vectorized operations")
+
+    # 1. Aggregate measurements using groupby
+    if not df_measurements.empty:
+        agg_measurements = (
+            df_measurements.sort_values(['wdss_id', 'epoch'])
+            .groupby('wdss_id')
+            .agg(
+                date_first=('epoch', 'first'),
+                date_last=('epoch', 'last'),
+                n_obs=('epoch', 'count'),
+                pa_first=('theta', 'first'),
+                pa_last=('theta', 'last'),
+                sep_first=('rho', 'first'),
+                sep_last=('rho', 'last')
+            )
+        )
+    else:
+        agg_measurements = pd.DataFrame(columns=['wdss_id']).set_index('wdss_id')
+
+    # 2. Pivot component data from long to wide format
+    if not df_components.empty:
+        # Select only primary (A) and secondary (B) for simplicity
+        df_ab = df_components[df_components['component'].isin(['A', 'B'])]
+        
+        # Remove duplicates - keep first occurrence of each component per system
+        df_ab = df_ab.drop_duplicates(subset=['wdss_id', 'component'], keep='first')
+        
+        df_wide_components = df_ab.pivot(
+            index='wdss_id', 
+            columns='component', 
+            values=['vmag', 'kmag', 'spectral_type', 'ra_deg', 'dec_deg', 'pm_ra', 'pm_dec', 'parallax', 'name']
+        )
+        # Flatten the multi-level column index
+        df_wide_components.columns = [f'{val}_{comp}' for val, comp in df_wide_components.columns]
+    else:
+        df_wide_components = pd.DataFrame(columns=['wdss_id']).set_index('wdss_id')
+
+    # 3. Merge all data sources together
+    # Start with the aggregated measurements, then join everything else
+    df_summary = agg_measurements
+    df_summary = df_summary.join(df_wide_components, how='outer')
+    df_summary = df_summary.join(df_correspondence.set_index('wdss_id'), how='left')
+
+    df_summary.reset_index(inplace=True)
+
+    # 4. Finalize columns and rename for SQLite schema
+    df_summary.rename(columns={
+        'wds_id': 'wds_correspondence', # from correspondence merge
+        'vmag_A': 'vmag',              # LocalDataSource expects 'vmag as mag_pri'
+        'vmag_B': 'kmag',              # LocalDataSource expects 'kmag as mag_sec'
+        'ra_deg_A': 'ra_deg',
+        'dec_deg_A': 'dec_deg',
+        'spectral_type_A': 'spectral_type',
+        'parallax_A': 'parallax',
+        'pm_ra_A': 'pm_ra',
+        'pm_dec_A': 'pm_dec',
+        'name_A': 'name'
+    }, inplace=True)
+
+    # If wds_correspondence is null, use wdss_id as the primary wds_id
+    df_summary['wds_id'] = df_summary['wds_correspondence'].fillna(df_summary['wdss_id'])
+    
+    # Select final columns to ensure a clean schema
+    final_cols = [
+        'wds_id', 'wdss_id', 'discoverer_designation', 'date_first', 'date_last', 'n_obs',
+        'pa_first', 'pa_last', 'sep_first', 'sep_last', 'vmag', 'kmag',
+        'ra_deg', 'dec_deg', 'spectral_type', 'parallax', 'pm_ra', 'pm_dec', 'name'
+    ]
+    
+    # Add missing columns with NaN if they don't exist
+    for col in final_cols:
+        if col not in df_summary.columns:
+            df_summary[col] = np.nan
+    
+    log.info(f"Generated summary table with {len(df_summary)} systems")
+    return df_summary[final_cols]
+
+def parse_coordinates(coord_str: str) -> tuple:
+    """Parse WDSS coordinate string to decimal degrees."""
+    if not coord_str or len(coord_str) < 17:
+        return None, None
+    
+    try:
+        # RA: hhmmss.ss (positions 0-8)
+        ra_str = coord_str[0:9].strip()
+        if len(ra_str) >= 6:
+            hours = int(ra_str[0:2])
+            minutes = int(ra_str[2:4])
+            seconds = float(ra_str[4:]) if len(ra_str) > 4 else 0.0
+            ra_deg = (hours + minutes/60.0 + seconds/3600.0) * 15.0
+        else:
+            ra_deg = None
+        
+        # Dec: +ddmmss.s (positions 9-17)
+        dec_str = coord_str[9:18].strip()
+        if len(dec_str) >= 6:
+            sign = -1 if dec_str[0] == '-' else 1
+            degrees = int(dec_str[1:3])
+            minutes = int(dec_str[3:5])
+            seconds = float(dec_str[5:]) if len(dec_str) > 5 else 0.0
+            dec_deg = sign * (degrees + minutes/60.0 + seconds/3600.0)
+        else:
+            dec_deg = None
+        
+        return ra_deg, dec_deg
+        
+    except Exception:
+        return None, None
+
+
+def parse_wdss_coordinates(wdss_id: str) -> tuple:
+    """Parse coordinates from WDSS identifier (first 14 chars)."""
+    if not wdss_id or len(wdss_id) < 14:
+        return None, None
+    
+    try:
+        # Format: HHMMSss+DDMMss or HHMMSss-DDMMss
+        coord_part = wdss_id[:14]
+        
+        # Find the sign position
+        sign_pos = -1
+        for i, char in enumerate(coord_part):
+            if char in ['+', '-']:
+                sign_pos = i
+                break
+        
+        if sign_pos == -1:
+            return None, None
+        
+        # Parse RA part (before sign)
+        ra_str = coord_part[:sign_pos]
+        if len(ra_str) >= 6:
+            hours = int(ra_str[0:2])
+            minutes = int(ra_str[2:4])
+            seconds = int(ra_str[4:6]) if len(ra_str) >= 6 else 0
+            ra_deg = (hours + minutes/60.0 + seconds/3600.0) * 15.0
+        else:
+            ra_deg = None
+        
+        # Parse Dec part (after sign)
+        dec_str = coord_part[sign_pos:]
+        if len(dec_str) >= 6:
+            sign = -1 if dec_str[0] == '-' else 1
+            degrees = int(dec_str[1:3])
+            minutes = int(dec_str[3:5])
+            seconds = int(dec_str[5:7]) if len(dec_str) >= 7 else 0
+            dec_deg = sign * (degrees + minutes/60.0 + seconds/3600.0)
+        else:
+            dec_deg = None
+        
+        return ra_deg, dec_deg
+        
+    except Exception:
+        return None, None
+
+
+def safe_int(s: str) -> Optional[int]:
+    """Safely convert string to int, returning None on error."""
+    try:
+        return int(s.strip()) if s.strip() else None
+    except (ValueError, AttributeError):
+        return None
+
+
+def safe_float(s: str) -> Optional[float]:
+    """Safely convert string to float, returning None on error."""
+    try:
+        return float(s.strip()) if s.strip() else None
+    except (ValueError, AttributeError):
+        return None
 
 
 def parse_orb6_catalog(filepath: str) -> pd.DataFrame:
@@ -186,59 +435,19 @@ def parse_orb6_catalog(filepath: str) -> pd.DataFrame:
         df.drop_duplicates(subset=['wds_id'], keep='first', inplace=True)
         
         log.info(f"Processed {len(df)} valid ORB6 entries")
-        return df[['wds_id', 'P', 'a', 'i', 'Omega', 'T', 'e', 'omega']]
+        
+        # Debug: Print all columns to see if there are duplicates
+        log.info(f"ORB6 columns before return: {df.columns.tolist()}")
+        log.info(f"ORB6 column types: {df.dtypes.to_dict()}")
+        
+        return df[['wds_id', 'P', 'a', 'i', 'Omega', 'T', 'e', 'omega']].rename(columns={'omega': 'omega_arg'})
         
     except Exception as e:
         log.error(f"Failed to parse ORB6 catalog: {e}")
         raise
 
 
-def parse_wds_measurements_catalog(filepath: str) -> pd.DataFrame:
-    """Parse WDS measurements catalog with robust error handling."""
-    log.info(f"Parsing WDS measurements catalog: {filepath}")
-    
-    # Configurable column specifications
-    colspecs = [
-        (0, 14),    # wds_id
-        (24, 34),   # epoch
-        (36, 43),   # theta
-        (51, 52),   # rho_flag
-        (52, 61)    # rho
-    ]
-    
-    names = ['wds_id', 'epoch', 'theta', 'rho_flag', 'rho']
-    
-    try:
-        # Process in chunks for large files
-        chunk_size = 50000
-        chunks = []
-        
-        for chunk in pd.read_fwf(filepath, colspecs=colspecs, names=names, 
-                                 header=None, dtype=str, chunksize=chunk_size):
-            chunk['wds_id'] = chunk['wds_id'].str.strip()
-            
-            # Convert numeric columns
-            numeric_cols = ['epoch', 'theta', 'rho']
-            for col in numeric_cols:
-                chunk[col] = pd.to_numeric(chunk[col], errors='coerce')
-            
-            # Remove invalid entries
-            chunk.dropna(subset=['wds_id', 'epoch', 'theta', 'rho'], inplace=True)
-            
-            # Handle unit conversion for rho if specified as milliarcseconds
-            chunk.loc[chunk['rho_flag'] == 'm', 'rho'] /= MILLIARCSEC_PER_ARCSEC
-            
-            chunks.append(chunk[['wds_id', 'epoch', 'theta', 'rho']])
-            log.info(f"Processed chunk with {len(chunk)} measurements")
-        
-        df = pd.concat(chunks, ignore_index=True)
-        log.info(f"Processed {len(df)} total measurements")
-        return df
-        
-    except Exception as e:
-        log.error(f"Failed to parse WDS measurements catalog: {e}")
-        raise
-
+# Removed parse_wds_measurements_catalog - functionality integrated into parse_wdss_master_catalog
 
 def apply_physical_validation(df: pd.DataFrame) -> None:
     """Apply physical validation to orbital elements."""
@@ -294,11 +503,26 @@ def create_sqlite_database(df_wds: pd.DataFrame, df_orb6: pd.DataFrame,
     conn = sqlite3.connect(output_path)
     
     try:
-        # Create WDS summary table
-        df_wds.to_sql('wds_summary', conn, if_exists='replace', index=False)
-        conn.execute('CREATE INDEX idx_wds_summary_id ON wds_summary(wds_id)')
-        conn.execute('CREATE INDEX idx_wds_summary_coords ON wds_summary(ra_deg, dec_deg)')
-        log.info(f"Created wds_summary table with {len(df_wds)} entries")
+        # Explicitly drop existing tables
+        conn.execute('DROP TABLE IF EXISTS wdss_summary')
+        conn.execute('DROP TABLE IF EXISTS orbital_elements')  
+        conn.execute('DROP TABLE IF EXISTS measurements')
+        log.info("Dropped existing tables")
+        
+        # Create WDSS summary table
+        df_wds.to_sql('wdss_summary', conn, if_exists='replace', index=False)
+        conn.execute('CREATE INDEX idx_wdss_summary_id ON wdss_summary(wds_id)')
+        conn.execute('CREATE INDEX idx_wdss_summary_wdss_id ON wdss_summary(wdss_id)')
+        # Note: coordinate index will be added when coordinates are properly extracted
+        # conn.execute('CREATE INDEX idx_wdss_summary_coords ON wdss_summary(ra_deg, dec_deg)')
+        log.info(f"Created wdss_summary table with {len(df_wds)} entries")
+        
+        # Debug ORB6 DataFrame
+        log.info(f"ORB6 DataFrame columns: {df_orb6.columns.tolist()}")
+        log.info(f"ORB6 DataFrame shape: {df_orb6.shape}")
+        log.info(f"ORB6 duplicated columns: {df_orb6.columns.duplicated().any()}")
+        if df_orb6.columns.duplicated().any():
+            log.error(f"Duplicated column names found: {df_orb6.columns[df_orb6.columns.duplicated()]}")
         
         # Create ORB6 table
         df_orb6.to_sql('orbital_elements', conn, if_exists='replace', index=False)
@@ -308,7 +532,7 @@ def create_sqlite_database(df_wds: pd.DataFrame, df_orb6: pd.DataFrame,
         # Create measurements table if available
         if df_measurements is not None:
             df_measurements.to_sql('measurements', conn, if_exists='replace', index=False)
-            conn.execute('CREATE INDEX idx_measurements_id ON measurements(wds_id)')
+            conn.execute('CREATE INDEX idx_measurements_wdss_id ON measurements(wdss_id)')
             conn.execute('CREATE INDEX idx_measurements_epoch ON measurements(epoch)')
             log.info(f"Created measurements table with {len(df_measurements)} entries")
         
@@ -322,10 +546,9 @@ def create_sqlite_database(df_wds: pd.DataFrame, df_orb6: pd.DataFrame,
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Convert WDS catalogs to SQLite')
-    parser.add_argument('--wds-summary', required=True, help='Path to WDS summary catalog')
+    parser = argparse.ArgumentParser(description='Convert WDSS catalogs to SQLite')
+    parser.add_argument('--wdss-master-file', required=True, help='Path to WDSS master catalog file')
     parser.add_argument('--orb6', required=True, help='Path to ORB6 catalog')
-    parser.add_argument('--measurements', help='Path to WDS measurements catalog (optional)')
     parser.add_argument('--output', required=True, help='Output SQLite database path')
     parser.add_argument('--force', action='store_true', help='Overwrite existing database')
     
@@ -337,15 +560,20 @@ def main():
         sys.exit(1)
     
     try:
-        # Parse catalogs
-        df_wds = parse_wds_summary_catalog(args.wds_summary)
+        # Parse WDSS master file - single pass reading
+        log.info("Parsing WDSS master catalog...")
+        df_components, df_measurements, df_correspondence = parse_wdss_master_catalog(args.wdss_master_file)
+        
+        # Generate summary table from components and measurements
+        log.info("Generating summary table...")
+        df_wds = generate_summary_table(df_components, df_measurements, df_correspondence)
+        
+        # Parse ORB6 catalog
+        log.info("Parsing ORB6 catalog...")
         df_orb6 = parse_orb6_catalog(args.orb6)
         
-        df_measurements = None
-        if args.measurements:
-            df_measurements = parse_wds_measurements_catalog(args.measurements)
-        
         # Create SQLite database
+        log.info("Creating SQLite database...")
         create_sqlite_database(df_wds, df_orb6, df_measurements, args.output)
         
         log.info("Conversion completed successfully!")
