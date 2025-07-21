@@ -1,0 +1,56 @@
+{
+  "HG": {
+    "pa_error": 0.01,
+    "rho_error": 0.0001,
+    "pa_sample_size": 336436,
+    "rho_sample_size": 1183677
+  },
+  "EU": {
+    "pa_error": 0.2,
+    "rho_error": 0.03,
+    "pa_sample_size": 8696,
+    "rho_sample_size": 16636
+  },
+  "ER": {
+    "pa_error": 0.25,
+    "rho_error": 0.041,
+    "pa_sample_size": 87039,
+    "rho_sample_size": 92438
+  },
+  "HT": {
+    "pa_error": 0.1,
+    "rho_error": 0.002,
+    "pa_sample_size": 261,
+    "rho_sample_size": 3521
+  },
+  "AG": {
+    "pa_error": 1.0,
+    "rho_error": 0.03,
+    "pa_sample_size": 57,
+    "rho_sample_size": 57
+  },
+  "C": {
+    "pa_error": 0.5075000000000001,
+    "rho_error": 0.1204,
+    "pa_sample_size": 156,
+    "rho_sample_size": 153
+  },
+  "ST": {
+    "pa_error": 0.1,
+    "rho_error": 0.0011,
+    "pa_sample_size": 10,
+    "rho_sample_size": 29
+  },
+  "S": {
+    "pa_error": 0.54,
+    "rho_error": 0.029,
+    "pa_sample_size": 19,
+    "rho_sample_size": 19
+  },
+  "A": {
+    "pa_error": 0.5,
+    "rho_error": 0.006,
+    "pa_sample_size": 18,
+    "rho_sample_size": 18
+  }
+}

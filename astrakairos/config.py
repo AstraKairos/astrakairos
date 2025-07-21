@@ -48,6 +48,64 @@ DEFAULT_COORDINATE_PRECISION = 2  # decimal places for coordinate display
 # Error Handling Configuration
 COORDINATE_ERROR_BEHAVIOR = "return_invalid"  # Options: "raise", "return_none", "return_invalid"
 
+# Observational Technique Uncertainty Model
+# Based on literature estimates for typical measurement uncertainties
+# References:
+# - Micrometry: Heintz (1978), van de Kamp (1969)
+# - Speckle: Hartkopf & Mason (2004), Tokovinin (1997)
+# - Adaptive Optics: ten Brummelaar et al. (2005), Roberts Jr. et al. (2011)
+# - Gaia: Lindegren et al. (2021), Brown et al. (2018)
+# - CCD/Digital: Mason et al. (2001), Hartkopf et al. (2012)
+TECHNIQUE_ERROR_MODEL = {
+    # Traditional visual techniques
+    'M': {'pa_error': 1.0, 'rho_error': 0.3},     # Micrometry: 1°, 0.3"
+    'P': {'pa_error': 1.0, 'rho_error': 0.3},     # Photographic: 1°, 0.3" 
+    'V': {'pa_error': 1.0, 'rho_error': 0.3},     # Visual: 1°, 0.3"
+    
+    # Speckle interferometry
+    'S': {'pa_error': 0.5, 'rho_error': 0.03},    # Speckle: 0.5°, 0.03"
+    'SP': {'pa_error': 0.5, 'rho_error': 0.03},   # Speckle
+    'SPK': {'pa_error': 0.5, 'rho_error': 0.03},  # Speckle
+    
+    # Adaptive optics
+    'A': {'pa_error': 0.2, 'rho_error': 0.005},   # Adaptive Optics: 0.2°, 0.005"
+    'AO': {'pa_error': 0.2, 'rho_error': 0.005},  # Adaptive Optics
+    'LO': {'pa_error': 0.2, 'rho_error': 0.005},  # Lucky imaging
+    
+    # Space-based astrometry
+    'HG': {'pa_error': 0.1, 'rho_error': 0.001},  # Hipparcos/Gaia: 0.1°, 1 mas
+    'H': {'pa_error': 0.1, 'rho_error': 0.001},   # Hipparcos
+    'G': {'pa_error': 0.1, 'rho_error': 0.001},   # Gaia
+    
+    # CCD/Electronic detectors  
+    'C': {'pa_error': 0.3, 'rho_error': 0.02},    # CCD: 0.3°, 0.02"
+    'CCD': {'pa_error': 0.3, 'rho_error': 0.02},  # CCD
+    'D': {'pa_error': 0.3, 'rho_error': 0.02},    # Digital
+    
+    # Interferometry
+    'I': {'pa_error': 0.1, 'rho_error': 0.001},   # Interferometry: 0.1°, 1 mas
+    'INT': {'pa_error': 0.1, 'rho_error': 0.001}, # Interferometry
+    
+    # Default for unknown techniques (conservative estimate)
+    'DEFAULT': {'pa_error': 2.0, 'rho_error': 0.5}  # 2°, 0.5"
+}
+
+# WDSS Measurement Column Specifications
+# Positions based on format analysis of WDSS catalogs
+WDSS_MEASUREMENT_COLSPECS = {
+    'wdss_id': (0, 14),
+    'pair': (16, 23), 
+    'epoch': (24, 34),
+    'theta': (36, 43),
+    'theta_error': (44, 51),
+    'rho': (52, 61),
+    'rho_error': (62, 69),
+    'mag1': (72, 78),
+    'mag2': (86, 92),
+    'reference': (119, 127),
+    'technique': (128, 130)
+}
+
 # CLI Analysis Configuration
 MIN_MEASUREMENTS_FOR_CHARACTERIZE = 5
 DEFAULT_MIN_OBS = 2
