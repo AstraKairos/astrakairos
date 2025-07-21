@@ -18,6 +18,18 @@ MAX_INCLINATION_DEG = 180.0
 
 AMBIGUOUS_P_VALUE_RATIO = 10  # Ratio for calculating ambiguous threshold from primary threshold
 
+# ORB6 Error Validation Thresholds
+# Maximum reasonable uncertainties for orbital elements ("educated guesses")
+ORB6_ERROR_VALIDATION_THRESHOLDS = {
+    'e_P': 1000.0,      # Period errors > 1000 years are suspicious
+    'e_a': 10.0,        # Semi-major axis errors > 10" are suspicious
+    'e_i': 180.0,       # Inclination errors > 180° are meaningless
+    'e_Omega': 180.0,   # Node errors > 180° are meaningless
+    'e_T': 1000.0,      # Time of periastron errors > 1000 years are suspicious
+    'e_e': 1.0,         # Eccentricity errors > 1 are meaningless
+    'e_omega': 180.0    # Argument of periastron errors > 180° are meaningless
+}
+
 # Orbital Quality Grades (ORB6)
 MIN_ORBIT_GRADE = 1  # Best quality
 MAX_ORBIT_GRADE = 5  # Lowest quality

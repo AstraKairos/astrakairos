@@ -22,7 +22,8 @@ from astrakairos.config import (
     MIN_SEMIMAJOR_AXIS_ARCSEC, MAX_SEMIMAJOR_AXIS_ARCSEC,
     MIN_ECCENTRICITY, MAX_ECCENTRICITY,
     MIN_INCLINATION_DEG, MAX_INCLINATION_DEG,
-    TECHNIQUE_ERROR_MODEL, WDSS_MEASUREMENT_COLSPECS
+    TECHNIQUE_ERROR_MODEL, WDSS_MEASUREMENT_COLSPECS,
+    ORB6_ERROR_VALIDATION_THRESHOLDS
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -457,88 +458,117 @@ def estimate_uncertainty_from_technique(technique: str) -> tuple[float, float]:
 
 
 def parse_orb6_catalog(filepath: str) -> pd.DataFrame:
-    """Parse ORB6 catalog with robust error handling and orbital element uncertainties."""
+    """
+    Parse the ORB6 catalog from its fixed-width text format.
+    This function reads orbital elements and their formal errors, which are
+    interleaved in a single line per record.
+    
+    Based on orb6format.txt documentation with correct column specifications.
+    """
     log.info(f"Parsing ORB6 catalog: {filepath}")
-    
-    # Extended column specifications including error columns
+
+    # Column specifications (1-based index from documentation, converted to 0-based for pandas)
     colspecs = [
-        (19, 29),   # wds_id
-        (81, 93),   # P_str (Period with unit flag)
-        (105, 116), # a_str (Semi-major axis with unit flag)
-        (125, 134), # i_str (Inclination)
-        (143, 154), # Omega_str (Node)
-        (162, 177), # T_str (Time of periastron with unit flag)
-        (187, 196), # e_str (Eccentricity)
-        (205, 215)  # omega_str (Longitude of periastron)
+        (19, 29),   # WDS designation
+        (81, 93),   # Period (P) string with unit
+        (94, 105),  # Error in P
+        (105, 117), # Semi-major axis (a) string with unit
+        (116, 125), # Error in a
+        (125, 134), # Inclination (i)
+        (134, 143), # Error in i
+        (143, 154), # Node (Omega) string with flag
+        (153, 162), # Error in Omega
+        (162, 177), # Time of periastron (T) string with unit
+        (176, 187), # Error in T
+        (187, 196), # Eccentricity (e)
+        (196, 205), # Error in e
+        (205, 215), # Longitude of periastron (omega) string with flag
+        (214, 223), # Error in omega
+        (233, 235), # Orbit grade
     ]
-    
-    names = ['wds_id', 'P_str', 'a_str', 'i_str', 'Omega_str', 
-             'T_str', 'e_str', 'omega_str']
-    
-    # Error column specifications (typically on second line)
-    error_colspecs = [
-        (25, 35),   # P_error
-        (105, 115), # a_error 
-        (125, 135), # i_error
-        (143, 153), # Omega_error
-        (162, 172), # T_error
-        (187, 197), # e_error
-        (205, 215)  # omega_error
+
+    names = [
+        'wds_id', 'P_str', 'e_P', 'a_str', 'e_a', 'i_str', 'e_i', 'Omega_str', 
+        'e_Omega', 'T_str', 'e_T', 'e_str', 'e_e', 'omega_str', 'e_omega', 'grade'
     ]
-    
-    error_names = ['P_error', 'a_error', 'i_error', 'Omega_error', 
-                   'T_error', 'e_error', 'omega_error']
-    
+
     try:
-        # Read primary orbital elements
-        df = pd.read_fwf(filepath, colspecs=colspecs, names=names, comment='R', dtype=str)
+        df = pd.read_fwf(filepath, colspecs=colspecs, names=names, 
+                         comment='R',  # Ignore header/ruler lines
+                         dtype=str)   # Read everything as text for robust manual control
+        
         log.info(f"Read {len(df)} raw entries from ORB6")
         
+        # Initial cleanup
         df.dropna(subset=['wds_id'], inplace=True)
         df['wds_id'] = df['wds_id'].str.strip()
+
+        # --- Processing values and errors ---
         
-        # Parse values and unit flags with validation
-        df['P'] = pd.to_numeric(df['P_str'].str[:-1], errors='coerce')
+        # Convert numeric columns and error columns to float
+        numeric_cols = ['i_str', 'e_i', 'e_str', 'e_e', 'e_P', 'e_a', 'e_Omega', 'e_T', 'e_omega', 'grade']
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # --- Processing fields with units/flags ---
+        
+        # Period (P)
+        df['P'] = pd.to_numeric(df['P_str'].str.rstrip('ydc'), errors='coerce')
         df.loc[df['P_str'].str.endswith('d', na=False), 'P'] /= DAYS_PER_JULIAN_YEAR
         df.loc[df['P_str'].str.endswith('c', na=False), 'P'] *= CENTURIES_PER_YEAR
-        
-        df['a'] = pd.to_numeric(df['a_str'].str[:-1], errors='coerce')
+        # Apply same conversion to errors
+        df.loc[df['P_str'].str.endswith('d', na=False), 'e_P'] /= DAYS_PER_JULIAN_YEAR
+        df.loc[df['P_str'].str.endswith('c', na=False), 'e_P'] *= CENTURIES_PER_YEAR
+
+        # Semi-major axis (a)
+        df['a'] = pd.to_numeric(df['a_str'].str.rstrip('amM'), errors='coerce')
         df.loc[df['a_str'].str.endswith('m', na=False), 'a'] /= MILLIARCSEC_PER_ARCSEC
-        
-        df['i'] = pd.to_numeric(df['i_str'], errors='coerce')
+        df.loc[df['a_str'].str.endswith('m', na=False), 'e_a'] /= MILLIARCSEC_PER_ARCSEC
+
+        # Inclination (i) - already processed as numeric
+        df['i'] = df['i_str']
+
+        # Node (Omega) - preserve flags in separate column
+        df['Omega_flag'] = df['Omega_str'].str.extract(r'([*q]+)$')
         df['Omega'] = pd.to_numeric(df['Omega_str'].str.rstrip('*q'), errors='coerce')
-        df['T'] = pd.to_numeric(df['T_str'].str[:-1], errors='coerce')
-        df['e'] = pd.to_numeric(df['e_str'], errors='coerce')
-        df['omega'] = pd.to_numeric(df['omega_str'].str.rstrip('q'), errors='coerce')
+
+        # Time of periastron (T) - preserve unit flags and ignore conversion for now
+        df['T_flag'] = df['T_str'].str.extract(r'([cdmy]+)$')
+        df['T'] = pd.to_numeric(df['T_str'].str.rstrip('cdmy'), errors='coerce')
         
-        # Initialize error columns with NaN
-        for col in error_names:
-            df[col] = np.nan
-            
-        # Read error data from second lines (more complex parsing needed)
-        # This is a simplified approach - full implementation would require
-        # line-by-line parsing to associate errors with correct orbital solutions
-        try:
-            error_df = pd.read_fwf(filepath, colspecs=error_colspecs, names=error_names, 
-                                 comment='R', dtype=str, skiprows=1)
-            # Match errors to primary data (complex logic needed here)
-            log.info("Orbital element errors available but require complex parsing")
-        except Exception as e:
-            log.debug(f"Error parsing orbital element uncertainties: {e}")
+        # Eccentricity (e) - already processed as numeric
+        df['e'] = df['e_str']
+
+        # Argument of periastron (omega) - preserve flags
+        df['omega_flag'] = df['omega_str'].str.extract(r'([q]+)$')
+        df['omega_arg'] = pd.to_numeric(df['omega_str'].str.rstrip('q'), errors='coerce')
         
-        # Apply physical validation
+        # Validate that errors are positive and reasonable using centralized thresholds
+        error_cols = ['e_P', 'e_a', 'e_i', 'e_Omega', 'e_T', 'e_e', 'e_omega']
+        for col in error_cols:
+            # Set negative or zero errors to NaN (they're meaningless)
+            df.loc[df[col] <= 0, col] = np.nan
+            # Set unreasonably large errors to NaN using centralized thresholds
+            if col in ORB6_ERROR_VALIDATION_THRESHOLDS:
+                threshold = ORB6_ERROR_VALIDATION_THRESHOLDS[col]
+                df.loc[df[col] > threshold, col] = np.nan
+
+        # Apply physical validation to main orbital elements
         apply_physical_validation(df)
         
-        # Remove duplicates (keep first)
+        # Remove duplicates, keeping first orbit (typically most recent/best)
         df.drop_duplicates(subset=['wds_id'], keep='first', inplace=True)
         
-        log.info(f"Processed {len(df)} valid ORB6 entries")
+        log.info(f"Processed {len(df)} valid and unique ORB6 entries")
         
-        # Return with error columns (mostly NaN for now, but structure is ready)
-        final_cols = ['wds_id', 'P', 'a', 'i', 'Omega', 'T', 'e', 'omega'] + error_names
-        result_df = df[final_cols].rename(columns={'omega': 'omega_arg', 'omega_error': 'omega_arg_error'})
-        return result_df
+        # Select and rename final columns for database
+        final_cols = [
+            'wds_id', 'P', 'e_P', 'a', 'e_a', 'i', 'e_i', 'Omega', 'e_Omega',
+            'T', 'e_T', 'e', 'e_e', 'omega_arg', 'e_omega', 'grade'
+        ]
         
+        return df[final_cols]
+
     except Exception as e:
         log.error(f"Failed to parse ORB6 catalog: {e}")
         raise
