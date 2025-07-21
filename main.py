@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """
 AstraKairos - Binary Star Research Assistant
 

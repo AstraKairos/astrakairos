@@ -49,9 +49,13 @@ class WdsSummary(TypedDict, total=False):
     date_last: float
     n_observations: int
     pa_first: float
+    pa_first_error: float  # Uncertainty in first position angle (degrees)
     pa_last: float
+    pa_last_error: float   # Uncertainty in last position angle (degrees)
     sep_first: float
+    sep_first_error: float # Uncertainty in first separation (arcsec)
     sep_last: float
+    sep_last_error: float  # Uncertainty in last separation (arcsec)
     mag_pri: float
     mag_sec: float
     spec_type: str         # Spectral type

@@ -126,18 +126,31 @@ class LocalDataSource(DataSource):
                           date_first, date_last, n_obs as n_observations, 
                           pa_first, pa_last, sep_first, sep_last, 
                           vmag as mag_pri, kmag as mag_sec, spectral_type as spec_type, ra_deg, dec_deg,
-                          wdss_id, discoverer_designation
+                          wdss_id, discoverer_designation,
+                          pa_first_error, pa_last_error,
+                          sep_first_error, sep_last_error
                    FROM {self.summary_table} WHERE wds_id = ?""",
                 (normalized_id,)
             )
             
             row = cursor.fetchone()
             if row:
-                # Convert row to dict and filter None values
-                data = {k: v for k, v in dict(row).items() if v is not None}
+                # Convert row to dict and filter None values for required fields
+                # Keep None values for error fields as they indicate missing uncertainty data
+                data = dict(row)
+                
+                # Filter out None values only for non-error fields
+                filtered_data = {}
+                for k, v in data.items():
+                    if k.endswith('_error'):
+                        # Keep error fields even if None - this indicates missing uncertainty
+                        filtered_data[k] = v
+                    elif v is not None:
+                        # Filter None values for regular fields
+                        filtered_data[k] = v
                 
                 # Validate against WdsSummary schema
-                valid_fields = {k: v for k, v in data.items() 
+                valid_fields = {k: v for k, v in filtered_data.items() 
                                if k in WdsSummary.__annotations__}
                 
                 if valid_fields:
@@ -215,25 +228,35 @@ class LocalDataSource(DataSource):
         
         try:
             cursor = self.conn.execute(
-                "SELECT wds_id, P, a, i, Omega, T, e, omega_arg as argument_of_periastron FROM orbital_elements WHERE wds_id = ?",
+                """SELECT wds_id, P, a, i, Omega, T, e, omega_arg as omega,
+                          e_P, e_a, e_i, e_Omega, e_T, e_e, e_omega_arg as e_omega,
+                          grade
+                   FROM orbital_elements WHERE wds_id = ?""",
                 (normalized_id,)
             )
             
             row = cursor.fetchone()
             if row:
-                # Convert row to dict and filter None values
-                data = {k: v for k, v in dict(row).items() if v is not None}
+                # Convert sqlite3 row to dict manually with explicit column mapping
+                columns = [
+                    'wds_id', 'P', 'a', 'i', 'Omega', 'T', 'e', 'omega',
+                    'e_P', 'e_a', 'e_i', 'e_Omega', 'e_T', 'e_e', 'e_omega',
+                    'grade'
+                ]
+                data = {col: row[i] for i, col in enumerate(columns)}
                 
-                # Rename argument_of_periastron back to omega for OrbitalElements
-                if 'argument_of_periastron' in data:
-                    data['omega'] = data.pop('argument_of_periastron')
+                # Filter out None values only for non-error fields
+                filtered_data = {}
+                for k, v in data.items():
+                    if k.startswith('e_') and k != 'e':  # Error fields (but not eccentricity 'e')
+                        # Keep error fields even if None - indicates missing uncertainty
+                        filtered_data[k] = v
+                    elif v is not None:
+                        # Filter None values for regular fields
+                        filtered_data[k] = v
                 
-                # Validate against OrbitalElements schema
-                valid_fields = {k: v for k, v in data.items() 
-                               if k in OrbitalElements.__annotations__}
-                
-                if valid_fields:
-                    return OrbitalElements(**valid_fields)
+                # Return filtered dictionary (TypedDict is just a dict at runtime)
+                return filtered_data
             
             return None
             

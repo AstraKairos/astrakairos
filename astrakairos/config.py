@@ -30,6 +30,30 @@ ORB6_ERROR_VALIDATION_THRESHOLDS = {
     'e_omega': 180.0    # Argument of periastron errors > 180° are meaningless
 }
 
+# Fallback Error Estimates for Missing Uncertainties
+# Conservative estimates based on literature and instrument capabilities
+ORB6_FALLBACK_ERRORS = {
+    'e_P': 0.1,         # 10% of period value as fallback
+    'e_a': 0.02,        # 0.02" typical for older astrometry
+    'e_i': 5.0,         # 5° conservative estimate for inclination
+    'e_Omega': 5.0,     # 5° conservative estimate for node
+    'e_T': 5.0,         # 5 years for periastron epoch
+    'e_e': 0.05,        # 0.05 conservative for eccentricity
+    'e_omega': 5.0      # 5° conservative estimate for argument of periastron
+}
+
+# Fallback Errors for WDS Measurements
+# Conservative estimates based on measurement techniques and epoch
+WDS_FALLBACK_ERRORS = {
+    'pa_error': 2.0,    # 2° conservative for position angle
+    'sep_error': 0.2    # 0.2" conservative for separation
+}
+
+# Monte Carlo Configuration
+DEFAULT_MC_SAMPLES = 1000           # Default number of Monte Carlo samples
+MC_CONFIDENCE_LEVEL = 68.27        # Confidence level for uncertainty (1-sigma equivalent)
+MC_RANDOM_SEED = 42                # For reproducible results
+
 # Orbital Quality Grades (ORB6)
 MIN_ORBIT_GRADE = 1  # Best quality
 MAX_ORBIT_GRADE = 5  # Lowest quality

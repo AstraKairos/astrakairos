@@ -255,9 +255,9 @@ def _parse_measurement_line_data(line: str, wdss_id: str, pair: str) -> dict:
 
 
 def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.DataFrame, df_correspondence: pd.DataFrame) -> pd.DataFrame:
-    log.info("Generating summary table using vectorized operations")
+    log.info("Generating summary table using vectorized operations with error propagation")
 
-    # 1. Aggregate measurements using groupby
+    # 1. Aggregate measurements using groupby with error propagation
     if not df_measurements.empty:
         agg_measurements = (
             df_measurements.sort_values(['wdss_id', 'epoch'])
@@ -269,7 +269,11 @@ def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.Data
                 pa_first=('theta', 'first'),
                 pa_last=('theta', 'last'),
                 sep_first=('rho', 'first'),
-                sep_last=('rho', 'last')
+                sep_last=('rho', 'last'),
+                pa_first_error=('theta_error', 'first'),    # Add error aggregation
+                pa_last_error=('theta_error', 'last'),      # Add error aggregation
+                sep_first_error=('rho_error', 'first'),     # Add error aggregation
+                sep_last_error=('rho_error', 'last')        # Add error aggregation
             )
         )
     else:
@@ -318,11 +322,12 @@ def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.Data
     # If wds_correspondence is null, use wdss_id as the primary wds_id
     df_summary['wds_id'] = df_summary['wds_correspondence'].fillna(df_summary['wdss_id'])
     
-    # Select final columns to ensure a clean schema
+    # Select final columns to ensure a clean schema with error columns
     final_cols = [
         'wds_id', 'wdss_id', 'discoverer_designation', 'date_first', 'date_last', 'n_obs',
-        'pa_first', 'pa_last', 'sep_first', 'sep_last', 'vmag', 'kmag',
-        'ra_deg', 'dec_deg', 'spectral_type', 'parallax', 'pm_ra', 'pm_dec', 'name'
+        'pa_first', 'pa_last', 'sep_first', 'sep_last', 
+        'pa_first_error', 'pa_last_error', 'sep_first_error', 'sep_last_error',
+        'vmag', 'kmag', 'ra_deg', 'dec_deg', 'spectral_type', 'parallax', 'pm_ra', 'pm_dec', 'name'
     ]
     
     # Add missing columns with NaN if they don't exist
@@ -561,10 +566,10 @@ def parse_orb6_catalog(filepath: str) -> pd.DataFrame:
         
         log.info(f"Processed {len(df)} valid and unique ORB6 entries")
         
-        # Select and rename final columns for database
+        # Select final columns for database
         final_cols = [
             'wds_id', 'P', 'e_P', 'a', 'e_a', 'i', 'e_i', 'Omega', 'e_Omega',
-            'T', 'e_T', 'e', 'e_e', 'omega_arg', 'e_omega', 'grade'
+            'T', 'e_T', 'e', 'e_e', 'omega_arg', 'e_omega_arg', 'grade'
         ]
         
         return df[final_cols]
@@ -674,7 +679,7 @@ def create_sqlite_database(df_wds: pd.DataFrame, df_orb6: pd.DataFrame,
 
 def main():
     parser = argparse.ArgumentParser(description='Convert WDSS catalogs to SQLite')
-    parser.add_argument('--wdss-master-file', required=True, help='Path to WDSS master catalog file')
+    parser.add_argument('--wdss-files', required=True, nargs='+', help='Paths to WDSS catalog files (e.g., wdss1.txt wdss2.txt wdss3.txt wdss4.txt)')
     parser.add_argument('--orb6', required=True, help='Path to ORB6 catalog')
     parser.add_argument('--output', required=True, help='Output SQLite database path')
     parser.add_argument('--force', action='store_true', help='Overwrite existing database')
@@ -687,13 +692,37 @@ def main():
         sys.exit(1)
     
     try:
-        # Parse WDSS master file - single pass reading
-        log.info("Parsing WDSS master catalog...")
-        df_components, df_measurements, df_correspondence = parse_wdss_master_catalog(args.wdss_master_file)
+        # Parse multiple WDSS files and combine them
+        log.info(f"Parsing {len(args.wdss_files)} WDSS catalog files...")
+        all_components = []
+        all_measurements = []
+        all_correspondence = []
+        
+        for wdss_file in args.wdss_files:
+            log.info(f"Processing {wdss_file}...")
+            df_components, df_measurements, df_correspondence = parse_wdss_master_catalog(wdss_file)
+            all_components.append(df_components)
+            all_measurements.append(df_measurements)
+            all_correspondence.append(df_correspondence)
+        
+        # Combine all data
+        combined_components = pd.concat(all_components, ignore_index=True) if all_components else pd.DataFrame()
+        combined_measurements = pd.concat(all_measurements, ignore_index=True) if all_measurements else pd.DataFrame()
+        combined_correspondence = pd.concat(all_correspondence, ignore_index=True) if all_correspondence else pd.DataFrame()
+        
+        # Remove duplicates across files
+        if not combined_components.empty:
+            combined_components = combined_components.drop_duplicates(subset=['wdss_id', 'component'], keep='first')
+        if not combined_measurements.empty:
+            combined_measurements = combined_measurements.drop_duplicates(subset=['wdss_id', 'pair', 'epoch'], keep='first')
+        if not combined_correspondence.empty:
+            combined_correspondence = combined_correspondence.drop_duplicates(subset=['wdss_id'], keep='first')
+        
+        log.info(f"Combined: {len(combined_components)} components, {len(combined_measurements)} measurements, {len(combined_correspondence)} correspondences")
         
         # Generate summary table from components and measurements
         log.info("Generating summary table...")
-        df_wds = generate_summary_table(df_components, df_measurements, df_correspondence)
+        df_wds = generate_summary_table(combined_components, combined_measurements, combined_correspondence)
         
         # Parse ORB6 catalog
         log.info("Parsing ORB6 catalog...")
@@ -701,7 +730,7 @@ def main():
         
         # Create SQLite database
         log.info("Creating SQLite database...")
-        create_sqlite_database(df_wds, df_orb6, df_measurements, args.output)
+        create_sqlite_database(df_wds, df_orb6, combined_measurements, args.output)
         
         log.info("Conversion completed successfully!")
         

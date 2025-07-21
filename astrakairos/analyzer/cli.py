@@ -13,8 +13,11 @@ from ..data.local_source import LocalDataSource
 from ..data.gaia_source import GaiaValidator
 from ..physics.dynamics import (
     estimate_velocity_from_endpoints, 
+    estimate_velocity_from_endpoints_mc,
     calculate_observation_priority_index,
+    calculate_observation_priority_index_mc,
     calculate_robust_linear_fit,
+    calculate_robust_linear_fit_bootstrap,
     calculate_curvature_index
 )
 from ..utils.io import load_csv_data, save_results_to_csv
@@ -31,13 +34,47 @@ from ..config import (
 
 # CLI-specific display constants
 TOP_RESULTS_DISPLAY_COUNT = 10
-DISPLAY_LINE_WIDTH = 80
+DISPLAY_LINE_WIDTH = 90
 WDS_ID_COLUMN_WIDTH = 18
-METRIC_COLUMN_WIDTH = 25
+METRIC_COLUMN_WIDTH = 35
 
 log = logging.getLogger(__name__)
 
 # Helper Functions
+def format_metric_with_uncertainty(result: dict, metric_key: str, uncertainty_key: str, quality_key: str) -> str:
+    """
+    Format a metric value with its uncertainty and quality score for CLI display.
+    
+    Args:
+        result: Dictionary containing analysis results
+        metric_key: Key for the main metric value
+        uncertainty_key: Key for the uncertainty value
+        quality_key: Key for the quality score
+        
+    Returns:
+        Formatted string with value ± uncertainty (Q=quality)
+    """
+    value = result.get(metric_key)
+    uncertainty = result.get(uncertainty_key)
+    quality = result.get(quality_key)
+    
+    if value is None:
+        return "N/A"
+    
+    value_str = f"{value:.4f}"
+    
+    if uncertainty is not None:
+        uncertainty_str = f" ± {uncertainty:.4f}"
+    else:
+        uncertainty_str = ""
+    
+    if quality is not None and quality > 0:
+        quality_str = f" (Q={quality:.2f})"
+    else:
+        quality_str = ""
+        
+    return f"{value_str}{uncertainty_str}{quality_str}"
+
 def _should_log_validation_warning() -> bool:
     """Determine if a validation warning should be logged based on sampling rate."""
     return ENABLE_VALIDATION_WARNINGS and random.random() < VALIDATION_WARNING_SAMPLE_RATE
@@ -154,32 +191,56 @@ def _calculate_search_radius(wds_summary: WdsSummary, cli_args: argparse.Namespa
 
 async def _perform_discovery_analysis(wds_id: str, wds_summary: WdsSummary) -> Optional[Dict[str, Any]]:
     """
-    Perform discovery mode analysis for basic motion estimation.
+    Perform discovery mode analysis for basic motion estimation with uncertainty propagation.
     
     Args:
         wds_id: WDS identifier
         wds_summary: WDS summary data
         
     Returns:
-        Dict containing discovery analysis results or None if failed
+        Dict containing discovery analysis results with uncertainties or None if failed
     """
     log.debug(f"Running discovery analysis for {wds_id}")
     
     try:
-        velocity_result = estimate_velocity_from_endpoints(wds_summary)
+        # Try Monte Carlo analysis first (if error data available)
+        velocity_result = estimate_velocity_from_endpoints_mc(wds_summary)
+        
         if velocity_result is None:
-            log.error(f"Could not calculate velocity for {wds_id}")
-            return None
+            log.debug(f"Monte Carlo analysis failed for {wds_id}, falling back to point estimate")
+            # Fallback to point estimate
+            velocity_result = estimate_velocity_from_endpoints(wds_summary)
+            if velocity_result is None:
+                log.error(f"Could not calculate velocity for {wds_id}")
+                return None
         
-        v_total = velocity_result['v_total_estimate']
-        pa_v = velocity_result['pa_v_estimate']
+        # Handle both Monte Carlo and point estimate results
+        if 'v_total_median' in velocity_result:
+            # Monte Carlo result
+            result = {
+                'v_total_arcsec_yr': velocity_result['v_total_median'],
+                'v_total_uncertainty': velocity_result.get('v_total_uncertainty'),
+                'pa_v_deg': velocity_result['pa_v_median'],
+                'pa_v_uncertainty': velocity_result.get('pa_v_uncertainty'),
+                'uncertainty_quality': velocity_result.get('quality_score', 0.0),
+                'uncertainty_source': velocity_result.get('uncertainty_source', 'none'),
+                'analysis_method': velocity_result.get('method', 'two_point_mc')
+            }
+        else:
+            # Point estimate result
+            result = {
+                'v_total_arcsec_yr': velocity_result['v_total_estimate'],
+                'v_total_uncertainty': None,
+                'pa_v_deg': velocity_result['pa_v_estimate'],
+                'pa_v_uncertainty': None,
+                'uncertainty_quality': 0.0,
+                'uncertainty_source': 'none',
+                'analysis_method': velocity_result.get('method', 'two_point_estimate')
+            }
         
-        result = {
-            'v_total_arcsec_yr': v_total,
-            'pa_v_deg': pa_v,
-        }
-        log.debug(f"Discovery analysis complete: v_total = {v_total:.6f} arcsec/year")
+        log.debug(f"Discovery analysis complete: v_total = {result['v_total_arcsec_yr']:.6f} ± {result['v_total_uncertainty'] or 0:.6f} arcsec/year")
         return result
+        
     except Exception as e:
         log.error(f"Discovery analysis failed for {wds_id}: {e}")
         return None
@@ -187,14 +248,14 @@ async def _perform_discovery_analysis(wds_id: str, wds_summary: WdsSummary) -> O
 
 async def _perform_characterize_analysis(wds_id: str, data_source: DataSource) -> Optional[Dict[str, Any]]:
     """
-    Perform characterize mode analysis with robust fitting.
+    Perform characterize mode analysis with robust fitting and bootstrap uncertainties.
     
     Args:
         wds_id: WDS identifier
         data_source: Data source for measurements
         
     Returns:
-        Dict containing characterization results or None if failed
+        Dict containing characterization results with uncertainties or None if failed
     """
     log.debug(f"Running characterization analysis for {wds_id}")
     
@@ -205,20 +266,30 @@ async def _perform_characterize_analysis(wds_id: str, data_source: DataSource) -
             log.warning(f"Insufficient measurements for characterization of {wds_id}")
             return None
         
-        robust_fit = calculate_robust_linear_fit(all_measurements)
+        # Try bootstrap analysis first
+        robust_fit = calculate_robust_linear_fit_bootstrap(all_measurements)
+        
         if not robust_fit:
             log.error(f"Robust fitting failed for {wds_id}")
             return None
         
+        # Handle both bootstrap and standard results
         result = {
             'rmse': robust_fit['rmse'],
-            'v_total_robust': robust_fit['v_total'],
-            'pa_v_robust': robust_fit['pa_v'],
+            'v_total_robust': robust_fit['v_total_robust'],
+            'v_total_uncertainty': robust_fit.get('v_total_uncertainty'),
+            'pa_v_robust': robust_fit['pa_v_robust'],
+            'pa_v_uncertainty': robust_fit.get('pa_v_uncertainty'),
             'n_measurements': len(all_measurements),
-            'fit_quality': robust_fit.get('quality', 'unknown')
+            'time_baseline_years': robust_fit.get('time_baseline_years'),
+            'uncertainty_method': robust_fit.get('uncertainty_method', 'none'),
+            'bootstrap_success_rate': robust_fit.get('bootstrap_success_rate', 0.0),
+            'analysis_method': 'robust_linear_fit'
         }
-        log.debug(f"Characterization complete: RMSE = {robust_fit['rmse']:.4f}")
+        
+        log.debug(f"Characterization complete: v_total = {result['v_total_robust']:.4f} ± {result['v_total_uncertainty'] or 0:.4f} arcsec/yr")
         return result
+        
     except Exception as e:
         log.error(f"Characterization analysis failed for {wds_id}: {e}")
         return None
@@ -246,53 +317,76 @@ async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_s
                 log.warning(f"No orbital elements found for {wds_id}")
             return None
         
-        # Calculate OPI
+        # Calculate OPI with Monte Carlo uncertainty propagation
         current_year = _get_current_decimal_year()
-        opi_result = calculate_observation_priority_index(
+        
+        # Try Monte Carlo OPI calculation first
+        opi_result = calculate_observation_priority_index_mc(
             orbital_elements, wds_summary, current_year
         )
         
-        if not opi_result:
-            log.error(f"OPI calculation failed for {wds_id}")
-            return None
-        
-        opi, deviation = opi_result
+        if opi_result is None:
+            log.debug(f"Monte Carlo OPI failed for {wds_id}, falling back to point estimate")
+            # Fallback to point estimate
+            opi_point = calculate_observation_priority_index(
+                orbital_elements, wds_summary, current_year
+            )
+            if not opi_point:
+                log.error(f"OPI calculation failed for {wds_id}")
+                return None
+            
+            opi, deviation = opi_point
+            opi_result = {
+                'opi_median': opi,
+                'opi_uncertainty': None,
+                'deviation_median': deviation,
+                'deviation_uncertainty': None,
+                'quality_score': 0.0,
+                'uncertainty_source': 'none',
+                'method': 'opi_point'
+            }
         
         # Calculate curvature index if measurements available
         curvature_index = None
         try:
             all_measurements = await data_source.get_all_measurements(wds_id)
             if all_measurements and len(all_measurements) >= 3:
-                log.info(f"Calculating curvature for {wds_id} with {len(all_measurements)} measurements")
+                log.debug(f"Calculating curvature for {wds_id} with {len(all_measurements)} measurements")
 
-                linear_fit_results = calculate_robust_linear_fit(all_measurements)
+                linear_fit_results = calculate_robust_linear_fit_bootstrap(all_measurements)
                 if linear_fit_results:
-                    log.info(f"Linear fit successful for {wds_id}, calculating curvature index")
+                    log.debug(f"Linear fit successful for {wds_id}, calculating curvature index")
                     curvature_index = calculate_curvature_index(
                         orbital_elements, 
                         linear_fit_results, 
                         current_year
                     )
                     if curvature_index is not None:
-                        log.info(f"Curvature index calculated for {wds_id}: {curvature_index:.4f}\"")
+                        log.debug(f"Curvature index calculated for {wds_id}: {curvature_index:.4f}\"")
                     else:
-                        log.warning(f"Curvature index calculation failed for {wds_id} (orbital vs linear comparison)")
+                        log.warning(f"Curvature index calculation failed for {wds_id}")
                 else:
                     log.warning(f"Linear fit failed for {wds_id} with {len(all_measurements)} measurements")
             else:
-                log.info(f"Insufficient measurements for curvature calculation: {wds_id} has {len(all_measurements) if all_measurements else 0} measurements (need ≥3)")
+                log.debug(f"Insufficient measurements for curvature calculation: {wds_id} has {len(all_measurements) if all_measurements else 0} measurements")
         except Exception as e:
             log.warning(f"Curvature calculation failed for {wds_id}: {e}")
         
         result = {
-            'opi_arcsec_yr': opi,
-            'deviation_arcsec': deviation,
+            'opi_arcsec_yr': opi_result['opi_median'],
+            'opi_uncertainty': opi_result.get('opi_uncertainty'),
+            'deviation_arcsec': opi_result['deviation_median'],
+            'deviation_uncertainty': opi_result.get('deviation_uncertainty'),
             'curvature_index': curvature_index,
             'orbital_period': orbital_elements.get('P'),
             'eccentricity': orbital_elements.get('e'),
-            'semi_major_axis': orbital_elements.get('a')
+            'semi_major_axis': orbital_elements.get('a'),
+            'uncertainty_quality': opi_result.get('quality_score', 0.0),
+            'uncertainty_source': opi_result.get('uncertainty_source', 'none'),
+            'analysis_method': opi_result.get('method', 'opi_mc')
         }
-        log.debug(f"Orbital analysis complete: OPI = {opi:.4f}")
+        
+        log.debug(f"Orbital analysis complete: OPI = {result['opi_arcsec_yr']:.4f} ± {result['opi_uncertainty'] or 0:.4f}")
         return result
     except Exception as e:
         log.error(f"Orbital analysis failed for {wds_id}: {e}")
@@ -633,13 +727,22 @@ async def main_async(args: argparse.Namespace):
             print("=" * DISPLAY_LINE_WIDTH)
             
             for i, result in enumerate(results_sorted[:TOP_RESULTS_DISPLAY_COUNT], 1):
-                # Mode-specific display format
+                # Mode-specific display format with uncertainty information
                 if args.mode == 'discovery':
-                    metric_str = f"Velocity = {result.get('v_total_arcsec_yr', 0):.6f} arcsec/yr"
+                    metric_value = format_metric_with_uncertainty(
+                        result, 'v_total_arcsec_yr', 'v_total_uncertainty', 'uncertainty_quality'
+                    )
+                    metric_str = f"V = {metric_value} arcsec/yr"
                 elif args.mode == 'characterize':
-                    metric_str = f"RMSE = {result.get('rmse', 0):.4f}"
+                    metric_value = format_metric_with_uncertainty(
+                        result, 'v_total_robust', 'v_total_uncertainty', 'bootstrap_success_rate'
+                    )
+                    metric_str = f"V = {metric_value} arcsec/yr"
                 elif args.mode == 'orbital':
-                    metric_str = f"OPI = {result.get('opi_arcsec_yr', 0):.4f}"
+                    metric_value = format_metric_with_uncertainty(
+                        result, 'opi_arcsec_yr', 'opi_uncertainty', 'uncertainty_quality'
+                    )
+                    metric_str = f"OPI = {metric_value}"
                 else:
                     metric_str = f"Value = {result.get(sort_key, 'N/A')}"
                 
