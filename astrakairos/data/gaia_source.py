@@ -315,7 +315,7 @@ class GaiaValidator(PhysicalityValidator):
     def _identify_components_by_mag(self, gaia_results, wds_mags: Tuple[Optional[float], Optional[float]]):
         """
         Identifies the primary and secondary components from a list of Gaia results
-        by comparing their magnitudes to the WDS catalog magnitudes.
+        using improved algorithm that considers both magnitude and spatial proximity.
         
         Returns:
             Tuple of (primary_gaia, secondary_gaia) or (None, None) if insufficient sources
@@ -328,49 +328,119 @@ class GaiaValidator(PhysicalityValidator):
         mag_pri_wds, mag_sec_wds = wds_mags
 
         if mag_pri_wds is None or mag_sec_wds is None:
-            # If WDS magnitudes are not available, assume the brightest Gaia source
-            # is the primary and the second brightest is the secondary.
-            return gaia_results[0], gaia_results[1]
+            # If WDS magnitudes are not available, return the two closest sources
+            # (they are already sorted by brightness from the query)
+            return self._select_closest_pair(gaia_results)
 
-        # Find the Gaia source closest in magnitude to the WDS primary
-        # and the one closest to the WDS secondary.
-        # This is more robust than assuming the brightest is always the primary.
+        # Use improved matching algorithm
+        return self._match_components_improved(gaia_results, mag_pri_wds, mag_sec_wds)
+    
+    def _select_closest_pair(self, gaia_results):
+        """Select the two spatially closest sources from Gaia results."""
+        if len(gaia_results) < 2:
+            return None, None
+            
+        # Calculate all pairwise distances
+        min_distance = np.inf
+        best_pair = (gaia_results[0], gaia_results[1])
         
-        best_pri_match, best_sec_match = None, None
-        min_pri_diff, min_sec_diff = np.inf, np.inf
+        for i in range(len(gaia_results)):
+            for j in range(i + 1, len(gaia_results)):
+                source1, source2 = gaia_results[i], gaia_results[j]
+                
+                # Calculate angular distance in arcseconds
+                ra1, dec1 = source1['ra'], source1['dec']
+                ra2, dec2 = source2['ra'], source2['dec']
+                
+                # Simple angular distance approximation for small separations
+                delta_ra = (ra1 - ra2) * np.cos(np.radians((dec1 + dec2) / 2))
+                delta_dec = dec1 - dec2
+                distance_arcsec = np.sqrt(delta_ra**2 + delta_dec**2) * 3600
+                
+                if distance_arcsec < min_distance:
+                    min_distance = distance_arcsec
+                    best_pair = (source1, source2)
+        
+        # Return brightest first (primary)
+        if best_pair[0]['phot_g_mean_mag'] <= best_pair[1]['phot_g_mean_mag']:
+            return best_pair[0], best_pair[1]
+        else:
+            return best_pair[1], best_pair[0]
+    
+    def _match_components_improved(self, gaia_results, mag_pri_wds, mag_sec_wds):
+        """Improved component matching using magnitude + spatial proximity."""
+        # First pass: Find candidates within reasonable magnitude tolerance
+        mag_tolerance = 1.5  # magnitudes
+        
+        pri_candidates = []
+        sec_candidates = []
         
         for source in gaia_results:
             g_mag = source['phot_g_mean_mag']
-            if g_mag is None or (hasattr(g_mag, 'mask') and np.ma.is_masked(g_mag)): 
+            if g_mag is None or (hasattr(g_mag, 'mask') and np.ma.is_masked(g_mag)):
                 continue
-
+                
             pri_diff = abs(g_mag - mag_pri_wds)
             sec_diff = abs(g_mag - mag_sec_wds)
-
-            if pri_diff < min_pri_diff:
-                min_pri_diff = pri_diff
-                best_pri_match = source
-
-            if sec_diff < min_sec_diff:
-                min_sec_diff = sec_diff
-                best_sec_match = source
-        
-        # Check if we matched the same Gaia source to both components
-        if best_pri_match is not None and best_sec_match is not None and \
-           best_pri_match['source_id'] == best_sec_match['source_id']:
-            # Fallback to brightness order for ambiguous magnitude matching
-            log.warning(f"Same Gaia source matched to both WDS components. "
-                       f"WDS mags: {mag_pri_wds:.2f}, {mag_sec_wds:.2f}. "
-                       f"Using brightness order as fallback.")
             
-            # Return the two brightest distinct sources
-            if len(gaia_results) >= 2:
-                return gaia_results[0], gaia_results[1]
-            else:
-                log.warning("Insufficient Gaia sources for component identification")
-                return None, None
-
-        return best_pri_match, best_sec_match
+            if pri_diff <= mag_tolerance:
+                pri_candidates.append((source, pri_diff))
+            if sec_diff <= mag_tolerance:
+                sec_candidates.append((source, sec_diff))
+        
+        # If no good magnitude matches, fall back to closest pair
+        if not pri_candidates or not sec_candidates:
+            log.warning(f"Poor magnitude matching for WDS mags {mag_pri_wds:.2f}, {mag_sec_wds:.2f}. Using closest pair.")
+            return self._select_closest_pair(gaia_results)
+        
+        # Find the best pair considering both magnitude and spatial separation
+        best_score = np.inf
+        best_pri_match = None
+        best_sec_match = None
+        
+        for pri_source, pri_mag_diff in pri_candidates:
+            for sec_source, sec_mag_diff in sec_candidates:
+                
+                # Skip if same source
+                if pri_source['source_id'] == sec_source['source_id']:
+                    continue
+                
+                # Calculate spatial separation
+                ra1, dec1 = pri_source['ra'], pri_source['dec']
+                ra2, dec2 = sec_source['ra'], sec_source['dec']
+                
+                delta_ra = (ra1 - ra2) * np.cos(np.radians((dec1 + dec2) / 2))
+                delta_dec = dec1 - dec2
+                sep_arcsec = np.sqrt(delta_ra**2 + delta_dec**2) * 3600
+                
+                # Combined score: magnitude difference + spatial penalty
+                # Prefer closer pairs with good magnitude matches
+                mag_score = pri_mag_diff + sec_mag_diff
+                spatial_penalty = min(sep_arcsec / 10.0, 5.0)  # Cap at 5 for very wide pairs
+                combined_score = mag_score + spatial_penalty
+                
+                if combined_score < best_score:
+                    best_score = combined_score
+                    best_pri_match = pri_source
+                    best_sec_match = sec_source
+        
+        if best_pri_match is not None and best_sec_match is not None:
+            # Calculate final separation for logging
+            ra1, dec1 = best_pri_match['ra'], best_pri_match['dec']
+            ra2, dec2 = best_sec_match['ra'], best_sec_match['dec']
+            delta_ra = (ra1 - ra2) * np.cos(np.radians((dec1 + dec2) / 2))
+            delta_dec = dec1 - dec2
+            final_sep = np.sqrt(delta_ra**2 + delta_dec**2) * 3600
+            
+            log.debug(f"Matched components: sep={final_sep:.2f}\", "
+                     f"mags={best_pri_match['phot_g_mean_mag']:.2f}/{best_sec_match['phot_g_mean_mag']:.2f} "
+                     f"vs WDS {mag_pri_wds:.2f}/{mag_sec_wds:.2f}")
+            
+            return best_pri_match, best_sec_match
+        
+        # Final fallback to brightness order
+        log.warning("Component matching failed, using brightness order")
+        return gaia_results[0], gaia_results[1] if len(gaia_results) >= 2 else (None, None)
 
     async def _query_gaia_for_pair_async(self, ra_deg: float, dec_deg: float, radius_arcsec: float):
         """

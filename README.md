@@ -95,38 +95,113 @@ The GUI provides:
 
 ### 2. Data Analyzer (CLI)
 
-Process star catalogs to find high-priority observation targets using local databases:
+The CLI analyzer processes binary star catalogs to find high-priority observation targets. It requires a **SQLite database** created from WDSS/ORB6 catalogs using the conversion script.
 
+#### **Prerequisites**
+
+First, create the SQLite database from your catalog files:
 ```bash
-# Basic analysis with discovery mode (motion analysis)
-python -m astrakairos.analyzer.cli targets.csv --database-path catalogs.db --limit 10
-
-# Orbital analysis with Gaia validation
-python -m astrakairos.analyzer.cli targets.csv --database-path catalogs.db --mode orbital --validate-gaia --output results.csv
-
-# Analyze all systems in database with characterization mode
-python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode characterize --limit 100
-
-# Discovery mode with custom sorting
-python -m astrakairos.analyzer.cli targets.csv --database-path catalogs.db --mode discovery --sort-by v_total_arcsec_yr
+# Convert WDSS and ORB6 catalogs to SQLite database
+python scripts/convert_catalogs_to_sqlite.py --wdss-file wdss_master.txt --orb6-file orb6_catalog.txt --output catalogs.db
 ```
 
-**Analysis modes:**
-- `discovery`: Motion analysis and velocity calculations (default)
-- `characterize`: Robust linear fitting with Theil-Sen regression  
-- `orbital`: Observation Priority Index (OPI) calculation for ranking
+You only need to do this once. The required catalog files are:
+- **WDSS Master Catalog** (`wdss_master.txt`) - Binary star measurements
+- **ORB6 Catalog** (`orb6_catalog.txt`) - Orbital elements for known binaries
 
-**Key options:**
-- `--database-path`: Required path to local SQLite catalog database 
-- `--validate-gaia`: Enable Gaia DR3 physicality validation (requires network)
+#### **Two Analysis Modes**
+
+**Option A: Analyze ALL systems in database (recommended for discovery)**
+```bash
+# Discover high-motion systems from entire database
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --limit 100
+
+# Find orbital priority targets with Gaia validation
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode orbital --validate-gaia --limit 50 --output high_priority.csv
+
+# Characterize motion of all systems with robust fitting
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode characterize --limit 200
+```
+
+**Option B: Analyze specific targets from a CSV file**
+```bash
+# Create a targets file with specific WDS IDs
+echo "wds_id" > my_targets.csv
+echo "00003+1154" >> my_targets.csv
+echo "00005+1259" >> my_targets.csv
+echo "00006+2012" >> my_targets.csv
+
+# Analyze only these specific systems
+python -m astrakairos.analyzer.cli my_targets.csv --database-path catalogs.db --mode orbital --validate-gaia
+```
+
+#### **Analysis Modes**
+- **`discovery`** (default): Fast motion analysis using endpoint velocities - ideal for finding high-velocity systems
+- **`characterize`**: Robust linear fitting with Theil-Sen regression - provides detailed motion characterization  
+- **`orbital`**: Observation Priority Index (OPI) calculation - ranks systems by orbital deviation urgency
+
+#### **Key Options**
+- `--all`: Analyze all systems in database (alternative to providing CSV file)
+- `--database-path`: **Required** - Path to SQLite database created by conversion script
+- `--validate-gaia`: Enable Gaia DR3 physicality validation (requires internet connection)
 - `--mode`: Analysis type (discovery/characterize/orbital)
-- `--limit`: Maximum number of systems to process
-- `--output`: Output CSV file for results
+- `--limit`: Maximum number of systems to process (recommended for large databases)
+- `--output`: Save results to CSV file
+- `--sort-by`: Custom sorting field (e.g., `v_total_arcsec_yr`, `opi_arcsec_yr`)
 
-For complete documentation:
+#### **Example Output**
+```
+TOP 10 ANALYSIS RESULTS - ORBITAL MODE (sorted by opi_arcsec_yr)
+================================================================================
+ 1. 07142+2357           | OPI = 12.4567               | Gaia: Likely Physical
+ 2. 15234+4021           | OPI = 8.9123                | Gaia: Likely Physical
+ 3. 23456+1234           | OPI = 6.7890                | Gaia: Ambiguous
+```
+
+#### **Complete Documentation**
 ```bash
 python -m astrakairos.analyzer.cli --help
 ```
+
+#### **Setup: Generating the Required Database**
+
+Before using the CLI, you need to create the SQLite database from the catalog files:
+
+```bash
+# Convert WDSS and ORB6 catalogs to SQLite format
+python scripts/convert_catalogs_to_sqlite.py
+
+# This creates: results/wdss3-data.db (used by the CLI)
+```
+
+**Required catalog files:**
+- `data_catalogs/wdss*.txt` (WDSS catalog files)
+- `data_catalogs/orb6orbits.txt` (ORB6 orbital elements)
+
+These are included in the repository and only need to be converted once.
+
+#### **Input File Requirements**
+
+**Required files:**
+- **SQLite database** (`catalogs.db`) - Created once from WDSS/ORB6 catalogs using the conversion script
+
+**Optional files:**
+- **Targets CSV** (`my_targets.csv`) - Used only when analyzing specific systems instead of the entire database
+
+**Targets CSV format (when using Option B):**
+```csv
+wds_id
+00003+1154
+00005+1259
+00006+2012
+20126+4003
+```
+
+The CSV must contain a `wds_id` column with valid WDS designations. You can create this file:
+- Manually (as shown above)
+- By exporting from the GUI planner
+- By filtering results from previous analyses
+- From any astronomical database that provides WDS identifiers
 
 ## Project Roadmap
 

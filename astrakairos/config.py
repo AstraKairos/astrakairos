@@ -53,11 +53,11 @@ MIN_MEASUREMENTS_FOR_CHARACTERIZE = 5
 DEFAULT_MIN_OBS = 2
 DEFAULT_MIN_OBSERVATIONS = 2  # Alias for compatibility
 DEFAULT_MAX_OBS = 10
-DEFAULT_CONCURRENT_REQUESTS = 5
+DEFAULT_CONCURRENT_REQUESTS = 20
 DEFAULT_GAIA_P_VALUE = 0.01
-DEFAULT_GAIA_RADIUS_FACTOR = 1.5
+DEFAULT_GAIA_RADIUS_FACTOR = 1.2
 DEFAULT_GAIA_MIN_RADIUS = 2.0
-DEFAULT_GAIA_MAX_RADIUS = 60.0
+DEFAULT_GAIA_MAX_RADIUS = 15.0
 DEFAULT_SORT_BY = 'v_total'
 TOP_RESULTS_DISPLAY_COUNT = 10
 
@@ -420,7 +420,7 @@ OPI_DEVIATION_THRESHOLD_ARCSEC = 0.1        # Threshold for zero-time-baseline O
 OPI_INFINITE_THRESHOLD = 1000.0             # Value representing infinite priority
 
 # Robust Linear Fit Configuration
-MIN_POINTS_FOR_ROBUST_FIT = 5               # Minimum measurements required for robust Theil-Sen analysis
+MIN_POINTS_FOR_ROBUST_FIT = 3               # Minimum measurements required for robust Theil-Sen analysis
 ROBUST_REGRESSION_RANDOM_STATE = 42         # Random state for reproducible results
 
 # Astrometric Motion Validation
@@ -485,7 +485,7 @@ OPI_DEVIATION_THRESHOLD_ARCSEC = 0.1  # Threshold for zero-time-baseline OPI cal
 OPI_INFINITE_THRESHOLD = 1000.0  # Maximum reasonable OPI value before considering infinite
 
 # Robust Fitting Configuration
-MIN_POINTS_FOR_ROBUST_FIT = 5  # Minimum measurements required for robust Theil-Sen analysis
+MIN_POINTS_FOR_ROBUST_FIT = 3  # Minimum measurements required for robust Theil-Sen analysis
 ROBUST_REGRESSION_RANDOM_STATE = 42  # Fixed seed for reproducible robust regression results
 
 # Astrometric Motion Limits - Physical Constraints

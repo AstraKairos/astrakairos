@@ -140,13 +140,37 @@ def calculate_robust_linear_fit(measurements: Table) -> Optional[Dict[str, Any]]
 
     try:
         # Prepare data for regression with proper array handling
-        t = np.array(measurements['epoch']).reshape(-1, 1)
-        theta_rad = np.radians(np.array(measurements['theta']))
-        rho = np.array(measurements['rho'])
+        if 'epoch' not in measurements.colnames or 'theta' not in measurements.colnames or 'rho' not in measurements.colnames:
+            logger.error(f"Missing required columns in measurements. Available: {measurements.colnames}")
+            return None
+            
+        # Convert to numpy arrays and handle potential None/masked values
+        epoch_data = measurements['epoch']
+        theta_data = measurements['theta']
+        rho_data = measurements['rho']
+        
+        # Filter out None values and convert to numpy arrays
+        valid_indices = []
+        for i in range(len(epoch_data)):
+            if (epoch_data[i] is not None and theta_data[i] is not None and rho_data[i] is not None):
+                valid_indices.append(i)
+        
+        if len(valid_indices) < MIN_POINTS_FOR_ROBUST_FIT:
+            logger.warning(f"Insufficient valid measurements: {len(valid_indices)} < {MIN_POINTS_FOR_ROBUST_FIT}")
+            return None
+            
+        # Extract valid data
+        t = np.array([epoch_data[i] for i in valid_indices]).reshape(-1, 1)
+        theta_values = np.array([theta_data[i] for i in valid_indices])
+        rho = np.array([rho_data[i] for i in valid_indices])
+        
+        # Convert theta to radians
+        theta_rad = np.radians(theta_values)
 
         # Validate input data ranges
         epoch_range = np.max(t) - np.min(t)
         if epoch_range < MIN_TIME_BASELINE_YEARS:
+            logger.warning(f"Time baseline too short: {epoch_range:.2f} years < {MIN_TIME_BASELINE_YEARS}")
             return None
 
         # Convert polar coordinates to Cartesian (x, y)

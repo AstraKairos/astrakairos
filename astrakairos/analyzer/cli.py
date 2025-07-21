@@ -263,17 +263,26 @@ async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_s
         try:
             all_measurements = await data_source.get_all_measurements(wds_id)
             if all_measurements and len(all_measurements) >= 3:
-                # PASO 1: Calcular el modelo lineal primero
+                log.info(f"Calculating curvature for {wds_id} with {len(all_measurements)} measurements")
+
                 linear_fit_results = calculate_robust_linear_fit(all_measurements)
                 if linear_fit_results:
-                    # PASO 2: Comparar modelo orbital vs lineal
+                    log.info(f"Linear fit successful for {wds_id}, calculating curvature index")
                     curvature_index = calculate_curvature_index(
                         orbital_elements, 
                         linear_fit_results, 
                         current_year
                     )
+                    if curvature_index is not None:
+                        log.info(f"Curvature index calculated for {wds_id}: {curvature_index:.4f}\"")
+                    else:
+                        log.warning(f"Curvature index calculation failed for {wds_id} (orbital vs linear comparison)")
+                else:
+                    log.warning(f"Linear fit failed for {wds_id} with {len(all_measurements)} measurements")
+            else:
+                log.info(f"Insufficient measurements for curvature calculation: {wds_id} has {len(all_measurements) if all_measurements else 0} measurements (need ≥3)")
         except Exception as e:
-            log.debug(f"Curvature calculation failed for {wds_id}: {e}")
+            log.warning(f"Curvature calculation failed for {wds_id}: {e}")
         
         result = {
             'opi_arcsec_yr': opi,
@@ -315,25 +324,25 @@ async def _perform_gaia_validation(wds_id: str, wds_summary: WdsSummary,
         
         if physicality_assessment:
             result = {
-                'physicality_label': physicality_assessment['label'].value,
                 'physicality_p_value': physicality_assessment.get('p_value'),
+                'physicality_label': physicality_assessment['label'].value,
                 'physicality_method': physicality_assessment['method'].value,
                 'physicality_confidence': physicality_assessment.get('confidence')
             }
-            log.debug(f"Gaia validation complete: {physicality_assessment['label']}")
+            log.debug(f"Gaia validation complete: p_value={physicality_assessment.get('p_value')}")
             return result
         else:
             return {
-                'physicality_label': 'Failed',
                 'physicality_p_value': None,
+                'physicality_label': 'Failed',
                 'physicality_method': None,
                 'physicality_confidence': None
             }
     except Exception as e:
         log.error(f"Gaia validation failed for {wds_id}: {e}")
         return {
-            'physicality_label': 'Error',
             'physicality_p_value': None,
+            'physicality_label': 'Error',
             'physicality_method': None,
             'physicality_confidence': None
         }
@@ -354,14 +363,17 @@ async def process_star(row: pd.Series,
     """
     async with semaphore:
         wds_id = row['wds_id']
-        log.info(f"Processing {wds_id} in {cli_args.mode} mode (obs: {row.get('obs', 'N/A')})")
-
+        
         try:
             # 1. Always get basic WDS summary data
             wds_summary = await data_source.get_wds_summary(wds_id)
             if not wds_summary:
                 log.warning(f"No WDS data found for {wds_id}")
                 return None
+
+            # Log with correct observation count
+            n_obs = wds_summary.get('n_observations', 'N/A')
+            log.info(f"Processing {wds_id} in {cli_args.mode} mode (obs: {n_obs})")
 
             # Validate data
             if not _validate_wds_summary_for_analysis(wds_summary):
@@ -373,7 +385,7 @@ async def process_star(row: pd.Series,
             result = {
                 'wds_id': wds_id,
                 'mode': cli_args.mode,
-                'obs_wds': wds_summary.get('obs'),
+                'obs_wds': wds_summary.get('n_observations'),
                 'date_last': wds_summary.get('date_last', wds_summary.get('date_first')),
             }
 
@@ -399,8 +411,8 @@ async def process_star(row: pd.Series,
                 result.update(gaia_result)
             else:
                 result.update({
-                    'physicality_label': 'Not checked',
                     'physicality_p_value': None,
+                    'physicality_label': 'Not checked',
                     'physicality_method': None,
                     'physicality_confidence': None
                 })
@@ -631,7 +643,7 @@ async def main_async(args: argparse.Namespace):
                 else:
                     metric_str = f"Value = {result.get(sort_key, 'N/A')}"
                 
-                phys_str = f"Gaia: {result['physicality_label']}" if result.get('physicality_label') != 'Not checked' else ''
+                phys_str = f"p_val: {result['physicality_p_value']}" if result.get('physicality_p_value') is not None else f"Gaia: {result['physicality_label']}"
                 print(f"{i:2d}. {result['wds_id']:<{WDS_ID_COLUMN_WIDTH}} | {metric_str:<{METRIC_COLUMN_WIDTH}} | {phys_str}")
             
             print("-" * DISPLAY_LINE_WIDTH)
