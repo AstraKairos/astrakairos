@@ -645,9 +645,15 @@ def create_sqlite_database(df_wds: pd.DataFrame, df_orb6: pd.DataFrame,
         df_wds.to_sql('wdss_summary', conn, if_exists='replace', index=False)
         conn.execute('CREATE INDEX idx_wdss_summary_id ON wdss_summary(wds_id)')
         conn.execute('CREATE INDEX idx_wdss_summary_wdss_id ON wdss_summary(wdss_id)')
-        # Note: coordinate index will be added when coordinates are properly extracted
-        # conn.execute('CREATE INDEX idx_wdss_summary_coords ON wdss_summary(ra_deg, dec_deg)')
-        log.info(f"Created wdss_summary table with {len(df_wds)} entries")
+        
+        # Critical spatial index for coordinate queries (dec_deg first for better selectivity)
+        conn.execute('CREATE INDEX idx_wdss_summary_coords ON wdss_summary(dec_deg, ra_deg)')
+        
+        # Additional performance indexes for common query patterns
+        conn.execute('CREATE INDEX idx_wdss_summary_date_last ON wdss_summary(date_last)')
+        conn.execute('CREATE INDEX idx_wdss_summary_n_obs ON wdss_summary(n_obs)')
+        
+        log.info(f"Created wdss_summary table with {len(df_wds)} entries and performance indexes")
         
         # Debug ORB6 DataFrame
         log.info(f"ORB6 DataFrame columns: {df_orb6.columns.tolist()}")

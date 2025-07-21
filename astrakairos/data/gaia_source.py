@@ -9,7 +9,7 @@ from datetime import datetime
 # Import configuration constants
 from ..config import (
     DEFAULT_GAIA_TABLE, DEFAULT_GAIA_SEARCH_RADIUS_ARCSEC, DEFAULT_GAIA_MAG_LIMIT,
-    DEFAULT_GAIA_ROW_LIMIT, DEFAULT_PHYSICAL_P_VALUE_THRESHOLD, 
+    DEFAULT_GAIA_MAX_ROWS, DEFAULT_PHYSICAL_P_VALUE_THRESHOLD, 
     DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD,
     GAIA_MAX_RETRY_ATTEMPTS, GAIA_RETRY_DELAY_SECONDS,
     MIN_PARALLAX_SIGNIFICANCE,
@@ -37,7 +37,7 @@ class GaiaValidator(PhysicalityValidator):
                  physical_p_value_threshold: float = DEFAULT_PHYSICAL_P_VALUE_THRESHOLD,
                  ambiguous_p_value_threshold: float = DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD,
                  mag_limit: float = DEFAULT_GAIA_MAG_LIMIT,
-                 max_sources: int = DEFAULT_GAIA_ROW_LIMIT):
+                 max_sources: int = DEFAULT_GAIA_MAX_ROWS):
         """
         Initializes the Gaia validator with configuration parameters.
 

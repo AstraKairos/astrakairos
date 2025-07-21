@@ -44,9 +44,12 @@ class LocalDataSource(DataSource):
         self.conn = None
         
         try:
-            # Connect to SQLite database
-            self.conn = sqlite3.connect(database_path)
+            # Open database in read-only mode for safety and performance
+            self.conn = sqlite3.connect(f'file:{database_path}?mode=ro', uri=True)
             self.conn.row_factory = sqlite3.Row
+            
+            # Performance optimizations for read-only access
+            self._configure_performance_settings()
             
             # Verify database structure
             self._verify_database_structure()
@@ -59,6 +62,40 @@ class LocalDataSource(DataSource):
         except FileNotFoundError as e:
             log.error(f"Catalog database not found: {database_path}")
             raise
+
+    def _configure_performance_settings(self) -> None:
+        """Configure SQLite for optimal read performance."""
+        try:
+            # Disable journal and synchronous writes (safe for read-only)
+            self.conn.execute('PRAGMA journal_mode = OFF')
+            self.conn.execute('PRAGMA synchronous = OFF')
+            
+            # Use memory for temporary operations
+            self.conn.execute('PRAGMA temp_store = MEMORY')
+            
+            # Calculate optimal cache size (fallback to conservative 100MB if psutil unavailable)
+            try:
+                import psutil
+                available_ram_kb = psutil.virtual_memory().available // 1024
+                cache_size_kb = min(available_ram_kb // 10, 500 * 1024)  # 10% of RAM, max 500MB
+            except ImportError:
+                cache_size_kb = 100 * 1024  # Conservative 100MB fallback
+                log.debug("psutil not available, using conservative cache size")
+            
+            self.conn.execute(f'PRAGMA cache_size = -{cache_size_kb}')
+            
+            # Enable memory-mapped I/O (can be very fast for large databases)
+            mmap_size = min(1024 * 1024 * 1024, cache_size_kb * 1024 * 2)  # Up to 1GB or 2x cache
+            self.conn.execute(f'PRAGMA mmap_size = {mmap_size}')
+            
+            # Optimize query planner
+            self.conn.execute('PRAGMA optimize')
+            
+            log.debug(f"SQLite performance configured: cache={cache_size_kb}KB, mmap={mmap_size//1024//1024}MB")
+            
+        except Exception as e:
+            log.warning(f"Could not apply all performance optimizations: {e}")
+            # Continue anyway - these are optimizations, not requirements
 
     def _verify_database_structure(self) -> None:
         """Verify that database has required tables and structure."""

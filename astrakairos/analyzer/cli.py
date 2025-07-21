@@ -22,7 +22,7 @@ from ..physics.dynamics import (
 )
 from ..utils.io import load_csv_data, save_results_to_csv
 from ..config import (
-    DEFAULT_CONCURRENT_REQUESTS, DEFAULT_MIN_OBSERVATIONS,
+    DEFAULT_CONCURRENT_REQUESTS, DEFAULT_MIN_OBS,
     DEFAULT_GAIA_P_VALUE, DEFAULT_GAIA_RADIUS_FACTOR,
     DEFAULT_GAIA_MIN_RADIUS, DEFAULT_GAIA_MAX_RADIUS,
     MIN_EPOCH_YEAR, MAX_EPOCH_YEAR, MIN_SEPARATION_ARCSEC, MAX_SEPARATION_ARCSEC,
@@ -576,8 +576,8 @@ Examples:
     
     parser.add_argument('--min-obs',
                        type=int,
-                       default=DEFAULT_MIN_OBSERVATIONS,
-                       help=f'Minimum number of observations (default: {DEFAULT_MIN_OBSERVATIONS})')
+                       default=DEFAULT_MIN_OBS,
+                       help=f'Minimum number of observations (default: {DEFAULT_MIN_OBS})')
     
     # Output options
     parser.add_argument('--output', '-o',

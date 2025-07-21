@@ -145,7 +145,6 @@ WDSS_MEASUREMENT_COLSPECS = {
 # CLI Analysis Configuration
 MIN_MEASUREMENTS_FOR_CHARACTERIZE = 5
 DEFAULT_MIN_OBS = 2
-DEFAULT_MIN_OBSERVATIONS = 2  # Alias for compatibility
 DEFAULT_MAX_OBS = 10
 DEFAULT_CONCURRENT_REQUESTS = 20
 DEFAULT_GAIA_P_VALUE = 0.01
@@ -468,7 +467,6 @@ DEFAULT_GAIA_SEARCH_RADIUS_ARCSEC = 10.0     # Search radius around target
 DEFAULT_GAIA_MAG_LIMIT = 18.0                # Magnitude limit for Gaia queries
 DEFAULT_GAIA_TIMEOUT_SECONDS = 30            # Timeout for Gaia queries
 DEFAULT_GAIA_MAX_ROWS = 1000                 # Maximum rows to retrieve
-DEFAULT_GAIA_ROW_LIMIT = 1000                # Alias for backward compatibility
 
 # Gaia Physical Validation Thresholds
 DEFAULT_PHYSICAL_P_VALUE_THRESHOLD = 0.05   # Threshold for physical companion classification

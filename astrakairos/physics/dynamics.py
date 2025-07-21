@@ -628,42 +628,40 @@ def estimate_velocity_from_endpoints_mc(
         if dt <= 0 or dt < MIN_TIME_BASELINE_YEARS:
             return None
             
-        # Monte Carlo sampling
-        v_total_samples = []
-        pa_v_samples = []
+        # Monte Carlo sampling - vectorized for better performance
+        np.random.seed(MC_RANDOM_SEED)
         
-        for _ in range(num_samples):
-            # Sample from error distributions
-            pa1_sample = np.random.normal(wds_summary['pa_first'], pa_first_error)
-            pa2_sample = np.random.normal(wds_summary['pa_last'], pa_last_error)
-            sep1_sample = np.random.normal(wds_summary['sep_first'], sep_first_error)
-            sep2_sample = np.random.normal(wds_summary['sep_last'], sep_last_error)
-            
-            # Ensure positive separations
-            sep1_sample = max(sep1_sample, 0.001)
-            sep2_sample = max(sep2_sample, 0.001)
-            
-            # Convert to Cartesian and calculate velocity
-            theta1_rad = np.radians(pa1_sample % 360)
-            theta2_rad = np.radians(pa2_sample % 360)
-            
-            x1 = sep1_sample * np.sin(theta1_rad)
-            y1 = sep1_sample * np.cos(theta1_rad)
-            x2 = sep2_sample * np.sin(theta2_rad)
-            y2 = sep2_sample * np.cos(theta2_rad)
-            
-            vx = (x2 - x1) / dt
-            vy = (y2 - y1) / dt
-            
-            v_total = np.sqrt(vx**2 + vy**2)
-            pa_v = np.degrees(np.arctan2(vx, vy)) % 360
-            
-            v_total_samples.append(v_total)
-            pa_v_samples.append(pa_v)
+        # Generate all samples at once (vectorized)
+        pa1_samples = np.random.normal(wds_summary['pa_first'], pa_first_error, size=num_samples)
+        pa2_samples = np.random.normal(wds_summary['pa_last'], pa_last_error, size=num_samples)
+        sep1_samples = np.random.normal(wds_summary['sep_first'], sep_first_error, size=num_samples)
+        sep2_samples = np.random.normal(wds_summary['sep_last'], sep_last_error, size=num_samples)
+        
+        # Ensure positive separations (vectorized)
+        sep1_samples = np.maximum(sep1_samples, 0.001)
+        sep2_samples = np.maximum(sep2_samples, 0.001)
+        
+        # Convert to Cartesian coordinates (vectorized)
+        theta1_rad = np.radians(pa1_samples % 360)
+        theta2_rad = np.radians(pa2_samples % 360)
+        
+        x1 = sep1_samples * np.sin(theta1_rad)
+        y1 = sep1_samples * np.cos(theta1_rad)
+        x2 = sep2_samples * np.sin(theta2_rad)
+        y2 = sep2_samples * np.cos(theta2_rad)
+        
+        # Calculate velocities (vectorized)
+        dt = wds_summary['date_last'] - wds_summary['date_first']
+        vx_samples = (x2 - x1) / dt
+        vy_samples = (y2 - y1) / dt
+        
+        # Calculate derived quantities (vectorized)
+        v_total_samples = np.sqrt(vx_samples**2 + vy_samples**2)
+        pa_v_samples = np.degrees(np.arctan2(vx_samples, vy_samples)) % 360
         
         # Calculate statistics
-        v_total_stats = _calculate_mc_statistics(np.array(v_total_samples))
-        pa_v_stats = _calculate_mc_statistics(np.array(pa_v_samples))
+        v_total_stats = _calculate_mc_statistics(v_total_samples)
+        pa_v_stats = _calculate_mc_statistics(pa_v_samples)
         
         # Determine uncertainty source
         uncertainty_source = 'mixed' if 0 < num_measured < len(error_fields) else (
