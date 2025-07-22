@@ -332,7 +332,7 @@ class LocalDataSource(DataSource):
             label=PhysicalityLabel.UNKNOWN,
             confidence=0.0,
             p_value=None,
-            method=ValidationMethod.INSUFFICIENT_DATA,
+            method=None,
             parallax_consistency=None,
             proper_motion_consistency=None,
             gaia_source_id_primary=None,

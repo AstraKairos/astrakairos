@@ -134,7 +134,7 @@ class GaiaValidator(PhysicalityValidator):
                           gaia_primary: Optional[str] = None, gaia_secondary: Optional[str] = None) -> PhysicalityAssessment:
         """Create a PhysicalityAssessment object."""
         if method is None:
-            method = ValidationMethod.INSUFFICIENT_DATA
+            method = None
             
         return {
             'label': label,
@@ -187,15 +187,15 @@ class GaiaValidator(PhysicalityValidator):
         
         if len(quality_filtered) < 2:
             log.warning(f"Only {len(quality_filtered)} quality sources after filtering from {len(gaia_results)} total")
-            return {'label': PhysicalityLabel.UNKNOWN, 'p_value': None, 'method': ValidationMethod.INSUFFICIENT_DATA}
+            return {'label': PhysicalityLabel.UNKNOWN, 'p_value': None, 'method': None}
         
         primary_gaia, secondary_gaia = self._identify_components_by_mag(quality_filtered, wds_mags)
         if primary_gaia is None or secondary_gaia is None:
             # Check if it's due to insufficient sources or genuine component matching failure
             if len(quality_filtered) < 2:
-                return {'label': PhysicalityLabel.UNKNOWN, 'p_value': None, 'method': ValidationMethod.INSUFFICIENT_DATA}
+                return {'label': PhysicalityLabel.UNKNOWN, 'p_value': None, 'method': None}
             else:
-                return {'label': PhysicalityLabel.AMBIGUOUS, 'p_value': None, 'method': ValidationMethod.INSUFFICIENT_DATA}
+                return {'label': PhysicalityLabel.AMBIGUOUS, 'p_value': None, 'method': None}
         
         chi2_result = self._calculate_chi2_3d(primary_gaia, secondary_gaia)
         if chi2_result:
@@ -210,7 +210,7 @@ class GaiaValidator(PhysicalityValidator):
                     test_type = ValidationMethod.GAIA_PARALLAX_ONLY
 
         if not chi2_result:
-            return {'label': PhysicalityLabel.UNKNOWN, 'p_value': None, 'method': ValidationMethod.INSUFFICIENT_DATA}
+            return {'label': PhysicalityLabel.UNKNOWN, 'p_value': None, 'method': None}
 
         chi_squared_val, dof = chi2_result
         p_value = 1.0 - chi2.cdf(chi_squared_val, df=dof)

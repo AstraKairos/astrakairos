@@ -240,7 +240,7 @@ class TestLocalDataSource:
         assert result is not None
         assert result['label'].value == 'Unknown'
         assert result['confidence'] == 0.0
-        assert result['method'].value == 'Insufficient Data'
+        assert result['method'] is None
         
         source.close()
     

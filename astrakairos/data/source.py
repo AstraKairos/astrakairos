@@ -1,27 +1,34 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TypedDict
 from astropy.table import Table
 from enum import Enum
 
-# --- Data Structures for Type Hinting ---
-from typing import TypedDict
 
-# Import configuration constants
-from ..config import (
-    DEFAULT_PHYSICAL_P_VALUE_THRESHOLD,
-    DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD,
-    GAIA_QUERY_TIMEOUT_SECONDS,
-    MIN_PARALLAX_SIGNIFICANCE,
-    MIN_PM_SIGNIFICANCE,
-    DEFAULT_GAIA_SEARCH_RADIUS_ARCSEC,
-    DEFAULT_GAIA_MAG_LIMIT,
-    GAIA_MAX_RETRY_ATTEMPTS,
-    GAIA_RETRY_DELAY_SECONDS,
-    MIN_ORBIT_GRADE,
-    MAX_ORBIT_GRADE
-)
+class AstraKairosDataError(Exception):
+    """Base exception for AstraKairos data-related errors."""
+    pass
 
-# --- Enums for categorical data ---
+
+class WdsIdNotFoundError(AstraKairosDataError):
+    """Raised when a WDS identifier is not found in the data source."""
+    pass
+
+
+class OrbitalElementsUnavailableError(AstraKairosDataError):
+    """Raised when orbital elements are not available for a given system."""
+    pass
+
+
+class MeasurementsUnavailableError(AstraKairosDataError):
+    """Raised when measurements are not available for a given system."""
+    pass
+
+
+class PhysicalityValidationError(AstraKairosDataError):
+    """Raised when physicality validation fails due to insufficient data or errors."""
+    pass
+
+
 class PhysicalityLabel(Enum):
     """Standardized physicality assessment labels."""
     LIKELY_PHYSICAL = "Likely Physical"
@@ -30,122 +37,197 @@ class PhysicalityLabel(Enum):
     UNKNOWN = "Unknown"
     INSUFFICIENT_DATA = "Insufficient Data"
 
+
 class ValidationMethod(Enum):
-    """Available validation methods for physicality assessment."""
+    """Available validation methods for physicality assessment.
+    
+    Note: This enum only contains actual validation methods.
+    When validation cannot be performed due to insufficient data,
+    the method field should be set to None rather than using an enum value.
+    """
     GAIA_3D_PARALLAX_PM = "Gaia 3D (plx+pm)"
     GAIA_PARALLAX_ONLY = "Gaia Parallax"
     PROPER_MOTION_ONLY = "Proper Motion"
     STATISTICAL_ANALYSIS = "Statistical Analysis"
-    INSUFFICIENT_DATA = PhysicalityLabel.INSUFFICIENT_DATA.value
 
-class WdsSummary(TypedDict, total=False):
-    """Data structure for a single-line entry from the WDS summary catalog."""
-    wds_id: str            # Primary WDS identifier
-    discoverer: str        # Discoverer designation  
-    components: str        # Component designations (e.g., "AB", "A,B,C")
+class WdsSummary(TypedDict, total=True):
+    """Data structure for a single-line entry from the WDS summary catalog.
+    
+    Args:
+        wds_id: Primary WDS identifier (required)
+        discoverer: Discoverer designation (required)
+        components: Component designations (e.g., "AB", "A,B,C") (required)
+        ra_deg: Right ascension in degrees (required)
+        dec_deg: Declination in degrees (required)
+        date_first: First observation epoch (required)
+        date_last: Last observation epoch (required)
+        n_observations: Number of observations (required)
+        pa_first: First position angle in degrees (required)
+        pa_last: Last position angle in degrees (required)
+        sep_first: First separation in arcseconds (required)
+        sep_last: Last separation in arcseconds (required)
+        mag_pri: Primary star magnitude (required)
+        mag_sec: Secondary star magnitude (may be missing in some catalogs)
+        spec_type: Spectral type (may be missing in some catalogs)
+        pa_first_error: Uncertainty in first position angle (degrees), optional
+        pa_last_error: Uncertainty in last position angle (degrees), optional
+        sep_first_error: Uncertainty in first separation (arcsec), optional
+        sep_last_error: Uncertainty in last separation (arcsec), optional
+        wdss_id: Original WDSS ID for reference (WDSS only), optional
+        discoverer_designation: Full discoverer designation (WDSS only), optional
+    """
+    # Essential fields - always required
+    wds_id: str
+    discoverer: str
+    components: str
     ra_deg: float
     dec_deg: float
     date_first: float
     date_last: float
     n_observations: int
     pa_first: float
-    pa_first_error: float  # Uncertainty in first position angle (degrees)
     pa_last: float
-    pa_last_error: float   # Uncertainty in last position angle (degrees)
     sep_first: float
-    sep_first_error: float # Uncertainty in first separation (arcsec)
     sep_last: float
-    sep_last_error: float  # Uncertainty in last separation (arcsec)
     mag_pri: float
-    mag_sec: float
-    spec_type: str         # Spectral type
-    wdss_id: str          # Original WDSS ID for reference (WDSS only)
-    discoverer_designation: str # Full discoverer designation (WDSS only)
+    
+    # Fields that may be missing in some catalogs
+    mag_sec: Optional[float]
+    spec_type: Optional[str]
+    
+    # Error fields - always optional
+    pa_first_error: Optional[float]
+    pa_last_error: Optional[float]
+    sep_first_error: Optional[float]
+    sep_last_error: Optional[float]
+    
+    # Catalog-specific fields - optional
+    wdss_id: Optional[str]
+    discoverer_designation: Optional[str]
 
-class OrbitalElements(TypedDict, total=False):
-    """Data structure for complete Keplerian orbital elements with uncertainties."""
+class OrbitalElements(TypedDict, total=True):
+    """Data structure for complete Keplerian orbital elements with uncertainties.
+    
+    Args:
+        wds_id: Primary WDS identifier (required)
+        P: Period (years) (required)
+        T: Epoch of periastron (years) (required)
+        e: Eccentricity (required)
+        a: Semi-major axis (arcsec) (required)
+        i: Inclination (degrees) (required)
+        Omega: Longitude of ascending node (degrees) (required)
+        omega: Argument of periastron (degrees) (required)
+        reference: Source reference/publication (required)
+        grade: Orbit quality grade (1=best to 5=worst) (required)
+        last_updated: ISO format date string (required)
+        e_P: Period uncertainty (years), optional
+        e_T: Epoch of periastron uncertainty (years), optional
+        e_e: Eccentricity uncertainty (dimensionless), optional
+        e_a: Semi-major axis uncertainty (arcsec), optional
+        e_i: Inclination uncertainty (degrees), optional
+        e_Omega: Longitude of ascending node uncertainty (degrees), optional
+        e_omega_arg: Argument of periastron uncertainty (degrees), optional
+    """
+    # Essential orbital elements - always required
     wds_id: str
+    P: float
+    T: float
+    e: float
+    a: float
+    i: float
+    Omega: float
+    omega: float
     
-    # Orbital elements
-    P: float      # Period (years)
-    T: float      # Epoch of periastron (years)
-    e: float      # Eccentricity
-    a: float      # Semi-major axis (arcsec)
-    i: float      # Inclination (degrees)
-    Omega: float  # Longitude of ascending node (degrees)
-    omega: float  # Argument of periastron (degrees)
+    # Essential metadata - always required
+    reference: str
+    grade: int
+    last_updated: str
     
-    # Complete uncertainty set - all 7 elements for completeness
-    e_P: float    # Period uncertainty (years)
-    e_T: float    # Epoch of periastron uncertainty (years)
-    e_e: float    # Eccentricity uncertainty (dimensionless)
-    e_a: float    # Semi-major axis uncertainty (arcsec)
-    e_i: float    # Inclination uncertainty (degrees)
-    e_Omega: float # Longitude of ascending node uncertainty (degrees)
-    e_omega_arg: float # Argument of periastron uncertainty (degrees)
-    
-    # Metadata
-    reference: str  # Source reference/publication
-    grade: int      # Orbit quality grade (MIN_ORBIT_GRADE=best to MAX_ORBIT_GRADE=worst)
-    last_updated: str  # ISO format date string
+    # Complete uncertainty set - all optional as not all catalogs provide uncertainties
+    e_P: Optional[float]
+    e_T: Optional[float]
+    e_e: Optional[float]
+    e_a: Optional[float]
+    e_i: Optional[float]
+    e_Omega: Optional[float]
+    e_omega_arg: Optional[float]
 
-class BasePhysicalityAssessment(TypedDict, total=False):
-    """Base data structure for physicality validation results."""
-    label: PhysicalityLabel  # Standardized assessment result
-    confidence: float        # 0-1 confidence score
-    p_value: float          # Statistical significance
-    method: ValidationMethod # Method used for validation
+class BasePhysicalityAssessment(TypedDict, total=True):
+    """Base data structure for physicality validation results.
     
-    # Analysis metadata for reproducibility
-    validation_date: str  # ISO format timestamp
-    retry_attempts: int   # Number of retry attempts made
+    Args:
+        label: Standardized assessment result (required)
+        confidence: 0-1 confidence score (required)
+        p_value: Statistical significance (required)
+        method: Method used for validation, None if insufficient data (may be None)
+        validation_date: ISO format timestamp (required)
+        retry_attempts: Number of retry attempts made, optional
+    """
+    # Essential fields - always required
+    label: PhysicalityLabel
+    confidence: float
+    p_value: float
+    validation_date: str
+    
+    # Method may be None when label is INSUFFICIENT_DATA or UNKNOWN
+    method: Optional[ValidationMethod]
+    
+    # Optional metadata
+    retry_attempts: Optional[int]
+
+class ThresholdsDict(TypedDict):
+    """Type specification for significance thresholds in physicality assessment."""
+    physical: float
+    ambiguous: float
 
 class PhysicalityAssessment(BasePhysicalityAssessment, total=False):
     """Extended physicality assessment with Gaia-specific metrics."""
     
     # Gaia-specific metrics
-    parallax_consistency: Optional[float]  # Parallax-based consistency metric
-    proper_motion_consistency: Optional[float]  # Proper motion consistency metric
-    gaia_source_id_primary: Optional[str]     # Gaia source ID for primary star
-    gaia_source_id_secondary: Optional[str]   # Gaia source ID for secondary star
+    parallax_consistency: Optional[float]
+    proper_motion_consistency: Optional[float]
+    gaia_source_id_primary: Optional[str]
+    gaia_source_id_secondary: Optional[str]
     
     # Gaia-specific metadata
-    search_radius_arcsec: float  # Search radius used
-    significance_thresholds: Dict[str, float]  # Thresholds used in analysis
+    search_radius_arcsec: float
+    significance_thresholds: ThresholdsDict
 
 # --- Abstract Base Class ---
 
 class DataSource(ABC):
-    """
-    Abstract Base Class for all AstraKairos data sources.
+    """Abstract Base Class for all AstraKairos data sources.
 
     This interface defines a contract for fetching astronomical catalog data
     related to double star systems. Each method is designed to be explicit
     about the data it retrieves and integrates with the configuration system
     for consistent, configurable behavior.
     
-    Note: Physicality validation has been separated from data access.
+    Physicality validation has been separated from data access.
     Use PhysicalityValidator classes for validation logic.
     """
 
     @abstractmethod
-    async def get_wds_summary(self, wds_id: str) -> Optional[WdsSummary]:
-        """
-        Obtains the summary data for a star from the main WDS catalog.
+    async def get_wds_summary(self, wds_id: str) -> WdsSummary:
+        """Obtains the summary data for a star from the main WDS catalog.
+        
         This corresponds to a single-line entry with aggregated data.
         
         Args:
             wds_id: The WDS identifier for the star.
             
         Returns:
-            A WdsSummary dictionary, or None if not found.
+            A WdsSummary dictionary.
+            
+        Raises:
+            WdsIdNotFoundError: If the WDS identifier is not found in the catalog.
         """
         pass
 
     @abstractmethod
-    async def get_all_measurements(self, wds_id: str) -> Optional[Table]:
-        """
-        Obtains all historical astrometric measurements for a star.
+    async def get_all_measurements(self, wds_id: str) -> Table:
+        """Obtains all historical astrometric measurements for a star.
+        
         This queries the comprehensive measurement catalog (e.g., WDS B/wds/wds).
 
         Args:
@@ -156,29 +238,32 @@ class DataSource(ABC):
             - 'epoch': Observation epoch (decimal years)
             - 'theta': Position angle (degrees)
             - 'rho': Separation (arcseconds)
-            Returns None if not found or if data source doesn't support this operation.
+            
+        Raises:
+            WdsIdNotFoundError: If the WDS identifier is not found.
+            MeasurementsUnavailableError: If measurements exist but cannot be retrieved.
         """
         pass
 
     @abstractmethod
-    async def get_orbital_elements(self, wds_id: str) -> Optional[OrbitalElements]:
-        """
-        Obtains the 7 Keplerian orbital elements for a star.
+    async def get_orbital_elements(self, wds_id: str) -> OrbitalElements:
+        """Obtains the 7 Keplerian orbital elements for a star.
         
         Args:
             wds_id: The WDS identifier for the star.
             
         Returns:
-            An OrbitalElements dictionary, or None if not found.
+            An OrbitalElements dictionary.
+            
+        Raises:
+            WdsIdNotFoundError: If the WDS identifier is not found.
+            OrbitalElementsUnavailableError: If orbital elements are not available.
         """
         pass
 
 
-# --- Abstract Base Class for Physicality Validation ---
-
 class PhysicalityValidator(ABC):
-    """
-    Abstract base class for physicality validation methods.
+    """Abstract base class for physicality validation methods.
     
     This interface separates validation logic from data access,
     allowing for different validation approaches (Gaia, spectroscopy, ML).
@@ -189,15 +274,17 @@ class PhysicalityValidator(ABC):
         self,
         system_data: WdsSummary,
         **kwargs
-    ) -> Optional[BasePhysicalityAssessment]:
-        """
-        Validates if a binary system is likely physically bound.
+    ) -> BasePhysicalityAssessment:
+        """Validates if a binary system is likely physically bound.
         
         Args:
             system_data: Basic system information (coordinates, magnitudes)
             **kwargs: Method-specific parameters
             
         Returns:
-            BasePhysicalityAssessment or subclass, None if validation fails
+            BasePhysicalityAssessment or subclass.
+            
+        Raises:
+            PhysicalityValidationError: If validation fails due to insufficient data or errors.
         """
         pass

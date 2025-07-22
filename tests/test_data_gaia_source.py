@@ -164,7 +164,7 @@ class TestGaiaValidator:
                 
                 assert result['label'] == PhysicalityLabel.UNKNOWN
                 assert result['p_value'] is None
-                assert result['method'] == ValidationMethod.INSUFFICIENT_DATA
+                assert result['method'] is None
     
     def test_validate_physicality_sync_component_matching_failed(self, gaia_validator):
         """Test synchronous physicality validation with component matching failure."""
@@ -184,7 +184,7 @@ class TestGaiaValidator:
                     
                     assert result['label'] == PhysicalityLabel.AMBIGUOUS
                     assert result['p_value'] is None
-                    assert result['method'] == ValidationMethod.INSUFFICIENT_DATA
+                    assert result['method'] is None
     
     def test_validate_physicality_sync_fallback_tests(self, gaia_validator):
         """Test synchronous physicality validation with fallback to 2D and 1D tests."""
