@@ -218,7 +218,7 @@ async def _perform_discovery_analysis(wds_id: str, wds_summary: WdsSummary) -> O
         if 'v_total_median' in velocity_result:
             # Monte Carlo result
             result = {
-                'v_total_arcsec_yr': velocity_result['v_total_median'],
+                'v_total': velocity_result['v_total_median'],
                 'v_total_uncertainty': velocity_result.get('v_total_uncertainty'),
                 'pa_v_deg': velocity_result['pa_v_median'],
                 'pa_v_uncertainty': velocity_result.get('pa_v_uncertainty'),
@@ -229,7 +229,7 @@ async def _perform_discovery_analysis(wds_id: str, wds_summary: WdsSummary) -> O
         else:
             # Point estimate result
             result = {
-                'v_total_arcsec_yr': velocity_result['v_total_estimate'],
+                'v_total': velocity_result['v_total_estimate'],
                 'v_total_uncertainty': None,
                 'pa_v_deg': velocity_result['pa_v_estimate'],
                 'pa_v_uncertainty': None,
@@ -238,7 +238,7 @@ async def _perform_discovery_analysis(wds_id: str, wds_summary: WdsSummary) -> O
                 'analysis_method': velocity_result.get('method', 'two_point_estimate')
             }
         
-        log.debug(f"Discovery analysis complete: v_total = {result['v_total_arcsec_yr']:.6f} ± {result['v_total_uncertainty'] or 0:.6f} arcsec/year")
+        log.debug(f"Discovery analysis complete: v_total = {result['v_total']:.6f} ± {result['v_total_uncertainty'] or 0:.6f} arcsec/year")
         return result
         
     except Exception as e:
@@ -730,7 +730,7 @@ async def main_async(args: argparse.Namespace):
                 # Mode-specific display format with uncertainty information
                 if args.mode == 'discovery':
                     metric_value = format_metric_with_uncertainty(
-                        result, 'v_total_arcsec_yr', 'v_total_uncertainty', 'uncertainty_quality'
+                        result, 'v_total', 'v_total_uncertainty', 'uncertainty_quality'
                     )
                     metric_str = f"V = {metric_value} arcsec/yr"
                 elif args.mode == 'characterize':

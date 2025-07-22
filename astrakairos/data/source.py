@@ -82,7 +82,7 @@ class OrbitalElements(TypedDict, total=False):
     e_a: float    # Semi-major axis uncertainty (arcsec)
     e_i: float    # Inclination uncertainty (degrees)
     e_Omega: float # Longitude of ascending node uncertainty (degrees)
-    e_omega: float # Argument of periastron uncertainty (degrees)
+    e_omega_arg: float # Argument of periastron uncertainty (degrees)
     
     # Metadata
     reference: str  # Source reference/publication

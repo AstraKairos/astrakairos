@@ -266,7 +266,7 @@ class LocalDataSource(DataSource):
         try:
             cursor = self.conn.execute(
                 """SELECT wds_id, P, a, i, Omega, T, e, omega_arg as omega,
-                          e_P, e_a, e_i, e_Omega, e_T, e_e, e_omega_arg as e_omega,
+                          e_P, e_a, e_i, e_Omega, e_T, e_e, e_omega_arg,
                           grade
                    FROM orbital_elements WHERE wds_id = ?""",
                 (normalized_id,)
@@ -277,7 +277,7 @@ class LocalDataSource(DataSource):
                 # Convert sqlite3 row to dict manually with explicit column mapping
                 columns = [
                     'wds_id', 'P', 'a', 'i', 'Omega', 'T', 'e', 'omega',
-                    'e_P', 'e_a', 'e_i', 'e_Omega', 'e_T', 'e_e', 'e_omega',
+                    'e_P', 'e_a', 'e_i', 'e_Omega', 'e_T', 'e_e', 'e_omega_arg',
                     'grade'
                 ]
                 data = {col: row[i] for i, col in enumerate(columns)}

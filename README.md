@@ -95,106 +95,269 @@ The GUI provides:
 
 ### 2. Data Analyzer (CLI)
 
-The CLI analyzer processes binary star catalogs to find high-priority observation targets. It requires a **SQLite database** created from WDSS/ORB6 catalogs using the conversion script.
+The CLI analyzer processes binary star catalogs to find high-priority observation targets. It supports comprehensive analysis of orbital systems with multiple modes and filtering options.
 
 #### **Prerequisites**
 
 First, create the SQLite database from your catalog files:
 ```bash
 # Convert WDSS and ORB6 catalogs to SQLite database
-python scripts/convert_catalogs_to_sqlite.py --wdss-file wdss_master.txt --orb6-file orb6_catalog.txt --output catalogs.db
+python scripts/convert_catalogs_to_sqlite.py --wdss-files wdss1.txt wdss2.txt wdss3.txt wdss4.txt --orb6 orb6orbits.txt --output catalogs.db
 ```
 
 You only need to do this once. The required catalog files are:
-- **WDSS Master Catalog** (`wdss_master.txt`) - Binary star measurements
-- **ORB6 Catalog** (`orb6_catalog.txt`) - Orbital elements for known binaries
+- **WDSS Catalogs** (`wdss1.txt`, `wdss2.txt`, `wdss3.txt`, `wdss4.txt`) - Binary star measurements
+- **ORB6 Catalog** (`orb6orbits.txt`) - Orbital elements for known binaries
 
-#### **Two Analysis Modes**
+#### **Basic Usage Syntax**
 
-**Option A: Analyze ALL systems in database (recommended for discovery)**
 ```bash
-# Discover high-motion systems from entire database
-python -m astrakairos.analyzer.cli --all --database-path catalogs.db --limit 100
+# Analyze specific targets from CSV file
+python -m astrakairos.analyzer.cli <input_file.csv> [options]
 
-# Find orbital priority targets with Gaia validation
-python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode orbital --validate-gaia --limit 50 --output high_priority.csv
-
-# Characterize motion of all systems with robust fitting
-python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode characterize --limit 200
-```
-
-**Option B: Analyze specific targets from a CSV file**
-```bash
-# Create a targets file with specific WDS IDs
-echo "wds_id" > my_targets.csv
-echo "00003+1154" >> my_targets.csv
-echo "00005+1259" >> my_targets.csv
-echo "00006+2012" >> my_targets.csv
-
-# Analyze only these specific systems
-python -m astrakairos.analyzer.cli my_targets.csv --database-path catalogs.db --mode orbital --validate-gaia
+# Analyze entire database
+python -m astrakairos.analyzer.cli --all [options]
 ```
 
 #### **Analysis Modes**
-- **`discovery`** (default): Fast motion analysis using endpoint velocities - ideal for finding high-velocity systems
-- **`characterize`**: Robust linear fitting with Theil-Sen regression - provides detailed motion characterization  
-- **`orbital`**: Observation Priority Index (OPI) calculation - ranks systems by orbital deviation urgency
 
-#### **Key Options**
-- `--all`: Analyze all systems in database (alternative to providing CSV file)
-- `--database-path`: **Required** - Path to SQLite database created by conversion script
-- `--validate-gaia`: Enable Gaia DR3 physicality validation (requires internet connection)
-- `--mode`: Analysis type (discovery/characterize/orbital)
-- `--limit`: Maximum number of systems to process (recommended for large databases)
-- `--output`: Save results to CSV file
-- `--sort-by`: Custom sorting field (e.g., `v_total_arcsec_yr`, `opi_arcsec_yr`)
+**Discovery Mode (`discovery`)** - Default mode for finding fast-moving binary systems:
+- **Purpose**: Quickly identify binary star systems with significant apparent motion
+- **Method**: Uses endpoint velocity calculation (compares first and last observations)
+- **Best for**: Initial surveys, finding high-velocity systems, quick screening of large catalogs
+- **Output**: Angular velocities in RA/Dec, total velocity, curvature index for motion assessment
+- **Performance**: Fastest mode, suitable for processing thousands of systems
 
-#### **Example Output**
-```
-TOP 10 ANALYSIS RESULTS - ORBITAL MODE (sorted by opi_arcsec_yr)
-================================================================================
- 1. 07142+2357           | OPI = 12.4567               | Gaia: Likely Physical
- 2. 15234+4021           | OPI = 8.9123                | Gaia: Likely Physical
- 3. 23456+1234           | OPI = 6.7890                | Gaia: Ambiguous
-```
+**Characterization Mode (`characterize`)** - Detailed motion analysis with robust statistical methods:
+- **Purpose**: Precisely characterize the motion patterns of binary systems over time
+- **Method**: Applies Theil-Sen regression (robust against outliers) to fit linear motion models
+- **Best for**: Detailed studies of known systems, understanding measurement quality, research-grade analysis
+- **Output**: Velocity vectors with uncertainties, fit quality metrics (RMSE), statistical confidence intervals
+- **Performance**: Moderate speed, requires multiple observations for meaningful results
 
-#### **Complete Documentation**
+**Orbital Mode (`orbital`)** - Priority ranking based on orbital predictions:
+- **Purpose**: Identify systems where current observations deviate most from predicted orbital motion
+- **Method**: Calculates Observation Priority Index (OPI) by comparing observed positions to orbital predictions
+- **Best for**: Planning follow-up observations, finding systems with orbital changes, validating orbital elements
+- **Output**: OPI values (higher = more urgent), predicted vs observed separations, orbital uncertainty estimates
+- **Performance**: Slowest mode due to orbital calculations, but provides most scientifically valuable prioritization
+
+#### **Complete Command Reference**
+
+**Required Arguments:**
+- `input_file` - CSV file containing a `wds_id` column with WDS catalog designations (format: HHMMM±DDMM)
+- `--database-path` - Path to the SQLite database created by the catalog conversion script
+
+**Core Analysis Options:**
 ```bash
-python -m astrakairos.analyzer.cli --help
+--mode {discovery,characterize,orbital}    # Selects analysis algorithm (default: discovery)
+--all                                      # Process entire database instead of specific targets
+--min-observations N                       # Filter systems with fewer than N observations (default: 2)
+--max-observations N                       # Use only the N most recent observations (default: 10)
+--concurrent N                    # Number of parallel Gaia queries (default: 20)
 ```
 
-#### **Setup: Generating the Required Database**
+**Detailed Option Explanations:**
 
-Before using the CLI, you need to create the SQLite database from the catalog files:
+**`--mode` - Analysis Algorithm Selection:**
+- `discovery`: Fastest screening method using endpoint velocities
+- `characterize`: Statistical motion modeling with uncertainty quantification  
+- `orbital`: Orbital prediction comparison for observation prioritization
 
+**`--all` - Database Scope:**
+- When specified: Processes all systems in the SQLite database
+- When omitted: Processes only systems listed in the input CSV file
+- **Performance note**: `--all` can process thousands of systems; use `--limit` to control output size
+
+**`--min-observations` - Data Quality Filter:**
+- Excludes systems with insufficient observational data
+- Higher values (5-10) improve statistical reliability but reduce sample size
+- Lower values (2-3) include more systems but may have unreliable motion estimates
+
+**`--max-observations` - Temporal Focus:**
+- Uses only the N most recent observations for analysis
+- Helps focus on current orbital motion (older observations may show different behavior)
+- Useful for systems with decades of observations where recent motion is most relevant
+
+**`--concurrent` - Performance Tuning:**
+- Controls parallel processing for Gaia validation queries
+- Higher values: Faster processing but more network load
+- Lower values: Slower processing but more stable for unreliable internet connections
+- **Recommended**: 10-20 for home internet, 50+ for institutional connections
+
+**Gaia DR3 Validation Options:**
 ```bash
-# Convert WDSS and ORB6 catalogs to SQLite format
-python scripts/convert_catalogs_to_sqlite.py
-
-# This creates: results/wdss3-data.db (used by the CLI)
+--gaia-validation                          # Enable physicality assessment using Gaia astrometry
+--gaia-p-value FLOAT                      # Statistical threshold for physical association (default: 0.01)
+--gaia-radius-factor FLOAT                # Search radius multiplier based on separation (default: 1.2)
+--gaia-min-radius FLOAT                   # Minimum search radius in arcseconds (default: 2.0)
+--gaia-max-radius FLOAT                   # Maximum search radius in arcseconds (default: 15.0)
 ```
 
-**Required catalog files:**
-- `data_catalogs/wdss*.txt` (WDSS catalog files)
-- `data_catalogs/orb6orbits.txt` (ORB6 orbital elements)
+**Gaia Validation Details:**
 
-These are included in the repository and only need to be converted once.
+**`--gaia-validation` - Physical vs Optical Binary Assessment:**
+- Queries Gaia DR3 for precise astrometry of both components
+- Compares parallaxes and proper motions to determine if stars are physically associated
+- Results: "Likely Physical", "Likely Optical", "Ambiguous", or "Not Available"
+- **Note**: Requires internet connection; adds ~1-2 seconds per system
 
-#### **Input File Requirements**
+**`--gaia-p-value` - Statistical Confidence Threshold:**
+- Lower values (0.001): More conservative, fewer false positives
+- Higher values (0.05): More liberal, includes marginal cases
+- Default (0.01): Balanced approach following astronomical conventions
 
-**Required files:**
-- **SQLite database** (`catalogs.db`) - Created once from WDSS/ORB6 catalogs using the conversion script
+**`--gaia-radius-factor` - Adaptive Search Strategy:**
+- Multiplies the observed binary separation to set Gaia search radius
+- Accounts for orbital motion and measurement uncertainties
+- Values > 1.5: May include unrelated field stars
+- Values < 1.0: May miss components with significant proper motion
 
-**Optional files:**
-- **Targets CSV** (`my_targets.csv`) - Used only when analyzing specific systems instead of the entire database
+**`--gaia-min-radius` and `--gaia-max-radius` - Search Boundaries:**
+- Prevents extremely small searches (miss due to astrometric errors) 
+- Prevents extremely large searches (include unrelated sources)
+- Automatically scaled based on binary separation and uncertainty
 
-**Targets CSV format (when using Option B):**
+**Output and Display Options:**
+```bash
+--output FILE                             # Save results to CSV file with full analysis data
+--sort-by FIELD                          # Order results by specific metric (mode-dependent defaults)
+--limit N                                # Maximum number of results to display/save
+```
+
+**Output Control Details:**
+
+**`--output` - Data Export:**
+- Saves complete analysis results in CSV format with all calculated metrics
+- Includes metadata: analysis mode, timestamp, parameters used
+- Format compatible with spreadsheet software and further analysis
+- **Tip**: Use descriptive filenames like `high_priority_orbital_2024.csv`
+
+**`--sort-by` - Result Ordering:**
+- **Discovery mode options**: `v_total` (total observed angular velocity), `curvature_index` (motion complexity)
+- **Characterize mode options**: `rmse` (fit quality), `fit_quality` (statistical confidence)
+- **Orbital mode options**: `opi_arcsec_yr` (observation priority), `prediction_uncertainty_arcsec`
+- **All modes**: `wds_id` (alphabetical), `physicality_p_value` (Gaia confidence)
+
+**`--limit` - Result Management:**
+- Controls both display output and saved file size
+- **Recommended**: 50-100 for detailed review, 500+ for comprehensive surveys
+- **Performance**: Larger limits don't significantly slow analysis but may overwhelm display
+
+#### **Practical Examples**
+
+**Discovery Mode - Find High-Motion Systems:**
+```bash
+# Basic discovery analysis - Find fastest-moving binaries in entire database
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode discovery --limit 100
+# → Identifies top 100 systems with highest apparent motion using endpoint velocity method
+# → Useful for: Initial target screening, finding systems requiring urgent observation
+
+# Discovery with Gaia validation and custom output
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode discovery \
+    --gaia-validation --limit 50 --output high_motion_systems.csv
+# → Adds physical vs optical binary classification using Gaia DR3 astrometry
+# → Saves results to CSV file for further analysis or observation planning
+# → Best for: Research-quality target lists with validated physical associations
+
+# Analyze specific targets for motion
+python -m astrakairos.analyzer.cli my_targets.csv --database-path catalogs.db --mode discovery
+# → Processes only systems listed in my_targets.csv (must contain wds_id column)
+# → Useful for: Follow-up analysis of previously identified interesting systems
+```
+
+**Characterization Mode - Detailed Motion Analysis:**
+```bash
+# Characterize motion patterns with robust fitting
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode characterize \
+    --min-observations 5 --limit 200 --output motion_characterization.csv
+# → Uses Theil-Sen regression to model linear motion with outlier resistance
+# → Requires minimum 5 observations for statistical reliability
+# → Provides: velocity vectors, uncertainties, fit quality metrics (RMSE)
+# → Best for: Understanding measurement precision, detecting non-linear motion
+
+# High-precision characterization with more data points
+python -m astrakairos.analyzer.cli selected_targets.csv --database-path catalogs.db \
+    --mode characterize --max-observations 20 --sort-by rmse
+# → Uses up to 20 most recent observations for detailed temporal analysis
+# → Sorts by RMSE (root mean square error) - lower values indicate better linear fits
+# → Useful for: Validating orbital motion assumptions, quality assessment
+```
+
+**Orbital Mode - Priority Target Identification:**
+```bash
+# Find highest priority orbital targets
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode orbital \
+    --limit 50 --output priority_targets.csv
+# → Calculates Observation Priority Index (OPI) for all systems with known orbits
+# → Higher OPI = larger deviation from predicted orbital motion = more urgent observation
+# → Best for: Scheduling follow-up observations, validating orbital elements
+
+# Orbital analysis with Gaia validation and custom parameters
+python -m astrakairos.analyzer.cli orbital_candidates.csv --database-path catalogs.db \
+    --mode orbital --gaia-validation --gaia-p-value 0.05 --sort-by opi_arcsec_yr
+# → Combines orbital priority with physical validation
+# → Uses more liberal p-value (0.05) to include marginal physical associations
+# → Sorts by OPI value (arcsec/year) for immediate priority assessment
+
+# Conservative orbital analysis (higher observation threshold)
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode orbital \
+    --min-observations 8 --gaia-validation --limit 25
+# → Requires minimum 8 observations for robust orbital comparison
+# → Returns only top 25 highest-priority systems with validated physical associations
+# → Ideal for: High-confidence target lists for limited observing time
+```
+
+**Advanced Usage:**
+```bash
+# High-throughput analysis with custom concurrency
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode discovery \
+    --concurrent 50 --limit 1000 --output massive_survey.csv
+# → Processes large database with increased parallel Gaia queries
+# → Suitable for: Institutional networks, comprehensive sky surveys
+# → WARNING: High concurrent requests may overwhelm network or trigger rate limits
+
+# Precision analysis with restrictive Gaia validation
+python -m astrakairos.analyzer.cli priority_list.csv --database-path catalogs.db \
+    --mode orbital --gaia-validation --gaia-p-value 0.001 --gaia-min-radius 5.0
+# → Uses very conservative p-value for highest confidence physical associations
+# → Increases minimum search radius for systems with large uncertainties
+# → Best for: Publication-quality research requiring highest statistical rigor
+
+# Complete characterization pipeline
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode characterize \
+    --min-observations 10 --max-observations 25 --gaia-validation --output complete_analysis.csv
+# → Comprehensive analysis with strict observation requirements
+# → Uses extensive observational baseline (up to 25 observations)
+# → Includes both motion characterization and physical validation
+# → Suitable for: Comprehensive binary star studies, orbital determination projects
+```
+
+**Workflow Examples:**
+```bash
+# Step 1: Initial discovery survey
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode discovery \
+    --limit 500 --output initial_survey.csv
+
+# Step 2: Characterize most interesting systems (filter initial_survey.csv to interesting_systems.csv)
+python -m astrakairos.analyzer.cli interesting_systems.csv --database-path catalogs.db \
+    --mode characterize --gaia-validation --output detailed_analysis.csv
+
+# Step 3: Identify orbital priorities (filter for systems with orbits)
+python -m astrakairos.analyzer.cli orbit_systems.csv --database-path catalogs.db \
+    --mode orbital --gaia-validation --limit 25 --output observing_priorities.csv
+```
+
+#### **Input File Format**
+
+When analyzing specific targets (not using `--all`), provide a CSV file with:
 ```csv
 wds_id
 00003+1154
 00005+1259
 00006+2012
 20126+4003
+23456+1234
 ```
 
 The CSV must contain a `wds_id` column with valid WDS designations. You can create this file:
@@ -202,6 +365,152 @@ The CSV must contain a `wds_id` column with valid WDS designations. You can crea
 - By exporting from the GUI planner
 - By filtering results from previous analyses
 - From any astronomical database that provides WDS identifiers
+
+#### **Example Output**
+
+```
+TOP 10 ANALYSIS RESULTS - ORBITAL MODE (sorted by opi_arcsec_yr)
+================================================================================
+ 1. 07142+2357           | OPI = 12.456 ± 1.234       | Gaia: Likely Physical
+ 2. 15234+4021           | OPI = 8.912 ± 0.789        | Gaia: Likely Physical  
+ 3. 23456+1234           | OPI = 6.789 ± 0.456        | Gaia: Ambiguous
+ 4. 01234+5678           | OPI = 5.234 ± 0.321        | Gaia: Not Available
+ 5. 18765+4321           | OPI = 4.567 ± 0.234        | Gaia: Likely Physical
+```
+
+#### **Sort Field Options**
+
+**Understanding Sort Fields by Analysis Mode:**
+
+**Discovery Mode Sort Options:**
+- **`v_total`** (default): Total apparent velocity magnitude combining RA and Dec motion
+  - Higher values = faster apparent motion = potentially more interesting systems
+  - Useful for identifying systems requiring urgent observation due to rapid changes
+- **`v_ra_arcsec_yr`**: Velocity component in Right Ascension direction
+  - Shows east-west motion component, important for orbital orientation analysis
+- **`v_dec_arcsec_yr`**: Velocity component in Declination direction  
+  - Shows north-south motion component, complements RA velocity for full motion vector
+- **`curvature_index`**: Measure of non-linear motion detected in observations
+  - Higher values suggest orbital motion rather than linear proper motion
+  - Useful for distinguishing true binary orbital motion from background star drift
+
+**Characterization Mode Sort Options:**
+- **`rmse`** (default): Root Mean Square Error of the linear motion fit
+  - Lower values = better linear fit = more reliable velocity measurements
+  - Higher values may indicate orbital motion, measurement errors, or stellar variability
+- **`fit_quality`**: Statistical confidence metric for the motion model
+  - Combines multiple fit statistics into single quality indicator
+  - Higher values indicate more reliable characterization results
+- **`ra_velocity_arcsec_per_year`**: Precisely measured RA velocity with uncertainties
+  - From robust Theil-Sen regression, resistant to outlier observations
+- **`dec_velocity_arcsec_per_year`**: Precisely measured Dec velocity with uncertainties
+  - Complements RA velocity for complete motion characterization
+
+**Orbital Mode Sort Options:**
+- **`opi_arcsec_yr`** (default): Observation Priority Index in arcseconds per year
+  - Higher values = larger deviation from predicted orbital motion = higher observation priority
+  - Directly indicates which systems most urgently need follow-up observations
+- **`predicted_sep_arcsec`**: Current predicted separation from orbital elements
+  - Useful for planning observations (smaller separations need higher resolution)
+- **`prediction_uncertainty_arcsec`**: Uncertainty in orbital position prediction
+  - Higher values indicate less reliable orbital elements needing confirmation
+- **`orbital_period_years`**: Period of the binary system orbit
+  - Shorter periods may show more rapid changes requiring frequent monitoring
+
+**Universal Sort Options (All Modes):**
+- **`wds_id`**: Washington Double Star catalog designation (alphabetical sorting)
+  - Useful for systematic processing or cross-referencing with other catalogs
+- **`physicality_p_value`**: Gaia-based statistical confidence of physical association
+  - Lower values = higher confidence that components are physically bound
+  - Only available when `--gaia-validation` is enabled
+- **`gaia_separation_arcsec`**: Current separation measured by Gaia DR3
+  - Independent verification of binary separation from high-precision astrometry
+- **`observation_count`**: Number of historical observations available
+  - More observations generally provide more reliable analysis results
+
+**Sorting Strategy Recommendations:**
+
+**For Target Discovery:**
+- Sort by `v_total` descending to find fastest-moving systems
+- Use `curvature_index` descending to find systems showing orbital motion signatures
+
+**For Observation Planning:**
+- Sort by `opi_arcsec_yr` descending to prioritize most urgent follow-ups  
+- Use `predicted_sep_arcsec` ascending to group systems by required telescope resolution
+
+**For Data Quality Assessment:**
+- Sort by `rmse` ascending to find most reliable motion measurements
+- Use `observation_count` descending to prioritize well-observed systems
+
+**For Research Publications:**
+- Sort by `physicality_p_value` ascending to focus on confirmed physical binaries
+- Combine with appropriate mode-specific metrics for scientific relevance
+
+#### **Performance Tips**
+
+**Database and System Optimization:**
+- **Use `--limit` for large databases** to avoid overwhelming output and improve processing speed
+  - Start with small limits (50-100) for initial exploration
+  - Increase gradually based on system performance and analysis needs
+- **Optimize `--concurrent` based on your system:**
+  - **Home internet**: 10-20 concurrent requests (stable but not overwhelming)
+  - **Institutional networks**: 30-50 concurrent requests (faster processing)
+  - **High-performance systems**: 50+ concurrent requests (maximum throughput)
+  - **Unstable connections**: 5-10 concurrent requests (prioritize reliability)
+
+**Data Quality and Filtering:**
+- **Use `--min-observations` strategically:**
+  - **2-3 observations**: Maximum catalog coverage but lower reliability
+  - **5-8 observations**: Balanced approach for most analyses  
+  - **10+ observations**: High-quality results for publication work
+- **Apply `--max-observations` for temporal focus:**
+  - **5-10 observations**: Recent motion analysis (last decade)
+  - **15-20 observations**: Extended baseline for long-period systems
+  - **25+ observations**: Complete observational history analysis
+
+**Network and Performance Considerations:**
+- **Enable `--gaia-validation` only when needed:**
+  - Adds 1-3 seconds per system due to external database queries
+  - Essential for research work but optional for preliminary surveys
+  - Ensure stable internet connection before processing large batches
+- **Batch processing strategies:**
+  - Process in chunks: Use `--limit` with multiple runs for very large databases
+  - Save intermediate results: Use `--output` to preserve progress
+  - Monitor system resources: Large analyses may consume significant RAM
+
+**Mode-Specific Performance:**
+- **Discovery mode**: Fastest processing, suitable for databases with 10,000+ systems
+- **Characterization mode**: Moderate speed, best for 1,000-5,000 systems per run
+- **Orbital mode**: Slowest due to complex calculations, optimal for 100-1,000 systems
+
+**Troubleshooting Common Issues:**
+- **Memory usage**: Large databases may require 2-8 GB RAM; close other applications if needed
+- **Network timeouts**: Reduce `--concurrent` if Gaia queries fail frequently
+- **Disk space**: Output CSV files can be large; ensure adequate storage for results
+- **Processing time**: Orbital mode with Gaia validation may take 30+ minutes for large datasets
+
+**Optimization Workflow:**
+```bash
+# Step 1: Quick survey to estimate processing time
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode discovery --limit 10
+
+# Step 2: Scale up based on performance
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode discovery --limit 1000
+
+# Step 3: Add validation for final results  
+python -m astrakairos.analyzer.cli selected_targets.csv --database-path catalogs.db \
+    --mode orbital --gaia-validation --concurrent 20
+```
+
+#### **Help and Documentation**
+
+```bash
+# Display complete help
+python -m astrakairos.analyzer.cli --help
+
+# Check version
+python -m astrakairos.analyzer.cli --version
+```
 
 ## Project Roadmap
 

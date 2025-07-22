@@ -494,7 +494,7 @@ def parse_orb6_catalog(filepath: str) -> pd.DataFrame:
 
     names = [
         'wds_id', 'P_str', 'e_P', 'a_str', 'e_a', 'i_str', 'e_i', 'Omega_str', 
-        'e_Omega', 'T_str', 'e_T', 'e_str', 'e_e', 'omega_str', 'e_omega', 'grade'
+        'e_Omega', 'T_str', 'e_T', 'e_str', 'e_e', 'omega_str', 'e_omega_arg', 'grade'
     ]
 
     try:
@@ -511,7 +511,7 @@ def parse_orb6_catalog(filepath: str) -> pd.DataFrame:
         # --- Processing values and errors ---
         
         # Convert numeric columns and error columns to float
-        numeric_cols = ['i_str', 'e_i', 'e_str', 'e_e', 'e_P', 'e_a', 'e_Omega', 'e_T', 'e_omega', 'grade']
+        numeric_cols = ['i_str', 'e_i', 'e_str', 'e_e', 'e_P', 'e_a', 'e_Omega', 'e_T', 'e_omega_arg', 'grade']
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         
@@ -549,7 +549,7 @@ def parse_orb6_catalog(filepath: str) -> pd.DataFrame:
         df['omega_arg'] = pd.to_numeric(df['omega_str'].str.rstrip('q'), errors='coerce')
         
         # Validate that errors are positive and reasonable using centralized thresholds
-        error_cols = ['e_P', 'e_a', 'e_i', 'e_Omega', 'e_T', 'e_e', 'e_omega']
+        error_cols = ['e_P', 'e_a', 'e_i', 'e_Omega', 'e_T', 'e_e', 'e_omega_arg']
         for col in error_cols:
             # Set negative or zero errors to NaN (they're meaningless)
             df.loc[df[col] <= 0, col] = np.nan
@@ -571,7 +571,6 @@ def parse_orb6_catalog(filepath: str) -> pd.DataFrame:
             'wds_id', 'P', 'e_P', 'a', 'e_a', 'i', 'e_i', 'Omega', 'e_Omega',
             'T', 'e_T', 'e', 'e_e', 'omega_arg', 'e_omega_arg', 'grade'
         ]
-        
         return df[final_cols]
 
     except Exception as e:
@@ -644,14 +643,15 @@ def create_sqlite_database(df_wds: pd.DataFrame, df_orb6: pd.DataFrame,
         # Create WDSS summary table
         df_wds.to_sql('wdss_summary', conn, if_exists='replace', index=False)
         conn.execute('CREATE INDEX idx_wdss_summary_id ON wdss_summary(wds_id)')
-        conn.execute('CREATE INDEX idx_wdss_summary_wdss_id ON wdss_summary(wdss_id)')
         
         # Critical spatial index for coordinate queries (dec_deg first for better selectivity)
         conn.execute('CREATE INDEX idx_wdss_summary_coords ON wdss_summary(dec_deg, ra_deg)')
         
-        # Additional performance indexes for common query patterns
-        conn.execute('CREATE INDEX idx_wdss_summary_date_last ON wdss_summary(date_last)')
-        conn.execute('CREATE INDEX idx_wdss_summary_n_obs ON wdss_summary(n_obs)')
+        # Additional performance indexes for common query patterns (only if columns exist)
+        if 'date_last' in df_wds.columns:
+            conn.execute('CREATE INDEX idx_wdss_summary_date_last ON wdss_summary(date_last)')
+        if 'n_obs' in df_wds.columns:
+            conn.execute('CREATE INDEX idx_wdss_summary_n_obs ON wdss_summary(n_obs)')
         
         log.info(f"Created wdss_summary table with {len(df_wds)} entries and performance indexes")
         

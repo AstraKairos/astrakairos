@@ -19,7 +19,7 @@ def sample_sqlite_db():
     
     conn = sqlite3.connect(db_path)
     
-    # Create WDSS summary table (matching real schema)
+    # Create WDSS summary table (matching real schema with error columns)
     conn.execute("""
 CREATE TABLE wdss_summary (
     wds_id TEXT PRIMARY KEY,
@@ -31,6 +31,10 @@ CREATE TABLE wdss_summary (
     pa_last REAL,
     sep_first REAL,
     sep_last REAL,
+    pa_first_error REAL,
+    pa_last_error REAL,
+    sep_first_error REAL,
+    sep_last_error REAL,
     vmag REAL,
     kmag REAL,
     spectral_type TEXT,
@@ -45,12 +49,20 @@ CREATE TABLE wdss_summary (
 CREATE TABLE orbital_elements (
     wds_id TEXT PRIMARY KEY,
     P REAL,
+    e_P REAL,
     a REAL,
+    e_a REAL,
     i REAL,
+    e_i REAL,
     Omega REAL,
+    e_Omega REAL,
     T REAL,
+    e_T REAL,
     e REAL,
-    omega_arg REAL
+    e_e REAL,
+    omega_arg REAL,
+    e_omega_arg REAL,
+    grade INTEGER
 )
     """)
     
@@ -64,18 +76,18 @@ CREATE TABLE measurements (
 )
     """)
     
-    # Insert test data
+    # Insert test data (with error columns)
     conn.execute("""
 INSERT INTO wdss_summary VALUES (
     '00001+0001', 'STF', 2000.0, 2020.0, 150,
-    45.0, 50.0, 1.5, 1.6, 8.5, 9.2, 'G0V',
+    45.0, 50.0, 1.5, 1.6, 1.0, 1.0, 0.1, 0.1, 8.5, 9.2, 'G0V',
     0.25, 0.5, 'WDS00001'
 )
     """)
     
     conn.execute("""
 INSERT INTO orbital_elements VALUES (
-    '00001+0001', 100.0, 1.5, 60.0, 45.0, 2010.0, 0.3, 90.0
+    '00001+0001', 100.0, 5.0, 1.5, 0.1, 60.0, 2.0, 45.0, 3.0, 2010.0, 1.0, 0.3, 0.05, 90.0, 5.0, 1
 )
     """)
     

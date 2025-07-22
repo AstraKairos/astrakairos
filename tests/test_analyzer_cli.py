@@ -39,7 +39,7 @@ def test_parser_default_arguments():
     assert args.limit is None
     assert not args.validate_gaia
     assert args.gaia_p_value == 0.01
-    assert args.concurrent == 5
+    assert args.concurrent == 20
 
 def test_parser_custom_arguments():
     """Verifica que se pueden parsear argumentos personalizados correctamente."""
@@ -145,4 +145,4 @@ async def test_main_async_local_source_flow(mock_save_csv, mock_gaia_validator, 
     assert len(final_results) == 1
     assert final_results[0]['wds_id'] == '00001+0001'
     assert final_results[0]['physicality_label'] == 'Physical'  # Now using proper enum mock
-    assert 'v_total_arcsec_yr' in final_results[0]  # Discovery mode default
+    assert 'v_total' in final_results[0]  # Discovery mode default

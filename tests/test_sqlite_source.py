@@ -39,6 +39,10 @@ CREATE TABLE wdss_summary (
     pa_last REAL,
     sep_first REAL,
     sep_last REAL,
+    pa_first_error REAL,
+    pa_last_error REAL,
+    sep_first_error REAL,
+    sep_last_error REAL,
     vmag REAL,
     kmag REAL,
     spectral_type TEXT,
@@ -56,12 +60,20 @@ CREATE TABLE wdss_summary (
 CREATE TABLE orbital_elements (
     wds_id TEXT,
     P REAL,
+    e_P REAL,
     a REAL,
+    e_a REAL,
     i REAL,
+    e_i REAL,
     Omega REAL,
+    e_Omega REAL,
     T REAL,
+    e_T REAL,
     e REAL,
-    omega_arg REAL
+    e_e REAL,
+    omega_arg REAL,
+    e_omega_arg REAL,
+    grade INTEGER
 )
     """)
     
@@ -86,6 +98,7 @@ INSERT INTO wdss_summary VALUES (
     '16169+0113', '1616524+011317', 'STF 2107',
     1999.5, 2015.5, 42,
     285.2, 287.8, 0.455, 0.431,
+    1.0, 1.0, 0.05, 0.05,
     8.12, 8.89, 'G5V+K0V',
     244.218, 1.295, 15.23, -12.4, -8.7,
     'HD 148937'
@@ -98,6 +111,7 @@ INSERT INTO wdss_summary VALUES (
     '1718115-142444', '1718115-142444', NULL,
     2010.2, 2020.8, 15,
     123.4, 125.1, 2.34, 2.41,
+    2.0, 2.0, 0.1, 0.1,
     16.15, 17.58, NULL,
     259.546, -14.412, NULL, NULL, NULL,
     NULL
@@ -107,7 +121,7 @@ INSERT INTO wdss_summary VALUES (
     # Insert orbital elements for first system
     conn.execute("""
 INSERT INTO orbital_elements VALUES (
-    '16169+0113', 285.69, 0.4331, 118.2, 287.1, 2023.45, 0.1259, 167.3
+    '16169+0113', 285.69, 10.0, 0.4331, 0.02, 118.2, 5.0, 287.1, 10.0, 2023.45, 2.0, 0.1259, 0.05, 167.3, 10.0, 1
 )
     """)
     

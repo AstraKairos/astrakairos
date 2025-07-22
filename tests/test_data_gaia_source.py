@@ -308,7 +308,9 @@ class TestGaiaValidator:
     def test_identify_components_by_mag_without_magnitudes(self, gaia_validator):
         """Test component identification without WDS magnitudes."""
         mock_source1 = Mock()
+        mock_source1.__getitem__ = Mock(side_effect=lambda key: {'ra': 10.0, 'dec': 20.0, 'phot_g_mean_mag': 8.5}[key])
         mock_source2 = Mock()
+        mock_source2.__getitem__ = Mock(side_effect=lambda key: {'ra': 10.1, 'dec': 20.1, 'phot_g_mean_mag': 9.2}[key])
         
         gaia_results = [mock_source1, mock_source2]
         wds_mags = (None, None)

@@ -27,7 +27,7 @@ ORB6_ERROR_VALIDATION_THRESHOLDS = {
     'e_Omega': 180.0,   # Node errors > 180° are meaningless
     'e_T': 1000.0,      # Time of periastron errors > 1000 years are suspicious
     'e_e': 1.0,         # Eccentricity errors > 1 are meaningless
-    'e_omega': 180.0    # Argument of periastron errors > 180° are meaningless
+    'e_omega_arg': 180.0    # Argument of periastron errors > 180° are meaningless
 }
 
 # Fallback Error Estimates for Missing Uncertainties
@@ -39,7 +39,7 @@ ORB6_FALLBACK_ERRORS = {
     'e_Omega': 5.0,     # 5° conservative estimate for node
     'e_T': 5.0,         # 5 years for periastron epoch
     'e_e': 0.05,        # 0.05 conservative for eccentricity
-    'e_omega': 5.0      # 5° conservative estimate for argument of periastron
+    'e_omega_arg': 5.0      # 5° conservative estimate for argument of periastron
 }
 
 # Fallback Errors for WDS Measurements
@@ -377,7 +377,7 @@ AVAILABLE_ANALYSIS_MODES = ['discovery', 'characterize', 'orbital']
 
 # Default sort keys for each analysis mode
 DEFAULT_SORT_KEYS = {
-    'discovery': 'v_total_arcsec_yr',
+    'discovery': 'v_total',
     'characterize': 'rmse',
     'orbital': 'opi_arcsec_yr'
 }
