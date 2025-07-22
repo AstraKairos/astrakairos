@@ -418,6 +418,49 @@ AIRMASS_WARNING_THRESHOLD = 2.5       # Issue warnings above this threshold
 
 # Lunar Contamination Model (Krisciunas & Schaefer 1991)
 # Reference: PASP, 103, 1033-1039
+
+# === PHYSICS Configuration - Mass Calculations ===
+
+# Physical Constants
+SOLAR_MASS_KG = 1.9891e30                    # Solar mass in kg
+GRAVITATIONAL_CONSTANT = 6.67430e-11         # G in SI units (m³ kg⁻¹ s⁻²)
+AU_METERS = 1.495978707e11                   # Astronomical Unit in meters
+SECONDS_PER_YEAR = 365.25 * 24 * 3600        # Seconds in Julian year
+
+# Parallax and Distance Validation
+MIN_PARALLAX_MAS = 0.1                       # Minimum meaningful parallax (10 kpc limit)
+MAX_PARALLAX_MAS = 1000.0                    # Maximum reasonable parallax (1 pc limit)
+MIN_DISTANCE_PC = 1.0                        # Minimum distance for mass calculations
+MAX_DISTANCE_PC = 10000.0                    # Maximum distance limit
+
+# Mass Validation Ranges
+MIN_STELLAR_MASS_SOLAR = 0.08                # Brown dwarf limit
+MAX_STELLAR_MASS_SOLAR = 200.0               # Upper main sequence limit
+MIN_TOTAL_MASS_SOLAR = 0.16                  # Two brown dwarfs
+MAX_TOTAL_MASS_SOLAR = 400.0                 # Two massive stars
+
+# Mass Ratio Constraints
+MIN_MASS_RATIO = 0.01                        # Extreme mass ratio systems
+MAX_MASS_RATIO = 1.0                         # Primary always more massive
+
+# Parallax Sources Priority (lower number = higher priority)
+PARALLAX_SOURCE_PRIORITY = {
+    'gaia_dr3': 1,      # Highest priority: Gaia DR3
+    'gaia': 2,          # Second: Gaia DR2 or earlier
+    'hipparcos': 3,     # Third: Hipparcos
+    'literature': 4,    # Fourth: Literature values
+    'estimated': 5      # Fallback: Distance estimates
+}
+
+# Monte Carlo Configuration for Mass Calculations
+MASS_MC_MIN_SAMPLES = 100                    # Minimum samples for mass MC
+MASS_MC_MAX_SAMPLES = 10000                  # Maximum samples to prevent timeout
+MASS_MC_CONVERGENCE_THRESHOLD = 0.001       # Convergence criterion for error estimates
+
+# Warning Thresholds
+LARGE_MASS_ERROR_THRESHOLD = 0.5             # Warn if relative error > 50%
+EXTREME_MASS_WARNING_SOLAR = 100.0           # Warn for very massive systems
+LOW_PARALLAX_WARNING_MAS = 1.0               # Warn for distant/uncertain systems
 LUNAR_K_EXTINCTION = 0.25             # Lunar V-band extinction coefficient
 LUNAR_C1_COEFFICIENT = 3.84           # Moonlight scattering parameter 1
 LUNAR_C2_COEFFICIENT = 0.026          # Phase-dependent scattering parameter

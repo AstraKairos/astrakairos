@@ -29,7 +29,8 @@ from ..config import (
     MIN_POSITION_ANGLE_DEG, MAX_POSITION_ANGLE_DEG,
     DEFAULT_ANALYSIS_MODE, AVAILABLE_ANALYSIS_MODES, DEFAULT_SORT_KEYS,
     AMBIGUOUS_P_VALUE_RATIO, ENABLE_VALIDATION_WARNINGS, 
-    VALIDATION_WARNING_SAMPLE_RATE, ALLOW_SINGLE_EPOCH_SYSTEMS
+    VALIDATION_WARNING_SAMPLE_RATE, ALLOW_SINGLE_EPOCH_SYSTEMS,
+    DEFAULT_MC_SAMPLES
 )
 
 # CLI-specific display constants
@@ -314,14 +315,108 @@ async def _perform_characterize_analysis(wds_id: str, data_source: DataSource) -
         return None
 
 
-async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_source: DataSource) -> Optional[Dict[str, Any]]:
+async def _calculate_system_masses(
+    wds_id: str,
+    orbital_elements: 'OrbitalElements',
+    wds_summary: 'WdsSummary',
+    gaia_validator: Optional['GaiaValidator'],
+    parallax_source: str
+) -> Optional[Dict[str, Any]]:
     """
-    Perform orbital mode analysis with OPI calculation.
+    Calculate system masses using Kepler's Third Law and available parallax data.
+    
+    Args:
+        wds_id: WDS identifier
+        orbital_elements: Orbital elements dictionary
+        wds_summary: WDS summary data
+        gaia_validator: Gaia validator for parallax queries
+        parallax_source: Preferred parallax source
+        
+    Returns:
+        Dictionary with mass calculation results or None if failed
+    """
+    try:
+        from ..physics.masses import calculate_total_mass_kepler3
+        
+        # Check if we have the required orbital elements
+        period = orbital_elements.get('P')
+        semimajor_axis = orbital_elements.get('a')
+        
+        if not period or not semimajor_axis:
+            log.debug(f"Missing orbital elements for mass calculation: {wds_id}")
+            return None
+        
+        # Get uncertainties if available
+        period_error = orbital_elements.get('e_P', 0.0) or 0.0
+        semimajor_axis_error = orbital_elements.get('e_a', 0.0) or 0.0
+        
+        # Get parallax data based on source preference
+        parallax_data = None
+        
+        if parallax_source == 'auto' or parallax_source == 'gaia':
+            if gaia_validator:
+                try:
+                    parallax_data = await gaia_validator.get_parallax_data(wds_summary)
+                    if parallax_data:
+                        log.debug(f"Using Gaia parallax for {wds_id}: {parallax_data['parallax']:.3f} ± {parallax_data['parallax_error']:.3f} mas")
+                except Exception as e:
+                    log.warning(f"Failed to get Gaia parallax for {wds_id}: {e}")
+        
+        # Could add other parallax sources here (Hipparcos, literature, etc.)
+        # For now, only Gaia is implemented
+        
+        if not parallax_data:
+            log.debug(f"No parallax data available for mass calculation: {wds_id}")
+            return None
+        
+        # Calculate masses
+        mass_result = calculate_total_mass_kepler3(
+            period_years=period,
+            semimajor_axis_arcsec=semimajor_axis,
+            parallax_mas=parallax_data['parallax'],
+            period_error=period_error,
+            semimajor_axis_error=semimajor_axis_error,
+            parallax_error=parallax_data['parallax_error'],
+            parallax_source=parallax_data['source']
+        )
+        
+        if mass_result:
+            log.debug(f"Mass calculation successful for {wds_id}: {mass_result.total_mass_solar:.2f} ± {mass_result.total_mass_error:.2f} M☉")
+            
+            # Convert to dictionary for JSON serialization
+            return {
+                'total_mass_solar': mass_result.total_mass_solar,
+                'total_mass_error': mass_result.total_mass_error,
+                'distance_pc': mass_result.distance_used_pc,
+                'parallax_mas': mass_result.parallax_used_mas,
+                'parallax_source': mass_result.parallax_source,
+                'quality_score': mass_result.quality_score,
+                'mc_samples': mass_result.mc_samples,
+                'warnings': mass_result.warnings
+            }
+        else:
+            log.warning(f"Mass calculation failed for {wds_id}")
+            return None
+            
+    except Exception as e:
+        log.error(f"Error in mass calculation for {wds_id}: {e}")
+        return None
+
+
+async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_source: DataSource, 
+                                   gaia_validator: Optional['GaiaValidator'] = None,
+                                   calculate_masses: bool = False,
+                                   parallax_source: str = 'auto') -> Optional[Dict[str, Any]]:
+    """
+    Perform orbital mode analysis with OPI calculation and optional mass calculation.
     
     Args:
         wds_id: WDS identifier
         wds_summary: WDS summary data
         data_source: Data source for orbital elements
+        gaia_validator: Optional Gaia validator for parallax data
+        calculate_masses: Whether to calculate system masses
+        parallax_source: Source preference for parallax ('auto', 'gaia', 'none')
         
     Returns:
         Dict containing orbital analysis results or None if failed
@@ -368,6 +463,14 @@ async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_s
         # Calculate prediction divergence and velocity from linear fit if measurements available
         prediction_divergence = None
         linear_fit_results = None
+        
+        # Mass calculation if requested and parallax available
+        mass_result = None
+        if calculate_masses and parallax_source != 'none':
+            mass_result = await _calculate_system_masses(
+                wds_id, orbital_elements, wds_summary, gaia_validator, parallax_source
+            )
+        
         try:
             all_measurements = await data_source.get_all_measurements(wds_id)
             if all_measurements and len(all_measurements) >= 3:
@@ -403,7 +506,9 @@ async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_s
             'semi_major_axis': orbital_elements.get('a'),
             'uncertainty_quality': opi_result.get('quality_score', 0.0),
             'uncertainty_source': opi_result.get('uncertainty_source', 'none'),
-            'analysis_method': opi_result.get('method', 'opi_mc')
+            'analysis_method': opi_result.get('method', 'opi_mc'),
+            # Mass calculation results
+            'mass_analysis': mass_result
         }
         
         # Add velocity information from linear fit for consistency with other analysis modes
@@ -540,7 +645,12 @@ async def process_star(row: pd.Series,
             elif cli_args.mode == 'characterize':
                 analysis_result = await _perform_characterize_analysis(wds_id, data_source)
             elif cli_args.mode == 'orbital':
-                analysis_result = await _perform_orbital_analysis(wds_id, wds_summary, data_source)
+                analysis_result = await _perform_orbital_analysis(
+                    wds_id, wds_summary, data_source, 
+                    gaia_validator=gaia_validator,
+                    calculate_masses=cli_args.calculate_masses,
+                    parallax_source=cli_args.parallax_source
+                )
             else:
                 log.error(f"Unknown analysis mode: {cli_args.mode}")
                 return None
@@ -667,6 +777,26 @@ Examples:
                        type=float,
                        default=DEFAULT_GAIA_MAX_RADIUS,
                        help=f'Maximum search radius in arcseconds (default: {DEFAULT_GAIA_MAX_RADIUS})')
+
+    # Mass calculation options
+    mass_group = parser.add_argument_group('Mass Calculation Options')
+    mass_group.add_argument(
+        '--calculate-masses', 
+        action='store_true',
+        help='Calculate system masses using Kepler\'s Third Law (requires orbital elements and parallax)'
+    )
+    mass_group.add_argument(
+        '--parallax-source',
+        choices=['auto', 'gaia', 'none'],
+        default='auto',
+        help='Source for parallax data: auto (best available), gaia (Gaia only), none (skip mass calculation) (default: auto)'
+    )
+    mass_group.add_argument(
+        '--mass-mc-samples',
+        type=int,
+        default=DEFAULT_MC_SAMPLES,
+        help=f'Monte Carlo samples for mass uncertainty (default: {DEFAULT_MC_SAMPLES})'
+    )
 
     # El-Badry catalog filtering
     parser.add_argument('--only-el-badry', 

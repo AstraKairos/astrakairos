@@ -656,3 +656,153 @@ class GaiaValidator(PhysicalityValidator):
         except Exception as e:
             log.debug(f"Error building {dimensions}D covariance matrix: {e}")
             return None
+
+    async def get_parallax_data(
+        self,
+        wds_summary: Dict[str, Any],
+        search_radius_arcsec: float = 10.0
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve parallax data for mass calculations.
+        
+        This method queries Gaia around the system position and returns
+        the best available parallax measurement for mass calculations.
+        
+        Args:
+            wds_summary: WDS summary data containing coordinates
+            search_radius_arcsec: Search radius around system position
+            
+        Returns:
+            Dict or None
+                Parallax information including:
+                - parallax: value in mas
+                - parallax_error: uncertainty in mas
+                - source: 'gaia_dr3'
+                - gaia_source_id: Gaia source identifier
+                - ruwe: Renormalised Unit Weight Error
+                - significance: parallax/parallax_error ratio
+                - g_mag: G-band magnitude
+        """
+        try:
+            # Get system coordinates
+            ra_deg = wds_summary.get('ra_deg')
+            dec_deg = wds_summary.get('dec_deg')
+            
+            if ra_deg is None or dec_deg is None:
+                log.debug("Missing coordinates for parallax query")
+                return None
+                
+            # Query Gaia around the position
+            gaia_data = await self._query_gaia_for_pair_async(ra_deg, dec_deg, search_radius_arcsec)
+            
+            if not gaia_data or len(gaia_data) == 0:
+                log.debug("No Gaia sources found for parallax query")
+                return None
+                
+            # Select best parallax source
+            best_star = self._select_best_parallax_source(gaia_data)
+            
+            if not best_star:
+                log.debug("No suitable parallax source found")
+                return None
+                
+            # Extract parallax data
+            parallax = best_star.get('parallax')
+            parallax_error = best_star.get('parallax_error')
+            
+            if parallax is None or parallax_error is None:
+                log.debug("Missing parallax or parallax_error in Gaia data")
+                return None
+                
+            # Check parallax significance (at least 3-sigma detection)
+            significance = parallax / parallax_error if parallax_error > 0 else 0.0
+            
+            if significance < 3.0:
+                log.debug(f"Low parallax significance: {significance:.2f}")
+                return None
+                
+            return {
+                'parallax': float(parallax),
+                'parallax_error': float(parallax_error),
+                'source': 'gaia_dr3',
+                'gaia_source_id': str(best_star.get('source_id', '')),
+                'ruwe': float(best_star.get('ruwe', np.nan)),
+                'significance': float(significance),
+                'g_mag': float(best_star.get('phot_g_mean_mag', np.nan)),
+                'search_radius_used': float(search_radius_arcsec)
+            }
+            
+        except Exception as e:
+            log.error(f"Error retrieving parallax data: {e}")
+            return None
+    
+    def _select_best_parallax_source(self, gaia_data) -> Optional[Dict[str, Any]]:
+        """
+        Select the best parallax source from multiple Gaia detections.
+        
+        Selection criteria (in order of priority):
+        1. Valid parallax and parallax_error
+        2. Parallax significance >= 3.0 
+        3. RUWE <= 1.4 (good astrometric solution)
+        4. Brightest in G-band (most reliable astrometry)
+        
+        Args:
+            gaia_data: Astropy Table with Gaia sources
+            
+        Returns:
+            Best source as dict, or None if no suitable source
+        """
+        if not gaia_data or len(gaia_data) == 0:
+            return None
+            
+        # Filter for valid parallax measurements
+        valid_sources = []
+        
+        for star in gaia_data:
+            parallax = star.get('parallax')
+            parallax_error = star.get('parallax_error')
+            
+            if (parallax is not None and parallax_error is not None and 
+                parallax_error > 0):
+                
+                significance = parallax / parallax_error
+                
+                if significance >= 3.0:  # At least 3-sigma detection
+                    valid_sources.append({
+                        'source_id': star.get('source_id'),
+                        'parallax': parallax,
+                        'parallax_error': parallax_error,
+                        'significance': significance,
+                        'ruwe': star.get('ruwe', 999.0),  # Default high RUWE if missing
+                        'phot_g_mean_mag': star.get('phot_g_mean_mag', 99.0),  # Default faint if missing
+                        'ra': star.get('ra'),
+                        'dec': star.get('dec'),
+                        'pmra': star.get('pmra'),
+                        'pmdec': star.get('pmdec'),
+                        'pmra_error': star.get('pmra_error'),
+                        'pmdec_error': star.get('pmdec_error')
+                    })
+        
+        if not valid_sources:
+            return None
+            
+        # Sort by quality criteria:
+        # 1. Good RUWE first (< 1.4)
+        # 2. Higher parallax significance
+        # 3. Brighter magnitude (more reliable)
+        def quality_score(source):
+            ruwe_score = 1.0 if source['ruwe'] <= 1.4 else 0.5
+            sig_score = min(source['significance'] / 10.0, 1.0)  # Normalize to [0,1]
+            mag_score = max(0.0, (20.0 - source['phot_g_mean_mag']) / 20.0)  # Brighter is better
+            
+            return ruwe_score * 0.4 + sig_score * 0.4 + mag_score * 0.2
+        
+        # Select source with highest quality score
+        best_source = max(valid_sources, key=quality_score)
+        
+        log.debug(f"Selected parallax source: ID={best_source['source_id']}, "
+                 f"π={best_source['parallax']:.3f}±{best_source['parallax_error']:.3f} mas, "
+                 f"significance={best_source['significance']:.1f}, "
+                 f"RUWE={best_source['ruwe']:.2f}")
+        
+        return best_source
