@@ -5,7 +5,7 @@ from astropy.table import Table
 from astrakairos.physics.dynamics import (
     calculate_observation_priority_index,
     calculate_robust_linear_fit,
-    calculate_curvature_index,
+    calculate_prediction_divergence,
     estimate_velocity_from_endpoints
 )
 
@@ -228,7 +228,7 @@ class TestRobustLinearFit:
         assert result is None
 
 class TestCurvatureIndex:
-    """Test calculate_curvature_index function."""
+    """Test calculate_prediction_divergence function."""
     
     @pytest.fixture
     def sample_orbital_elements(self):
@@ -251,7 +251,7 @@ class TestCurvatureIndex:
         })
     
     @patch('astrakairos.physics.dynamics.predict_position')
-    def test_curvature_index_success(self, mock_predict, 
+    def test_prediction_divergence_success(self, mock_predict, 
                                    sample_orbital_elements, sample_measurements):
         """Test successful curvature index calculation."""
         # Create mock linear fit results
@@ -267,7 +267,7 @@ class TestCurvatureIndex:
         # Mock the orbital prediction
         mock_predict.return_value = (45.0, 1.5)
         
-        result = calculate_curvature_index(
+        result = calculate_prediction_divergence(
             sample_orbital_elements,
             linear_fit_results,
             2024.0
@@ -279,8 +279,8 @@ class TestCurvatureIndex:
         
         mock_predict.assert_called_once_with(sample_orbital_elements, 2024.0)
     
-    def test_curvature_index_no_orbital_elements(self, sample_measurements):
-        """Test curvature index with no orbital elements."""
+    def test_prediction_divergence_no_orbital_elements(self, sample_measurements):
+        """Test prediction divergence with no orbital elements."""
         linear_fit_results = {
             'vx_arcsec_per_year': 0.1,
             'vy_arcsec_per_year': -0.05,
@@ -289,7 +289,7 @@ class TestCurvatureIndex:
             'mean_epoch_fit': 2010.0
         }
         
-        result = calculate_curvature_index(
+        result = calculate_prediction_divergence(
             None,
             linear_fit_results,
             2024.0
@@ -297,10 +297,10 @@ class TestCurvatureIndex:
         
         assert result is None
     
-    def test_curvature_index_insufficient_measurements(self, sample_orbital_elements):
-        """Test curvature index with insufficient linear fit results."""
+    def test_prediction_divergence_insufficient_measurements(self, sample_orbital_elements):
+        """Test prediction divergence with insufficient linear fit results."""
         # Test with None linear fit results
-        result = calculate_curvature_index(
+        result = calculate_prediction_divergence(
             sample_orbital_elements,
             None,
             2024.0
@@ -308,10 +308,10 @@ class TestCurvatureIndex:
         
         assert result is None
     
-    def test_curvature_index_robust_fit_failure(self, sample_orbital_elements, sample_measurements):
-        """Test curvature index when no linear fit results provided."""
+    def test_prediction_divergence_robust_fit_failure(self, sample_orbital_elements, sample_measurements):
+        """Test prediction divergence when no linear fit results provided."""
         # Test with empty linear fit results
-        result = calculate_curvature_index(
+        result = calculate_prediction_divergence(
             sample_orbital_elements,
             {},
             2024.0
@@ -320,9 +320,9 @@ class TestCurvatureIndex:
         assert result is None
     
     @patch('astrakairos.physics.dynamics.predict_position')
-    def test_curvature_index_prediction_failure(self, mock_predict,
+    def test_prediction_divergence_prediction_failure(self, mock_predict,
                                               sample_orbital_elements, sample_measurements):
-        """Test curvature index when orbital prediction fails."""
+        """Test prediction divergence when orbital prediction fails."""
         linear_fit_results = {
             'vx_arcsec_per_year': 0.1,
             'vy_arcsec_per_year': -0.05,
@@ -333,7 +333,7 @@ class TestCurvatureIndex:
         }
         mock_predict.return_value = None
         
-        result = calculate_curvature_index(
+        result = calculate_prediction_divergence(
             sample_orbital_elements,
             linear_fit_results,
             2024.0

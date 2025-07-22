@@ -377,8 +377,8 @@ AVAILABLE_ANALYSIS_MODES = ['discovery', 'characterize', 'orbital']
 
 # Default sort keys for each analysis mode
 DEFAULT_SORT_KEYS = {
-    'discovery': 'v_total',
-    'characterize': 'rmse',
+    'discovery': 'v_total_significance',
+    'characterize': 'v_total_significance',
     'orbital': 'opi_arcsec_yr'
 }
 

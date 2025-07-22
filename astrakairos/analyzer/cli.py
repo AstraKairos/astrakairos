@@ -18,7 +18,7 @@ from ..physics.dynamics import (
     calculate_observation_priority_index_mc,
     calculate_robust_linear_fit,
     calculate_robust_linear_fit_bootstrap,
-    calculate_curvature_index
+    calculate_prediction_divergence
 )
 from ..utils.io import load_csv_data, save_results_to_csv
 from ..config import (
@@ -189,7 +189,7 @@ def _calculate_search_radius(wds_summary: WdsSummary, cli_args: argparse.Namespa
 
 # Analysis Functions
 
-async def _perform_discovery_analysis(wds_id: str, wds_summary: WdsSummary) -> Optional[Dict[str, Any]]:
+async def _perform_discovery_analysis(wds_id: str, wds_summary: WdsSummary, data_source: DataSource) -> Optional[Dict[str, Any]]:
     """
     Perform discovery mode analysis for basic motion estimation with uncertainty propagation.
     
@@ -237,6 +237,23 @@ async def _perform_discovery_analysis(wds_id: str, wds_summary: WdsSummary) -> O
                 'uncertainty_source': 'none',
                 'analysis_method': velocity_result.get('method', 'two_point_estimate')
             }
+        
+        # Try to calculate RMSE for discovery mode when sufficient measurements are available
+        rmse = None
+        try:
+            all_measurements = await data_source.get_all_measurements(wds_id)
+            if all_measurements and len(all_measurements) >= 3:
+                log.debug(f"Calculating RMSE for discovery mode: {wds_id} with {len(all_measurements)} measurements")
+                robust_fit = calculate_robust_linear_fit(all_measurements)
+                if robust_fit:
+                    rmse = robust_fit.get('rmse')
+                    log.debug(f"RMSE calculated for {wds_id}: {rmse:.4f}\"")
+        except Exception as e:
+            log.debug(f"RMSE calculation failed for {wds_id}: {e}")
+        
+        # Add RMSE to result if calculated
+        if rmse is not None:
+            result['rmse'] = rmse
         
         log.debug(f"Discovery analysis complete: v_total = {result['v_total']:.6f} ± {result['v_total_uncertainty'] or 0:.6f} arcsec/year")
         return result
@@ -287,6 +304,8 @@ async def _perform_characterize_analysis(wds_id: str, data_source: DataSource) -
             'analysis_method': 'robust_linear_fit'
         }
         
+        result['v_total'] = robust_fit['v_total_robust']
+
         log.debug(f"Characterization complete: v_total = {result['v_total_robust']:.4f} ± {result['v_total_uncertainty'] or 0:.4f} arcsec/yr")
         return result
         
@@ -346,38 +365,38 @@ async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_s
                 'method': 'opi_point'
             }
         
-        # Calculate curvature index if measurements available
-        curvature_index = None
+        # Calculate prediction divergence if measurements available
+        prediction_divergence = None
         try:
             all_measurements = await data_source.get_all_measurements(wds_id)
             if all_measurements and len(all_measurements) >= 3:
-                log.debug(f"Calculating curvature for {wds_id} with {len(all_measurements)} measurements")
+                log.debug(f"Calculating prediction divergence for {wds_id} with {len(all_measurements)} measurements")
 
                 linear_fit_results = calculate_robust_linear_fit_bootstrap(all_measurements)
                 if linear_fit_results:
-                    log.debug(f"Linear fit successful for {wds_id}, calculating curvature index")
-                    curvature_index = calculate_curvature_index(
+                    log.debug(f"Linear fit successful for {wds_id}, calculating prediction divergence")
+                    prediction_divergence = calculate_prediction_divergence(
                         orbital_elements, 
                         linear_fit_results, 
                         current_year
                     )
-                    if curvature_index is not None:
-                        log.debug(f"Curvature index calculated for {wds_id}: {curvature_index:.4f}\"")
+                    if prediction_divergence is not None:
+                        log.debug(f"Prediction divergence calculated for {wds_id}: {prediction_divergence:.4f}\"")
                     else:
-                        log.warning(f"Curvature index calculation failed for {wds_id}")
+                        log.warning(f"Prediction divergence calculation failed for {wds_id}")
                 else:
                     log.warning(f"Linear fit failed for {wds_id} with {len(all_measurements)} measurements")
             else:
-                log.debug(f"Insufficient measurements for curvature calculation: {wds_id} has {len(all_measurements) if all_measurements else 0} measurements")
+                log.debug(f"Insufficient measurements for prediction divergence calculation: {wds_id} has {len(all_measurements) if all_measurements else 0} measurements")
         except Exception as e:
-            log.warning(f"Curvature calculation failed for {wds_id}: {e}")
+            log.warning(f"Prediction divergence calculation failed for {wds_id}: {e}")
         
         result = {
             'opi_arcsec_yr': opi_result['opi_median'],
             'opi_uncertainty': opi_result.get('opi_uncertainty'),
             'deviation_arcsec': opi_result['deviation_median'],
             'deviation_uncertainty': opi_result.get('deviation_uncertainty'),
-            'curvature_index': curvature_index,
+            'prediction_divergence_arcsec': prediction_divergence,
             'orbital_period': orbital_elements.get('P'),
             'eccentricity': orbital_elements.get('e'),
             'semi_major_axis': orbital_elements.get('a'),
@@ -485,7 +504,7 @@ async def process_star(row: pd.Series,
 
             # 2. Mode-specific analysis using specialized functions
             if cli_args.mode == 'discovery':
-                analysis_result = await _perform_discovery_analysis(wds_id, wds_summary)
+                analysis_result = await _perform_discovery_analysis(wds_id, wds_summary, data_source)
             elif cli_args.mode == 'characterize':
                 analysis_result = await _perform_characterize_analysis(wds_id, data_source)
             elif cli_args.mode == 'orbital':
@@ -584,7 +603,7 @@ Examples:
                        help='Output CSV file for results')
     
     parser.add_argument('--sort-by',
-                       help='Sort results by this field (default: mode-specific)')
+                       help='Sort results by this field. Options: discovery: v_total, v_total_significance, rmse; characterize: rmse, v_total_significance; orbital: opi_arcsec_yr, opi_significance, prediction_divergence_arcsec (default: mode-specific)')
     
     parser.add_argument('--concurrent',
                        type=int,
@@ -711,15 +730,44 @@ async def main_async(args: argparse.Namespace):
         log.info(f"Processing {len(df_filtered)} stars with up to {args.concurrent} concurrent tasks...")
         results = await analyze_stars(df_filtered, configured_process_star, args.concurrent)
         
+        # Calculate statistical significance for results with uncertainties
+        log.info("Calculating significance for results with uncertainties...")
+        for result in results:
+            # Calculate velocity significance for discovery and characterize modes
+            if result.get('v_total_uncertainty') and result['v_total_uncertainty'] > 0:                
+                result['v_total_significance'] = abs(result.get('v_total', 0)) / result['v_total_uncertainty']
+
+            # Calculate OPI significance for orbital mode
+            if result.get('opi_uncertainty') and result['opi_uncertainty'] > 0:
+                result['opi_significance'] = abs(result.get('opi_arcsec_yr', 0)) / result['opi_uncertainty']
+        
         # 6. Sort and present the results
         if results:
-            # Use mode-specific sorting
+            # Define valid sort keys for each mode based on what's actually calculated
+            VALID_SORT_KEYS = {
+                'discovery': ['v_total', 'v_total_significance', 'rmse', 'date_last', 'pa_v_deg', 'uncertainty_quality'],
+                'characterize': ['rmse', 'v_total_robust', 'v_total_significance', 'n_measurements', 'time_baseline_years', 'bootstrap_success_rate'],
+                'orbital': ['opi_arcsec_yr', 'opi_significance', 'deviation_arcsec', 'prediction_divergence_arcsec', 'orbital_period', 'eccentricity']
+            }
+            
+            # Use mode-specific sorting with strict validation
             sort_key = args.sort_by if args.sort_by else DEFAULT_SORT_KEYS[args.mode]
+            
+            # Validate sort key for current mode - exit on error for robustness
+            if sort_key not in VALID_SORT_KEYS[args.mode]:
+                log.error(f"Sort key '{sort_key}' is not valid for {args.mode} mode.")
+                log.error(f"Valid options for {args.mode} mode: {', '.join(VALID_SORT_KEYS[args.mode])}")
+                log.error("Please use a valid sort key or omit --sort-by to use the default.")
+                sys.exit(1)
+            
             log.info(f"Sorting results by: {sort_key}")
             
-            results_sorted = sorted(results, 
-                                  key=lambda x: x.get(sort_key, -1) or -1, 
-                                  reverse=True)
+            # Improved sorting logic to handle None values safely
+            results_sorted = sorted(
+                results, 
+                key=lambda x: x.get(sort_key) if x.get(sort_key) is not None else -1, 
+                reverse=True
+            )
             
             # Display summary in the console
             print("\n" + "=" * DISPLAY_LINE_WIDTH)
@@ -728,7 +776,14 @@ async def main_async(args: argparse.Namespace):
             
             for i, result in enumerate(results_sorted[:TOP_RESULTS_DISPLAY_COUNT], 1):
                 # Mode-specific display format with uncertainty information
-                if args.mode == 'discovery':
+                if sort_key.endswith('_significance'):
+                    # Display significance value when sorting by significance
+                    significance_value = result.get(sort_key, 'N/A')
+                    if significance_value != 'N/A':
+                        metric_str = f"Significance = {significance_value:.2f}σ"
+                    else:
+                        metric_str = f"Significance = N/A"
+                elif args.mode == 'discovery':
                     metric_value = format_metric_with_uncertainty(
                         result, 'v_total', 'v_total_uncertainty', 'uncertainty_quality'
                     )

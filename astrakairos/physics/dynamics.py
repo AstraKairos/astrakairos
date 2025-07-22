@@ -376,16 +376,16 @@ def calculate_robust_linear_fit_bootstrap(
         return main_result  # Return main result if bootstrap fails
 
 
-def calculate_curvature_index(
+def calculate_prediction_divergence(
     orbital_elements: OrbitalElements,
     linear_fit_results: Dict[str, Any],
     current_date: float
 ) -> Optional[float]:
     """
-    Calculates the Curvature Index using centralized configuration.
+    Calculates the Prediction Divergence using centralized configuration.
     
-    This index quantifies the deviation between an orbital model and a robust linear 
-    fit at a specific date, providing insight into orbital motion significance.
+    This metric quantifies the deviation between an orbital model prediction and a robust 
+    linear fit prediction at a specific date, providing insight into orbital motion significance.
 
     Args:
         orbital_elements: The 7 Keplerian orbital elements.
@@ -394,7 +394,7 @@ def calculate_curvature_index(
         current_date: The date (in decimal years) to evaluate the deviation.
 
     Returns:
-        The Curvature Index in arcseconds, or None if calculation fails.
+        The Prediction Divergence in arcseconds, or None if calculation fails.
     """
     if not orbital_elements or not linear_fit_results:
         return None
@@ -445,17 +445,17 @@ def calculate_curvature_index(
         x_orb = rho_orb * np.sin(theta_orb_rad)
         y_orb = rho_orb * np.cos(theta_orb_rad)
         
-        # The Curvature Index is the Euclidean distance between the two predictions
-        curvature_index = np.sqrt((x_orb - x_lin)**2 + (y_orb - y_lin)**2)
+        # The Prediction Divergence is the Euclidean distance between the two predictions
+        prediction_divergence = np.sqrt((x_orb - x_lin)**2 + (y_orb - y_lin)**2)
         
         # Log warning only for extreme cases
-        if curvature_index > MAX_CURVATURE_INDEX_ARCSEC:
-            logger.warning(f"Large curvature index {curvature_index:.3f}\" > {MAX_CURVATURE_INDEX_ARCSEC}\"")
+        if prediction_divergence > MAX_CURVATURE_INDEX_ARCSEC:
+            logger.warning(f"Large prediction divergence {prediction_divergence:.3f}\" > {MAX_CURVATURE_INDEX_ARCSEC}\"")
         
-        return curvature_index
+        return prediction_divergence
 
     except Exception as e:
-        logger.error(f"Curvature index calculation failed: {e}")
+        logger.error(f"Prediction divergence calculation failed: {e}")
         return None
 
 def estimate_velocity_from_endpoints(

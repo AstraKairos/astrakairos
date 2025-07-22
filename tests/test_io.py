@@ -12,7 +12,7 @@ import astropy.units as u
 csv_content_comma = "wds_id,n_observations\n00001+0001,10\n00002+0002,5"
 csv_content_semicolon = "wds_id;n_observations\n00003+0003;12\n00004+0004;8"
 
-# --- Pruebas para load_csv_data ---
+# --- Tests for load_csv_data ---
 
 def test_load_csv_with_comma_delimiter():
     """Verifies that the file loads correctly with comma as delimiter."""
@@ -59,7 +59,7 @@ def test_load_csv_raises_dataload_error_for_unparseable_file():
                 io.load_csv_data("dummy_path.csv")
 
 
-# --- Pruebas para save_results_to_csv ---
+# --- Tests for save_results_to_csv ---
 
 def test_save_results_to_csv():
     """Verifies that data is saved correctly to CSV with updated wds_id format."""
@@ -80,7 +80,7 @@ def test_save_results_with_no_data():
         mock_to_csv.assert_not_called()
 
 
-# --- Pruebas para format_coordinates_astropy ---
+# --- Tests for format_coordinates_astropy ---
 
 def test_format_coordinates_astropy_normal():
     """
@@ -111,7 +111,7 @@ def test_format_coordinates_astropy_with_none_input():
     assert io.format_coordinates_astropy(10.0, None) == "N/A"
 
 
-# --- Pruebas para parse_wds_designation ---
+# --- Tests for parse_wds_designation ---
 
 @pytest.mark.parametrize("wds_id, expected_ra_deg, expected_dec_deg", [
     ("00013+1234", pytest.approx(0.325), pytest.approx(12.5666, abs=1e-4)),

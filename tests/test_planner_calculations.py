@@ -27,7 +27,7 @@ def test_date_full_moon():
     """Una fecha de prueba donde hay luna llena, para probar el brillo."""
     return datetime(2024, 1, 25)
 
-# --- Pruebas para get_nightly_events ---
+# --- Tests for get_nightly_events ---
 
 def test_get_nightly_events_returns_correct_structure(paris_observatory, test_date_new_moon):
     """
@@ -84,7 +84,7 @@ def test_sky_conditions_at_time_full_moon(paris_observatory, test_date_full_moon
     # Full moon is usually high in the sky at midnight
     assert conditions['moon_alt_deg'] > 30.0
 
-# --- Pruebas para generate_sky_quality_map ---
+# --- Tests for generate_sky_quality_map ---
 
 def test_sky_quality_map_no_moon(paris_observatory, test_date_new_moon):
     """

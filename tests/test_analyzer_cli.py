@@ -28,7 +28,7 @@ class MockPhysicalityResult:
         self.p_value = 0.99
         self.confidence = 0.95
 
-# --- Pruebas para el Argument Parser ---
+# --- Argument Parser Tests ---
 
 def test_parser_default_arguments():
     """Test that argument defaults work with required database path."""
@@ -42,7 +42,7 @@ def test_parser_default_arguments():
     assert args.concurrent == 20
 
 def test_parser_custom_arguments():
-    """Verifica que se pueden parsear argumentos personalizados correctamente."""
+    """Test that custom arguments can be parsed correctly."""
     parser = create_argument_parser()
     args_list = [
         'my_stars.csv',
@@ -79,7 +79,7 @@ MOCK_GAIA_RESULT = {
     'confidence': 0.95
 }
 
-# Usamos pytest.mark.asyncio para todas las pruebas que llaman a código async
+# Use pytest.mark.asyncio for all tests that call async code
 @pytest.mark.asyncio
 # El decorador 'patch' reemplaza objetos con 'Mocks' durante la prueba
 @patch('astrakairos.analyzer.cli.load_csv_data')
@@ -90,7 +90,7 @@ async def test_main_async_local_source_flow(mock_save_csv, mock_gaia_validator, 
     """
     Prueba de integración para el flujo principal usando la fuente de datos local.
     """
-    # --- 1. Configuración de los Mocks (Arrange) ---
+    # --- 1. Mock Setup (Arrange) ---
     
     # Simula la carga del CSV
     mock_load_csv.return_value = MOCK_CSV_DATA
@@ -99,15 +99,15 @@ async def test_main_async_local_source_flow(mock_save_csv, mock_gaia_validator, 
     mock_local_instance = mock_local_source.return_value
     mock_local_instance.get_wds_summary = AsyncMock(return_value=MOCK_WDS_DATA)
     mock_local_instance.get_orbital_elements = AsyncMock(return_value=MOCK_ORBITAL_DATA)
-    mock_local_instance.close = Mock()  # Mock para el método close()
+    mock_local_instance.close = Mock()  # Mock for the close() method
     
     # Configura la instancia 'mockeada' de GaiaValidator
     mock_gaia_instance = mock_gaia_validator.return_value
     mock_gaia_instance.validate_physicality = AsyncMock(return_value=MOCK_GAIA_RESULT)
 
-    # --- 2. Configuración de los Argumentos y Ejecución (Act) ---
+    # --- 2. Argument Setup and Execution (Act) ---
     
-    # Simula los argumentos de la línea de comandos
+    # Simulate command line arguments
     parser = create_argument_parser()
     args_list = [
         'stars.csv',
@@ -118,7 +118,7 @@ async def test_main_async_local_source_flow(mock_save_csv, mock_gaia_validator, 
     ]
     args = parser.parse_args(args_list)
 
-    # Llama a la función principal que estamos probando
+    # Call the main function we're testing
     await main_async(args)
 
     # --- 3. Verificaciones (Assert) ---
@@ -136,7 +136,7 @@ async def test_main_async_local_source_flow(mock_save_csv, mock_gaia_validator, 
     )
     mock_gaia_instance.validate_physicality.assert_called_once()
     
-    # Verifica que se intentó guardar el resultado
+    # Verify that result saving was attempted
     mock_save_csv.assert_called_once()
     
     # Opcional: inspeccionar los datos que se pasaron a save_results_to_csv
