@@ -169,7 +169,7 @@ class TestDatabaseCreation:
     
     def test_create_sqlite_database(self):
         """Test SQLite database creation with sample data."""
-        # Create sample DataFrames with correct column names
+        # Create sample DataFrames with correct schema
         df_wds = pd.DataFrame({
             'wds_id': ['00039+4018'],
             'wdss_id': ['00039+4018STF  60AB'],
@@ -189,7 +189,11 @@ class TestDatabaseCreation:
             'kmag': [8.89],
             'spectral_type': ['G5V+K0V'],
             'ra_deg': [244.218],
-            'dec_deg': [1.295]
+            'dec_deg': [1.295],
+            'pm_ra': [15.23],
+            'pm_dec': [-12.4],
+            'parallax': [-8.7],
+            'name': ['HD 148937']
         })
         
         df_orb6 = pd.DataFrame({
@@ -212,18 +216,18 @@ class TestDatabaseCreation:
         })
         
         df_measurements = pd.DataFrame({
-            'wdss_id': ['00039+4018STF  60AB'],
-            'pair': ['AB'],
-            'epoch': [2000.0],
-            'theta': [285.2],
-            'rho': [0.455],
-            'theta_error': [1.0],
-            'rho_error': [0.05],
-            'mag1': [8.12],
-            'mag2': [8.89],
-            'reference': ['REF1'],
-            'technique': ['S'],
-            'error_source': ['estimated']
+            'wdss_id': ['00039+4018STF  60AB', '00039+4018STF  60AB'],
+            'pair': ['AB', 'AB'],
+            'epoch': [2000.0, 2010.0],
+            'theta': [285.2, 286.5],
+            'rho': [0.455, 0.443],
+            'theta_error': [1.0, 1.0],
+            'rho_error': [0.05, 0.05],
+            'mag1': [8.12, 8.15],
+            'mag2': [8.89, 8.92],
+            'reference': ['REF1', 'REF2'],
+            'technique': ['S', 'S'],
+            'error_source': ['estimated', 'estimated']
         })
         
         with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
@@ -258,7 +262,7 @@ class TestSummaryGeneration:
     
     def test_generate_summary_table(self):
         """Test generation of summary table from components and measurements."""
-        # Create sample component data with correct columns
+        # Create sample component data
         df_components = pd.DataFrame({
             'wdss_id': ['00039+4018STF  60A', '00039+4018STF  60B'],
             'component': ['A', 'B'],
@@ -287,8 +291,7 @@ class TestSummaryGeneration:
         df_correspondence = pd.DataFrame({
             'wdss_id': ['00039+4018STF  60AB'],
             'wds_id': ['00039+4018'],
-            'discoverer': ['STF'],
-            'components': ['AB']
+            'discoverer_designation': ['STF 60']
         })
         
         result = generate_summary_table(df_components, df_measurements, df_correspondence)

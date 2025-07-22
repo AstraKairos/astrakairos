@@ -227,6 +227,8 @@ class TestErrorHandling:
             # This is acceptable behavior for infinity
             pass
         
-        # Negative RA should still work
+        # Negative RA should still work (but might format differently)
         result_neg = format_ra_hours(-1.0)
         assert isinstance(result_neg, str), "Should handle negative RA"
+        # Accept various formats for negative values
+        assert any(char in result_neg for char in ['-', 'h', 'm']), f"Got: {result_neg}"
