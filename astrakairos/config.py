@@ -660,3 +660,15 @@ MIN_SEPARATION_ARCSEC = 0.1
 MAX_SEPARATION_ARCSEC = 300.0
 MIN_POSITION_ANGLE_DEG = 0.0
 MAX_POSITION_ANGLE_DEG = 360.0
+
+# === IO Module Constants ===
+# Coordinate conversion constants
+DEGREES_PER_HOUR = 15.0  # Conversion factor from hours to degrees
+MINUTES_PER_HOUR = 60.0  # Minutes per hour for coordinate calculations
+
+# Astropy coordinate formatting
+ASTROPY_FRAME = 'icrs'  # Default reference frame for coordinate formatting
+ASTROPY_FORMAT = 'hmsdms'  # Default format string for coordinate display
+
+# File encoding fallback order
+ENCODING_FALLBACK_ORDER = ['utf-8', 'latin-1']  # Preferred encoding order for astronomical catalogs

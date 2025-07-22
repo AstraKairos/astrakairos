@@ -9,7 +9,9 @@ import astropy.units as u
 from ..config import (
     MIN_RA_DEG, MAX_RA_DEG, MIN_DEC_DEG, MAX_DEC_DEG,
     CSV_SNIFFER_SAMPLE_SIZE, DEFAULT_COORDINATE_PRECISION,
-    COORDINATE_ERROR_BEHAVIOR, MIN_WDS_ID_LENGTH, WDS_COORDINATE_PATTERN
+    COORDINATE_ERROR_BEHAVIOR, MIN_WDS_ID_LENGTH, WDS_COORDINATE_PATTERN,
+    DEGREES_PER_HOUR, MINUTES_PER_HOUR, ASTROPY_FRAME, ASTROPY_FORMAT,
+    ENCODING_FALLBACK_ORDER
 )
 
 log = logging.getLogger(__name__)
@@ -18,49 +20,45 @@ class DataLoadError(Exception):
     """Exception raised when data cannot be loaded from a file."""
     pass
 
+
+class DataSaveError(Exception):
+    """Exception raised when data cannot be saved to a file."""
+    pass
+
+
+class InvalidWdsFormatError(Exception):
+    """Exception raised when WDS designation format is invalid."""
+    pass
+
+
+class CoordinateOutOfRangeError(Exception):
+    """Exception raised when coordinates are outside valid astronomical ranges."""
+    pass
+
 def load_csv_data(filepath: str) -> pd.DataFrame:
-    """
-    Loads astronomical star data from a CSV file with robust delimiter detection.
+    """Loads astronomical star data from a CSV file with robust delimiter detection.
 
     This function uses pandas' built-in delimiter detection capabilities
     designed for astronomical catalogs which may use different delimiter conventions.
     
-    Use Cases:
-    - WDS catalog files (typically comma-separated)
-    - ORB6 orbital element catalogs (space-separated, converted to CSV)
-    - Custom observation logs (various formats)
-
     Args:
-        filepath: Absolute path to the CSV file containing stellar data
-                 Expected to have at minimum a 'wds_id' column for star identification
+        filepath: Absolute path to the CSV file containing stellar data.
+                 Expected to have at minimum a 'wds_id' column for star identification.
 
     Returns:
-        pandas.DataFrame: Loaded astronomical data with proper column types
+        Loaded astronomical data with proper column types.
         
     Raises:
-        DataLoadError: If the file cannot be loaded or parsed
-        
-    Notes:
-        - Uses pandas' automatic delimiter detection (sep=None)
-        - UTF-8 encoding with fallback to latin-1 for older catalogs
+        DataLoadError: If the file cannot be loaded, parsed, or lacks required columns.
     """
-    encodings_to_try = ['utf-8', 'latin-1']
-    
-    for encoding in encodings_to_try:
+    for encoding in ENCODING_FALLBACK_ORDER:
         try:
             log.info(f"Attempting to read CSV with encoding: {encoding}")
-            # Try first with automatic delimiter detection
-            try:
-                df = pd.read_csv(filepath, sep=None, engine='python', encoding=encoding)
-                # Validate that required 'wds_id' column exists
-                if 'wds_id' not in df.columns:
-                    raise ValueError("wds_id column not found with automatic delimiter detection")
-            except (ValueError, Exception):
-                # Fallback to comma delimiter for single-column files
-                df = pd.read_csv(filepath, sep=',', encoding=encoding)
-                # Validate that required 'wds_id' column exists
-                if 'wds_id' not in df.columns:
-                    raise DataLoadError(f"Required 'wds_id' column not found in {filepath}")
+            df = pd.read_csv(filepath, sep=None, engine='python', encoding=encoding)
+            
+            # Validate that required 'wds_id' column exists
+            if 'wds_id' not in df.columns:
+                raise DataLoadError(f"Required 'wds_id' column not found in {filepath}")
             
             log.info(f"CSV loaded successfully. Rows: {len(df)}, Encoding: {encoding}")
             return df
@@ -68,30 +66,38 @@ def load_csv_data(filepath: str) -> pd.DataFrame:
         except UnicodeDecodeError:
             log.debug(f"Encoding {encoding} failed, trying next...")
             continue
-        except (FileNotFoundError, PermissionError) as e:
-            log.error(f"File access error: {e}")
-            raise DataLoadError(f"Could not access file '{filepath}': {e}")
-        except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError) as e:
+        except FileNotFoundError as e:
+            log.error(f"File not found: {e}")
+            raise DataLoadError(f"File not found: {filepath}")
+        except PermissionError as e:
+            log.error(f"Permission denied: {e}")
+            raise DataLoadError(f"Permission denied accessing file: {filepath}")
+        except pd.errors.EmptyDataError as e:
+            log.error(f"Empty data file: {e}")
+            raise DataLoadError(f"File contains no data: {filepath}")
+        except pd.errors.ParserError as e:
             log.error(f"Data parsing error: {e}")
-            raise DataLoadError(f"Could not parse file '{filepath}': {e}")
+            raise DataLoadError(f"Could not parse CSV format in file: {filepath}")
+        except DataLoadError:
+            # Re-raise our own DataLoadError (like missing wds_id column)
+            raise
+        except Exception as e:
+            # Handle CSV Sniffer errors for empty files or other CSV parsing issues
+            if "Could not determine delimiter" in str(e):
+                log.error(f"Empty file or invalid CSV format: {e}")
+                raise DataLoadError(f"File contains no data or invalid CSV format: {filepath}")
+            continue
             
     log.error(f"Could not decode file with any supported encoding: {filepath}")
     raise DataLoadError(f"Could not decode file '{filepath}' with any supported encoding")
 
 
 def save_results_to_csv(results: List[Dict[str, Any]], filepath: str) -> None:
-    """
-    Saves astronomical analysis results to a publication-ready CSV file.
+    """Saves astronomical analysis results to a publication-ready CSV file.
 
-    This function creates standardized output files suitable for:
-    - Publication supplementary data
-    - Further analysis in astronomical software (e.g., TOPCAT, DS9)
-    - Sharing with observational collaborators
-    
-    Output Format:
-    - UTF-8 encoding for international compatibility
-    - Standard CSV format with headers
-    - Consistent numerical precision for measurements
+    This function creates standardized output files suitable for publication
+    supplementary data, further analysis in astronomical software, and 
+    sharing with observational collaborators.
     
     Args:
         results: List of analysis dictionaries, where each dictionary represents
@@ -100,15 +106,11 @@ def save_results_to_csv(results: List[Dict[str, Any]], filepath: str) -> None:
                 - 'opi': Observation Priority Index (for orbital mode)
                 - 'rmse': Motion fit quality (for characterize mode)  
                 - 'physicality_p_value': Gaia validation (for discovery mode)
-        filepath: Output path for the CSV file (will be created/overwritten)
+        filepath: Output path for the CSV file (will be created/overwritten).
         
     Raises:
-        IOError: If file writing fails (disk space, permissions, etc.)
-        ValueError: If results structure is invalid
-        
-    Notes:
-        - Empty results lists are handled gracefully with warning
-        - File operations are atomic (complete or fail, no partial writes)
+        DataSaveError: If file writing fails due to permissions, disk space, 
+                      encoding issues, or invalid data structure.
     """
     if not results:
         log.warning("No results to save.")
@@ -118,44 +120,82 @@ def save_results_to_csv(results: List[Dict[str, Any]], filepath: str) -> None:
         df = pd.DataFrame(results)
         df.to_csv(filepath, index=False, encoding='utf-8')
         log.info(f"Results successfully saved to {filepath} ({len(df)} rows)")
-    except (FileNotFoundError, PermissionError) as e:
-        log.error(f"File access error when saving to {filepath}: {e}")
-        raise IOError(f"Could not access file '{filepath}': {e}")
+    except FileNotFoundError as e:
+        log.error(f"Directory not found when saving to {filepath}: {e}")
+        raise DataSaveError(f"Directory not found: {filepath}")
+    except PermissionError as e:
+        log.error(f"Permission denied when saving to {filepath}: {e}")
+        raise DataSaveError(f"Permission denied: {filepath}")
     except UnicodeEncodeError as e:
-        log.error(f"Encoding error when saving to {filepath}: {e}")
-        raise IOError(f"Encoding error when saving to '{filepath}': {e}")
+        log.error(f"Unicode encoding error when saving to {filepath}: {e}")
+        raise DataSaveError(f"Unicode encoding error in data: {e}")
     except ValueError as e:
-        log.error(f"Data structure error when saving to {filepath}: {e}")
-        raise ValueError(f"Invalid results structure: {e}")
-    except Exception as e:
-        log.error(f"Unexpected error when saving to {filepath}: {e}")
-        raise IOError(f"Unexpected error when saving to '{filepath}': {e}")
+        log.error(f"Invalid data structure when saving to {filepath}: {e}")
+        raise DataSaveError(f"Invalid results structure: {e}")
+    except OSError as e:
+        log.error(f"OS error when saving to {filepath}: {e}")
+        raise DataSaveError(f"OS error (disk space, path length, etc.): {e}")
 
 def format_coordinates_astropy(ra_hours: float, dec_degrees: float, precision: Optional[int] = None) -> str:
-    """
-    Formats celestial coordinates for display using the astropy library.
+    """Formats celestial coordinates for display using the astropy library.
     
     Args:
-        ra_hours: Right ascension in hours (0-24)
-        dec_degrees: Declination in degrees (-90 to +90)
-        precision: Number of decimal places for seconds (uses DEFAULT_COORDINATE_PRECISION if None)
+        ra_hours: Right ascension in hours (0-24).
+        dec_degrees: Declination in degrees (-90 to +90).
+        precision: Number of decimal places for seconds (uses DEFAULT_COORDINATE_PRECISION if None).
         
     Returns:
         Formatted coordinate string in HMS/DMS format, "N/A" for None inputs,
-        or "Invalid Coords" for formatting errors (based on COORDINATE_ERROR_BEHAVIOR)
+        or "Invalid Coords" for formatting errors (based on COORDINATE_ERROR_BEHAVIOR).
         
     Raises:
-        ValueError: If COORDINATE_ERROR_BEHAVIOR is "raise" and formatting fails
+        ValueError: If COORDINATE_ERROR_BEHAVIOR is "raise" and coordinates are invalid.
+        CoordinateOutOfRangeError: If coordinates are outside valid astronomical ranges.
     """
     if ra_hours is None or dec_degrees is None:
         return "N/A"
         
     if precision is None:
         precision = DEFAULT_COORDINATE_PRECISION
+    
+    # Type validation before range checking
+    try:
+        ra_hours = float(ra_hours)
+        dec_degrees = float(dec_degrees)
+    except (TypeError, ValueError):
+        error_msg = f"Coordinates must be numeric (RA: {ra_hours}, Dec: {dec_degrees})"
+        log.error(error_msg)
+        if COORDINATE_ERROR_BEHAVIOR == "raise":
+            raise ValueError(error_msg)
+        elif COORDINATE_ERROR_BEHAVIOR == "return_none":
+            return None
+        else:  # "return_invalid" (default)
+            return "Invalid Coords"
+    
+    # Explicit coordinate range validation
+    if not (0.0 <= ra_hours <= 24.0):
+        error_msg = f"RA hours {ra_hours} outside valid range [0, 24]"
+        log.error(error_msg)
+        if COORDINATE_ERROR_BEHAVIOR == "raise":
+            raise CoordinateOutOfRangeError(error_msg)
+        elif COORDINATE_ERROR_BEHAVIOR == "return_none":
+            return None
+        else:  # "return_invalid" (default)
+            return "Invalid Coords"
+    
+    if not (-90.0 <= dec_degrees <= 90.0):
+        error_msg = f"Dec degrees {dec_degrees} outside valid range [-90, 90]"
+        log.error(error_msg)
+        if COORDINATE_ERROR_BEHAVIOR == "raise":
+            raise CoordinateOutOfRangeError(error_msg)
+        elif COORDINATE_ERROR_BEHAVIOR == "return_none":
+            return None
+        else:  # "return_invalid" (default)
+            return "Invalid Coords"
         
     try:
-        coords = SkyCoord(ra=ra_hours * u.hourangle, dec=dec_degrees * u.deg, frame='icrs')
-        return coords.to_string('hmsdms', sep=' ', precision=precision, pad=True)
+        coords = SkyCoord(ra=ra_hours * u.hourangle, dec=dec_degrees * u.deg, frame=ASTROPY_FRAME)
+        return coords.to_string(ASTROPY_FORMAT, sep=' ', precision=precision, pad=True)
         
     except (ValueError, TypeError) as e:
         error_msg = f"Astropy coordinate formatting failed: {e}"
@@ -169,64 +209,50 @@ def format_coordinates_astropy(ra_hours: float, dec_degrees: float, precision: O
             return "Invalid Coords"
 
 
-def parse_wds_designation(wds_id: str) -> Optional[Dict[str, float]]:
-    """
-    Parses a WDS designation string (e.g., "00013+1234") to extract
-    approximate J2000 coordinates with validation.
+def parse_wds_designation(wds_id: str) -> Dict[str, float]:
+    """Parses a WDS designation string to extract approximate J2000 coordinates with validation.
 
     Args:
-        wds_id: The WDS identifier string.
+        wds_id: The WDS identifier string (e.g., "00013+1234").
 
     Returns:
-        A dictionary with 'ra_deg' and 'dec_deg', or None if parsing fails
-        or coordinates are outside valid astronomical ranges.
+        A dictionary with 'ra_deg' and 'dec_deg' keys containing coordinate values.
+        
+    Raises:
+        InvalidWdsFormatError: If WDS designation format is invalid.
+        CoordinateOutOfRangeError: If parsed coordinates are outside valid ranges.
     """
     if not isinstance(wds_id, str) or len(wds_id) < MIN_WDS_ID_LENGTH:
-        return None
+        raise InvalidWdsFormatError(f"WDS ID '{wds_id}' is too short (minimum {MIN_WDS_ID_LENGTH} characters)")
         
-    # WDS designation format validation: HHMMM[+-]DDMM[AB-like components]
-    # Components after coordinates are optional (e.g., AB, AC, ABC)
+    # WDS designation format validation: HHMMM[+-]DDMM[components]
     if not re.match(WDS_COORDINATE_PATTERN, wds_id[:12]):
-        log.debug(f"WDS ID '{wds_id}' does not match the coordinate format.")
-        return None
+        raise InvalidWdsFormatError(f"WDS ID '{wds_id}' does not match coordinate format HHMMM±DDMM")
         
     try:
         ra_h = int(wds_id[0:2])
-        ra_m = int(wds_id[2:5]) / 10.0 # HHMM.m
-        ra_hours = ra_h + ra_m / 60.0
-        ra_deg = ra_hours * 15.0
+        ra_m = int(wds_id[2:5]) / 10.0  # HHMM.m
+        ra_hours = ra_h + ra_m / MINUTES_PER_HOUR
+        ra_deg = ra_hours * DEGREES_PER_HOUR
 
         dec_sign = 1 if wds_id[5] == '+' else -1
         dec_d = int(wds_id[6:8])
         dec_m = int(wds_id[8:10])
-        dec_deg = dec_sign * (dec_d + dec_m / 60.0)
+        dec_deg = dec_sign * (dec_d + dec_m / MINUTES_PER_HOUR)
         
-        # Validate astronomical coordinate ranges immediately
+        # Validate astronomical coordinate ranges
         if not (MIN_RA_DEG <= ra_deg <= MAX_RA_DEG):
-            log.warning(f"WDS ID '{wds_id}' has RA {ra_deg:.3f}° outside valid range [{MIN_RA_DEG}, {MAX_RA_DEG}]")
-            return None
+            raise CoordinateOutOfRangeError(
+                f"WDS ID '{wds_id}' has RA {ra_deg:.3f}° outside valid range [{MIN_RA_DEG}, {MAX_RA_DEG}]"
+            )
             
         if not (MIN_DEC_DEG <= dec_deg <= MAX_DEC_DEG):
-            log.warning(f"WDS ID '{wds_id}' has Dec {dec_deg:.3f}° outside valid range [{MIN_DEC_DEG}, {MAX_DEC_DEG}]")
-            return None
+            raise CoordinateOutOfRangeError(
+                f"WDS ID '{wds_id}' has Dec {dec_deg:.3f}° outside valid range [{MIN_DEC_DEG}, {MAX_DEC_DEG}]"
+            )
         
         return {'ra_deg': ra_deg, 'dec_deg': dec_deg}
 
     except (ValueError, IndexError) as e:
-        log.warning(f"Failed to parse WDS designation '{wds_id}': {e}")
-        return None
+        raise InvalidWdsFormatError(f"Failed to parse WDS designation '{wds_id}': {e}")
 
-
-def format_coordinates(ra_hours: float, dec_degrees: float, precision: Optional[int] = None) -> str:
-    """
-    Universal coordinate formatting function.
-    
-    Args:
-        ra_hours: Right ascension in hours
-        dec_degrees: Declination in degrees  
-        precision: Number of decimal places for seconds (uses DEFAULT_COORDINATE_PRECISION if None)
-        
-    Returns:
-        Formatted coordinate string in HMS/DMS format
-    """
-    return format_coordinates_astropy(ra_hours, dec_degrees, precision)

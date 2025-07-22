@@ -36,17 +36,29 @@ def test_load_csv_raises_error_for_nonexistent_file():
     """
     Verifies that DataLoadError is raised when file doesn't exist.
     """
-    with pytest.raises(io.DataLoadError, match="Could not access file"):
+    with pytest.raises(io.DataLoadError, match="File not found"):
         io.load_csv_data("nonexistent_file.csv")
 
 def test_load_csv_raises_error_for_missing_wds_id():
     """
     Verifies that DataLoadError is raised when CSV lacks required 'wds_id' column.
     """
-    invalid_csv = "star_name,obs\nStar1,10\nStar2,5"
-    with patch("builtins.open", mock_open(read_data=invalid_csv)):
+    import tempfile
+    import os
+    
+    # Create a temporary CSV file without 'wds_id' column
+    invalid_csv_content = "star_name,obs\nStar1,10\nStar2,5"
+    
+    # Create temp file, write content, and close it
+    fd, temp_path = tempfile.mkstemp(suffix='.csv', text=True)
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(invalid_csv_content)
+        
         with pytest.raises(io.DataLoadError, match="Required 'wds_id' column not found"):
-            io.load_csv_data("dummy_path.csv")
+            io.load_csv_data(temp_path)
+    finally:
+        os.unlink(temp_path)
 
 def test_load_csv_raises_dataload_error_for_unparseable_file():
     """
@@ -55,7 +67,7 @@ def test_load_csv_raises_dataload_error_for_unparseable_file():
     """
     with patch("builtins.open", mock_open(read_data="dummy")):
         with patch("pandas.read_csv", side_effect=pd.errors.ParserError("Mocked parser error")):
-            with pytest.raises(io.DataLoadError, match="Could not parse file"):
+            with pytest.raises(io.DataLoadError, match="Could not parse CSV format"):
                 io.load_csv_data("dummy_path.csv")
 
 
@@ -136,20 +148,24 @@ def test_parse_wds_designation_valid(wds_id, expected_ra_deg, expected_dec_deg):
     "ABCDE+FGHI"      # Not numbers
 ])
 def test_parse_wds_designation_invalid(invalid_wds_id):
-    """Tests that the function returns None for invalid inputs."""
-    assert io.parse_wds_designation(invalid_wds_id) is None
+    """Tests that the function raises InvalidWdsFormatError for invalid inputs."""
+    with pytest.raises(io.InvalidWdsFormatError):
+        io.parse_wds_designation(invalid_wds_id)
 
 # Test enhanced coordinate validation
 def test_parse_wds_designation_coordinate_validation():
     """Test that parse_wds_designation validates astronomical coordinate ranges."""
     # Test RA out of range (> 360°)
-    assert io.parse_wds_designation("25000+1234") is None  # RA = 375°
+    with pytest.raises(io.CoordinateOutOfRangeError):
+        io.parse_wds_designation("25000+1234")  # RA = 375°
     
     # Test Dec out of range (> 90°)  
-    assert io.parse_wds_designation("00000+9100") is None  # Dec = 91°
+    with pytest.raises(io.CoordinateOutOfRangeError):
+        io.parse_wds_designation("00000+9100")  # Dec = 91°
     
     # Test Dec out of range (< -90°)
-    assert io.parse_wds_designation("00000-9100") is None  # Dec = -91°
+    with pytest.raises(io.CoordinateOutOfRangeError):
+        io.parse_wds_designation("00000-9100")  # Dec = -91°
     
     # Test valid coordinates at boundaries
     result = io.parse_wds_designation("00000+9000")  # Dec = 90° (valid)
@@ -178,17 +194,18 @@ def test_format_coordinates_astropy_precision_config():
     assert "+" in result_explicit or "-" in result_explicit
     assert result_explicit == io.format_coordinates_astropy(ra_hours, dec_degrees, precision=2)
 
-# Test unified coordinate formatting functions
-def test_format_coordinates_unified():
-    """Test the unified coordinate formatting function."""
+# Test coordinate formatting function
+def test_format_coordinates_astropy_unified():
+    """Test the coordinate formatting function."""
     ra_hours = 1.5
     dec_degrees = 45.5
     
-    result = io.format_coordinates(ra_hours, dec_degrees)
+    result = io.format_coordinates_astropy(ra_hours, dec_degrees)
     
-    # Should be same as astropy function
-    expected = io.format_coordinates_astropy(ra_hours, dec_degrees)
-    assert result == expected
+    # Should be a valid coordinate string
+    assert isinstance(result, str)
+    assert " " in result  # Should have spaces as separators
+    assert "+" in result or "-" in result  # Should have sign for declination
 
 def test_coordinate_error_behavior():
     """Test configurable error handling behavior."""

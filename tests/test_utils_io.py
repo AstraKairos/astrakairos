@@ -10,11 +10,13 @@ from io import StringIO
 
 from astrakairos.utils.io import (
     DataLoadError,
+    DataSaveError,
+    InvalidWdsFormatError,
+    CoordinateOutOfRangeError,
     load_csv_data,
     save_results_to_csv,
     format_coordinates_astropy,
-    parse_wds_designation,
-    format_coordinates
+    parse_wds_designation
 )
 
 
@@ -92,7 +94,7 @@ class TestLoadCSVData:
         with pytest.raises(DataLoadError) as exc_info:
             load_csv_data("nonexistent_file.csv")
         
-        assert "Could not access file" in str(exc_info.value)
+        assert "File not found" in str(exc_info.value)
     
     def test_load_csv_data_empty_file(self):
         """Test error when file is empty."""
@@ -104,7 +106,7 @@ class TestLoadCSVData:
             with pytest.raises(DataLoadError) as exc_info:
                 load_csv_data(temp_path)
             
-            assert "Could not parse file" in str(exc_info.value)
+            assert "File contains no data or invalid CSV format" in str(exc_info.value)
             
         finally:
             os.unlink(temp_path)
@@ -136,7 +138,7 @@ class TestLoadCSVData:
         with pytest.raises(DataLoadError) as exc_info:
             load_csv_data("test.csv")
         
-        assert "Could not parse file" in str(exc_info.value)
+        assert "Could not parse CSV format in file" in str(exc_info.value)
 
 
 class TestSaveResultsToCSV:
@@ -186,13 +188,18 @@ class TestSaveResultsToCSV:
         """Test error when file cannot be written due to permissions."""
         results = [{'wds_id': '00013+1234', 'opi': 0.85}]
         
-        # Try to write to a directory (should fail)
-        with pytest.raises(IOError) as exc_info:
-            save_results_to_csv(results, "/root/")  # Invalid path on most systems
+        # Try to write to an invalid/inaccessible location
+        import platform
+        if platform.system() == "Windows":
+            invalid_path = "C:\\Windows\\System32\\test_file.csv"  # System directory
+        else:
+            invalid_path = "/root/test_file.csv"  # Root directory
+            
+        with pytest.raises(DataSaveError) as exc_info:
+            save_results_to_csv(results, invalid_path)
         
-        # Check for either access error or unexpected error (both are valid IOError cases)
-        error_message = str(exc_info.value)
-        assert ("Could not access file" in error_message or "Unexpected error" in error_message)
+        # Check that it's the right type of error
+        assert "OS error" in str(exc_info.value) or "Permission denied" in str(exc_info.value)
     
     def test_save_results_to_csv_invalid_structure(self):
         """Test error when results have invalid structure."""
@@ -259,16 +266,12 @@ class TestFormatCoordinatesAstropy:
         
         assert result is None
     
-    @patch('astrakairos.utils.io.SkyCoord')
     @patch('astrakairos.utils.io.COORDINATE_ERROR_BEHAVIOR', 'raise')
-    def test_format_coordinates_astropy_error_raise(self, mock_skycoord):
+    def test_format_coordinates_astropy_error_raise(self):
         """Test formatting error with raise behavior."""
-        mock_skycoord.side_effect = ValueError("Invalid coordinates")
-        
-        with pytest.raises(ValueError) as exc_info:
-            format_coordinates_astropy(25.0, 100.0)
-        
-        assert "Astropy coordinate formatting failed" in str(exc_info.value)
+        # Use coordinates that are out of range to trigger our validation
+        with pytest.raises(CoordinateOutOfRangeError):
+            format_coordinates_astropy(25.0, 100.0)  # RA > 24h, Dec > 90°
     
     @patch('astrakairos.utils.io.SkyCoord')
     def test_format_coordinates_astropy_custom_precision(self, mock_skycoord):
@@ -329,22 +332,29 @@ class TestParseWDSDesignation:
     def test_parse_wds_designation_invalid_format(self):
         """Test parsing invalid WDS designation formats."""
         # Too short
-        assert parse_wds_designation("0001") is None
+        with pytest.raises(InvalidWdsFormatError):
+            parse_wds_designation("0001")
         
         # Wrong format
-        assert parse_wds_designation("ABCDE+1234") is None
+        with pytest.raises(InvalidWdsFormatError):
+            parse_wds_designation("ABCDE+1234")
         
         # Missing sign
-        assert parse_wds_designation("000131234") is None
+        with pytest.raises(InvalidWdsFormatError):
+            parse_wds_designation("000131234")
         
         # Invalid characters
-        assert parse_wds_designation("00013@1234") is None
+        with pytest.raises(InvalidWdsFormatError):
+            parse_wds_designation("00013@1234")
     
     def test_parse_wds_designation_none_input(self):
         """Test parsing None or invalid input types."""
-        assert parse_wds_designation(None) is None
-        assert parse_wds_designation(123) is None
-        assert parse_wds_designation("") is None
+        with pytest.raises(InvalidWdsFormatError):
+            parse_wds_designation(None)
+        with pytest.raises(InvalidWdsFormatError):
+            parse_wds_designation(123)
+        with pytest.raises(InvalidWdsFormatError):
+            parse_wds_designation("")
     
     @patch('astrakairos.utils.io.MIN_RA_DEG', 0.0)
     @patch('astrakairos.utils.io.MAX_RA_DEG', 360.0)
@@ -359,14 +369,14 @@ class TestParseWDSDesignation:
         # Invalid RA (would be > 360 degrees)
         # 25000 = 25h 00m = 25 * 15 = 375 degrees > 360
         with patch('astrakairos.utils.io.MAX_RA_DEG', 360.0):
-            result = parse_wds_designation("25000+4567")
-            assert result is None
+            with pytest.raises(CoordinateOutOfRangeError):
+                parse_wds_designation("25000+4567")
         
         # Invalid Dec (would be > 90 degrees)
         # +9100 = +91° 00' = 91 degrees > 90
         with patch('astrakairos.utils.io.MAX_DEC_DEG', 90.0):
-            result = parse_wds_designation("12345+9100")
-            assert result is None
+            with pytest.raises(CoordinateOutOfRangeError):
+                parse_wds_designation("12345+9100")
     
     def test_parse_wds_designation_edge_cases(self):
         """Test edge cases in WDS designation parsing."""
@@ -389,24 +399,23 @@ class TestParseWDSDesignation:
 class TestFormatCoordinates:
     """Test universal coordinate formatting function."""
     
-    @patch('astrakairos.utils.io.format_coordinates_astropy')
-    def test_format_coordinates_delegates_to_astropy(self, mock_format_astropy):
-        """Test that format_coordinates delegates to format_coordinates_astropy."""
-        mock_format_astropy.return_value = "12 34 56.7 +12 34 56"
+    def test_format_coordinates_delegates_to_astropy(self):
+        """Test that format_coordinates_astropy works directly."""
+        # Test with actual coordinates that should format properly
+        result = format_coordinates_astropy(12.5826, 12.5824, precision=2)
         
-        result = format_coordinates(12.5826, 12.5824, precision=2)
-        
-        assert result == "12 34 56.7 +12 34 56"
-        mock_format_astropy.assert_called_once_with(12.5826, 12.5824, 2)
+        # Just verify we get a string result (don't test exact format due to astropy variations)
+        assert isinstance(result, str)
+        assert len(result) > 0
+        assert "12" in result  # Should contain hour information
     
-    @patch('astrakairos.utils.io.format_coordinates_astropy')
-    def test_format_coordinates_default_precision(self, mock_format_astropy):
-        """Test format_coordinates with default precision."""
-        mock_format_astropy.return_value = "12 34 56.7 +12 34 56"
+    def test_format_coordinates_default_precision(self):
+        """Test format_coordinates_astropy with default precision."""
+        result = format_coordinates_astropy(12.5826, 12.5824)
         
-        result = format_coordinates(12.5826, 12.5824)
-        
-        mock_format_astropy.assert_called_once_with(12.5826, 12.5824, None)
+        # Verify we get a valid coordinate string
+        assert isinstance(result, str)
+        assert len(result) > 0
 
 
 class TestIntegration:
@@ -430,7 +439,7 @@ class TestIntegration:
             mock_coord.to_string.return_value = "12 34 30.0 +67 89 00"
             mock_skycoord.return_value = mock_coord
             
-            formatted = format_coordinates(ra_hours, dec_degrees)
+            formatted = format_coordinates_astropy(ra_hours, dec_degrees)
             assert formatted == "12 34 30.0 +67 89 00"
     
     def test_csv_load_save_round_trip(self):
