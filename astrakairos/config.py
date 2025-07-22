@@ -379,7 +379,7 @@ AVAILABLE_ANALYSIS_MODES = ['discovery', 'characterize', 'orbital']
 DEFAULT_SORT_KEYS = {
     'discovery': 'v_total_significance',
     'characterize': 'v_total_significance',
-    'orbital': 'opi_arcsec_yr'
+    'orbital': 'opi_significance'
 }
 
 # === PLANNER Module Configuration - Observatory Planning & Sky Quality ===

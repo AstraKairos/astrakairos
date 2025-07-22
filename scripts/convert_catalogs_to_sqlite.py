@@ -30,6 +30,125 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 log = logging.getLogger(__name__)
 
 
+def parse_el_badry_catalog(filepath: str) -> Optional[pd.DataFrame]:
+    """
+    Parse the El-Badry et al. (2021) catalog from FITS format.
+    
+    Returns:
+        DataFrame with consistent column naming for cross-matching
+    """
+    try:
+        log.info(f"Loading El-Badry catalog: {filepath}")
+        
+        from astropy.table import Table
+        el_badry_table = Table.read(filepath)
+        df = el_badry_table.to_pandas()
+        log.info(f"Loaded El-Badry catalog with {len(df)} binary systems")
+        
+        # Validate required columns
+        required_cols = ['source_id1', 'source_id2']
+        missing_required = [col for col in required_cols if col not in df.columns]
+        if missing_required:
+            log.error(f"El-Badry catalog missing required columns: {missing_required}")
+            return None
+        
+        # Add missing optional columns with default values
+        optional_cols = ['R_chance_align', 'binary_type']
+        for col in optional_cols:
+            if col not in df.columns:
+                df[col] = None
+                log.warning(f"Optional column '{col}' not found in El-Badry catalog, using None")
+        
+        # Rename columns for consistency
+        df.rename(columns={
+            'source_id1': 'gaia_source_id_1', 
+            'source_id2': 'gaia_source_id_2'
+        }, inplace=True)
+        
+        # Create bidirectional pair IDs for robust matching
+        df['gaia_source_id_1'] = df['gaia_source_id_1'].astype(str)
+        df['gaia_source_id_2'] = df['gaia_source_id_2'].astype(str)
+        
+        sorted_ids = np.sort(df[['gaia_source_id_1', 'gaia_source_id_2']].values, axis=1)
+        df['pair_id'] = [f"{id1}_{id2}" for id1, id2 in sorted_ids]
+        
+        # Remove duplicate pairs
+        df_cleaned = df.drop_duplicates(subset=['pair_id'], keep='first')
+        log.info(f"Found {len(df_cleaned)} unique binary pairs in El-Badry catalog")
+        
+        return df_cleaned
+        
+    except ImportError:
+        log.error("astropy is required to read FITS files. Install with: pip install astropy")
+        return None
+    except Exception as e:
+        log.error(f"Failed to load El-Badry catalog: {e}")
+        return None
+
+
+def perform_el_badry_crossmatch(df_components: pd.DataFrame, df_el_badry: pd.DataFrame) -> pd.DataFrame:
+    """
+    Perform pair-wise cross-match with El-Badry catalog using efficient pandas operations.
+    
+    Args:
+        df_components: DataFrame of all components parsed from WDSS
+        df_el_badry: Pre-processed El-Badry catalog DataFrame
+    
+    Returns:
+        DataFrame with matched systems including El-Badry physicality data
+    """
+    log.info("Performing pair-wise cross-match with El-Badry catalog...")
+    
+    # 1. Prepare components: extract Gaia IDs from A and B components only
+    df_comps = df_components[df_components['component'].isin(['A', 'B'])].copy()
+    # Robust regex to extract Gaia IDs from various formats
+    df_comps['gaia_id'] = df_comps['name'].str.extract(r'Gaia\s+(?:DR3|EDR3)?\s*(\d+)')[0]
+    df_comps.dropna(subset=['gaia_id'], inplace=True)
+    
+    # 2. Pivot to have A and B components in the same row - much cleaner than groupby
+    df_pairs = df_comps.pivot(index='wdss_id', columns='component', values='gaia_id').reset_index()
+    df_pairs.dropna(subset=['A', 'B'], inplace=True)
+    df_pairs.rename(columns={'A': 'gaia_id_A', 'B': 'gaia_id_B'}, inplace=True)
+
+    # 3. Create sorted pair key for both DataFrames
+    sorted_ids_wdss = np.sort(df_pairs[['gaia_id_A', 'gaia_id_B']].values, axis=1)
+    df_pairs['pair_id'] = [f"{id1}_{id2}" for id1, id2 in sorted_ids_wdss]
+
+    # 4. Perform the cross-match using inner join
+    df_matched = pd.merge(
+        df_pairs[['wdss_id', 'pair_id']],
+        df_el_badry[['pair_id', 'R_chance_align', 'binary_type']],
+        on='pair_id',
+        how='inner'  # Only keep matches
+    )
+    
+    df_matched['in_el_badry_catalog'] = True
+    log.info(f"Cross-match complete. Found {len(df_matched)} WDSS systems in El-Badry catalog.")
+    
+    return df_matched[['wdss_id', 'R_chance_align', 'binary_type', 'in_el_badry_catalog']]
+
+
+def cross_match_with_el_badry(df_components: pd.DataFrame, el_badry_filepath: str) -> pd.DataFrame:
+    """
+    Wrapper function for backwards compatibility with existing code.
+    
+    Returns:
+        DataFrame with El-Badry cross-match results
+    """
+    try:
+        # Parse El-Badry catalog
+        df_el_badry = parse_el_badry_catalog(el_badry_filepath)
+        if df_el_badry is None:
+            return pd.DataFrame(columns=['wdss_id', 'R_chance_align', 'binary_type', 'in_el_badry_catalog'])
+        
+        # Perform cross-match
+        return perform_el_badry_crossmatch(df_components, df_el_badry)
+        
+    except Exception as e:
+        log.error(f"Failed to cross-match with El-Badry catalog: {e}")
+        return pd.DataFrame(columns=['wdss_id', 'R_chance_align', 'binary_type', 'in_el_badry_catalog'])
+
+
 def detect_wds_format(filepath: str) -> dict:
     """Auto-detect WDS file format by analyzing first few lines."""
     log.info(f"Auto-detecting format for: {filepath}")
@@ -254,7 +373,24 @@ def _parse_measurement_line_data(line: str, wdss_id: str, pair: str) -> dict:
 
 
 
-def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.DataFrame, df_correspondence: pd.DataFrame) -> pd.DataFrame:
+def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.DataFrame, 
+                          df_correspondence: pd.DataFrame, df_el_badry: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """
+    Generate the summary table with integrated El-Badry cross-matching.
+    
+    Now performs pair-wise cross-matching with the El-Badry catalog for maximum accuracy,
+    rather than individual component matching. This ensures 100% precision in identifying
+    systems that are truly in the gold-standard catalog.
+    
+    Args:
+        df_components: Component data from WDSS catalogs
+        df_measurements: Measurement data from WDSS catalogs
+        df_correspondence: WDS-WDSS correspondence mapping
+        df_el_badry: El-Badry catalog data with matched pairs (optional)
+    
+    Returns:
+        DataFrame with summary data and El-Badry enrichment
+    """
     log.info("Generating summary table using vectorized operations with error propagation")
 
     # 1. Aggregate measurements using groupby with error propagation
@@ -303,9 +439,35 @@ def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.Data
     df_summary = df_summary.join(df_wide_components, how='outer')
     df_summary = df_summary.join(df_correspondence.set_index('wdss_id'), how='left')
 
+    # 4. **NEW**: Enriching summary table with El-Badry physicality data using pair-wise matching
+    log.info("Enriching summary table with El-Badry physicality data...")
+    
+    if df_el_badry is not None and not df_el_badry.empty:
+        # Reset index to access wdss_id as a column for merging
+        df_summary_enriched = df_summary.reset_index()
+        
+        # Simple left merge with the clean El-Badry data
+        df_summary_enriched = pd.merge(
+            df_summary_enriched,
+            df_el_badry[['wdss_id', 'R_chance_align', 'binary_type', 'in_el_badry_catalog']],
+            on='wdss_id',
+            how='left'
+        )
+        
+        # Set index back
+        df_summary = df_summary_enriched.set_index('wdss_id')
+        
+        matches = df_summary['in_el_badry_catalog'].fillna(False).sum()
+        log.info(f"Successfully cross-matched {matches} systems with El-Badry catalog using efficient pair-wise matching.")
+        
+    else:
+        df_summary['R_chance_align'] = np.nan
+        df_summary['binary_type'] = None
+        df_summary['in_el_badry_catalog'] = False
+
     df_summary.reset_index(inplace=True)
 
-    # 4. Finalize columns and rename for SQLite schema
+    # 5. Finalize columns and rename for SQLite schema
     df_summary.rename(columns={
         'wds_id': 'wds_correspondence', # from correspondence merge
         'vmag_A': 'vmag',              # LocalDataSource expects 'vmag as mag_pri'
@@ -322,12 +484,13 @@ def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.Data
     # If wds_correspondence is null, use wdss_id as the primary wds_id
     df_summary['wds_id'] = df_summary['wds_correspondence'].fillna(df_summary['wdss_id'])
     
-    # Select final columns to ensure a clean schema with error columns
+    # Select final columns to ensure a clean schema with error columns and El-Badry enrichment
     final_cols = [
         'wds_id', 'wdss_id', 'discoverer_designation', 'date_first', 'date_last', 'n_obs',
         'pa_first', 'pa_last', 'sep_first', 'sep_last', 
         'pa_first_error', 'pa_last_error', 'sep_first_error', 'sep_last_error',
-        'vmag', 'kmag', 'ra_deg', 'dec_deg', 'spectral_type', 'parallax', 'pm_ra', 'pm_dec', 'name'
+        'vmag', 'kmag', 'ra_deg', 'dec_deg', 'spectral_type', 'parallax', 'pm_ra', 'pm_dec', 'name',
+        'in_el_badry_catalog', 'R_chance_align', 'binary_type'  # Add El-Badry enrichment columns
     ]
     
     # Add missing columns with NaN if they don't exist
@@ -689,6 +852,7 @@ def main():
     parser.add_argument('--orb6', required=True, help='Path to ORB6 catalog')
     parser.add_argument('--output', required=True, help='Output SQLite database path')
     parser.add_argument('--force', action='store_true', help='Overwrite existing database')
+    parser.add_argument('--el-badry-file', help='Path to El-Badry et al. (2021) binary catalog FITS file for cross-matching')
     
     args = parser.parse_args()
     
@@ -726,9 +890,17 @@ def main():
         
         log.info(f"Combined: {len(combined_components)} components, {len(combined_measurements)} measurements, {len(combined_correspondence)} correspondences")
         
-        # Generate summary table from components and measurements
+        # Cross-match with El-Badry catalog if provided
+        if args.el_badry_file:
+            log.info("Cross-matching with El-Badry catalog using improved pair-wise matching...")
+            df_el_badry_data = cross_match_with_el_badry(combined_components, args.el_badry_file)
+        else:
+            log.info("No El-Badry catalog provided, skipping cross-match")
+            df_el_badry_data = None
+        
+        # Generate summary table from components and measurements with El-Badry integration
         log.info("Generating summary table...")
-        df_wds = generate_summary_table(combined_components, combined_measurements, combined_correspondence)
+        df_wds = generate_summary_table(combined_components, combined_measurements, combined_correspondence, df_el_badry_data)
         
         # Parse ORB6 catalog
         log.info("Parsing ORB6 catalog...")

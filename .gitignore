@@ -11,6 +11,7 @@ deprecated/
 *.db 
 *.txt
 *.html
+*.fits
 
 # C extensions
 *.so

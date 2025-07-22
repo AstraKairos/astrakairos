@@ -203,13 +203,13 @@ class LocalDataSource(DataSource):
             return None
 
     async def get_all_measurements(self, wds_id: str) -> Optional[Table]:
-        """Get all measurements for a system.
+        """Get all measurements for a system with complete uncertainty information.
         
         Args:
             wds_id: WDS identifier
             
         Returns:
-            Astropy Table with measurements or None if not found
+            Astropy Table with measurements including error columns (when available) or None if not found
         """
         if not self.has_measurements:
             return None
@@ -229,22 +229,36 @@ class LocalDataSource(DataSource):
                 
             wdss_id = wdss_row['wdss_id']
             
-            # Now get measurements using wdss_id
+            # Check which columns exist in the measurements table to be backwards compatible
+            schema_cursor = self.conn.execute("PRAGMA table_info(measurements)")
+            available_columns = [row[1] for row in schema_cursor.fetchall()]
+            
+            # Build query based on available columns
+            base_columns = ['wdss_id', 'epoch', 'theta', 'rho']
+            optional_columns = ['theta_error', 'rho_error', 'error_source', 'technique', 'reference']
+            
+            # Only include columns that exist in the database
+            query_columns = base_columns + [col for col in optional_columns if col in available_columns]
+            column_list = ', '.join(query_columns)
+            
             cursor = self.conn.execute(
-                "SELECT wdss_id, epoch, theta, rho FROM measurements WHERE wdss_id = ? ORDER BY epoch",
+                f"SELECT {column_list} FROM measurements WHERE wdss_id = ? ORDER BY epoch",
                 (wdss_id,)
             )
             
             rows = cursor.fetchall()
             if rows:
-                # Convert to astropy table
-                data = {
-                    'wds_id': [normalized_id] * len(rows),  # Use normalized wds_id
-                    'epoch': [row['epoch'] for row in rows],
-                    'theta': [row['theta'] for row in rows],
-                    'rho': [row['rho'] for row in rows]
-                }
-                return Table(data)
+                # Create astropy Table from the available data
+                table_data = {}
+                
+                # Add normalized wds_id for consistency
+                table_data['wds_id'] = [normalized_id] * len(rows)
+                
+                # Add all available columns
+                for col in query_columns:
+                    table_data[col] = [row[col] for row in rows]
+                
+                return Table(table_data)
             
             return None
             
@@ -364,23 +378,129 @@ class LocalDataSource(DataSource):
             log.error(f"Error getting catalog statistics: {e}")
             return None
 
-    def get_all_wds_ids(self, limit: Optional[int] = None) -> list[str]:
+    def get_all_wds_ids(self, limit: Optional[int] = None, only_el_badry: bool = False) -> list[str]:
         """Get list of all WDS IDs in the database.
         
         Args:
             limit: Maximum number of IDs to return (None for all)
+            only_el_badry: If True, only return systems in the El-Badry et al. (2021) catalog
             
         Returns:
             List of WDS identifiers
         """
         try:
-            query = f"SELECT wds_id FROM {self.summary_table} ORDER BY wds_id"
+            conditions = []
+            if only_el_badry:
+                conditions.append("in_el_badry_catalog = 1")  # SQLite uses 1 for True
+            
+            where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+            query = f"SELECT wds_id FROM {self.summary_table}{where_clause} ORDER BY wds_id"
+            
             if limit:
                 query += f" LIMIT {limit}"
             
             cursor = self.conn.execute(query)
-            return [row[0] for row in cursor.fetchall()]
+            result = [row[0] for row in cursor.fetchall()]
+            
+            if only_el_badry and result:
+                log.info(f"Filtered to {len(result)} systems from El-Badry et al. (2021) catalog")
+            
+            return result
             
         except sqlite3.Error as e:
-            log.error(f"Error getting WDS IDs: {e}")
+            if only_el_badry and "no such column: in_el_badry_catalog" in str(e):
+                log.error("Database does not contain El-Badry catalog information.")
+                log.error("Recreate the database with: python scripts/convert_catalogs_to_sqlite.py --el-badry-file <path_to_el_badry_catalog.fits>")
+            else:
+                log.error(f"Error getting WDS IDs: {e}")
             return []
+
+    async def get_precomputed_physicality(self, wds_id: str) -> Optional[PhysicalityAssessment]:
+        """
+        Retrieves pre-computed physicality assessment from the local database
+        based on El-Badry et al. (2021) cross-match data.
+        
+        This provides instant physicality validation for systems that are present
+        in the gold-standard El-Badry catalog, using their R_chance_align values
+        to determine physical vs. optical nature.
+        
+        Args:
+            wds_id: WDS identifier to check
+            
+        Returns:
+            PhysicalityAssessment if system is in El-Badry catalog, None otherwise
+            
+        References:
+            El-Badry et al. (2021), MNRAS, 506, 2269-2295
+        """
+        try:
+            # First, verify that the El-Badry columns exist to avoid failures
+            cursor = self.conn.cursor()
+            cursor.execute(f"PRAGMA table_info({self.summary_table})")
+            columns = {row[1] for row in cursor.fetchall()}
+            
+            if 'in_el_badry_catalog' not in columns:
+                log.debug("Database does not contain El-Badry catalog information")
+                return None  # The database was not enriched with El-Badry data
+
+            # Query for El-Badry data
+            cursor = self.conn.execute(
+                f"""SELECT in_el_badry_catalog, R_chance_align, binary_type 
+                   FROM {self.summary_table} WHERE wds_id = ?""",
+                (wds_id,)
+            )
+            row = cursor.fetchone()
+
+            if row and row['in_el_badry_catalog']:
+                r_chance = row['R_chance_align']
+                binary_type = row['binary_type']
+                
+                # Determine physicality label based on R_chance_align
+                # R_chance_align: probability that alignment is by chance
+                # Lower values = more likely to be physical
+                label = PhysicalityLabel.AMBIGUOUS
+                confidence = 0.5
+                
+                if r_chance is not None:
+                    if r_chance < 0.1:
+                        label = PhysicalityLabel.LIKELY_PHYSICAL
+                        confidence = 1.0 - r_chance
+                    elif r_chance > 0.9:
+                        label = PhysicalityLabel.LIKELY_OPTICAL  
+                        confidence = r_chance
+                    else:
+                        # Ambiguous range
+                        confidence = 0.5
+                else:
+                    # If in catalog but no R_chance, consider likely physical
+                    # (presence in El-Badry catalog implies high confidence)
+                    label = PhysicalityLabel.LIKELY_PHYSICAL
+                    confidence = 0.9
+
+                # Import datetime here to avoid circular imports
+                from datetime import datetime
+                
+                return PhysicalityAssessment(
+                    label=label,
+                    confidence=confidence,
+                    p_value=(1.0 - r_chance) if r_chance is not None else 0.9,
+                    method=ValidationMethod.STATISTICAL_ANALYSIS,  # Could create EL_BADRY_2021
+                    parallax_consistency=None,  # Not provided by El-Badry catalog
+                    proper_motion_consistency=None,  # Not provided by El-Badry catalog
+                    gaia_source_id_primary=None,  # Available but not exposed in this interface
+                    gaia_source_id_secondary=None,  # Available but not exposed in this interface
+                    validation_date=datetime.now().isoformat(),
+                    search_radius_arcsec=0.0,  # Not applicable for catalog match
+                    significance_thresholds={
+                        'r_chance_physical': 0.1,
+                        'r_chance_optical': 0.9
+                    },
+                    retry_attempts=0,
+                    notes=f"El-Badry catalog match. Binary type: {binary_type or 'unknown'}"
+                )
+                
+            return None  # Not found in El-Badry catalog
+            
+        except Exception as e:
+            log.error(f"Error retrieving precomputed physicality for {wds_id}: {e}")
+            return None

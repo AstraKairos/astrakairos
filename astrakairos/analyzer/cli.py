@@ -365,12 +365,13 @@ async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_s
                 'method': 'opi_point'
             }
         
-        # Calculate prediction divergence if measurements available
+        # Calculate prediction divergence and velocity from linear fit if measurements available
         prediction_divergence = None
+        linear_fit_results = None
         try:
             all_measurements = await data_source.get_all_measurements(wds_id)
             if all_measurements and len(all_measurements) >= 3:
-                log.debug(f"Calculating prediction divergence for {wds_id} with {len(all_measurements)} measurements")
+                log.debug(f"Calculating linear fit and prediction divergence for {wds_id} with {len(all_measurements)} measurements")
 
                 linear_fit_results = calculate_robust_linear_fit_bootstrap(all_measurements)
                 if linear_fit_results:
@@ -387,9 +388,9 @@ async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_s
                 else:
                     log.warning(f"Linear fit failed for {wds_id} with {len(all_measurements)} measurements")
             else:
-                log.debug(f"Insufficient measurements for prediction divergence calculation: {wds_id} has {len(all_measurements) if all_measurements else 0} measurements")
+                log.debug(f"Insufficient measurements for linear fit analysis: {wds_id} has {len(all_measurements) if all_measurements else 0} measurements")
         except Exception as e:
-            log.warning(f"Prediction divergence calculation failed for {wds_id}: {e}")
+            log.warning(f"Linear fit and prediction divergence calculation failed for {wds_id}: {e}")
         
         result = {
             'opi_arcsec_yr': opi_result['opi_median'],
@@ -405,7 +406,38 @@ async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_s
             'analysis_method': opi_result.get('method', 'opi_mc')
         }
         
-        log.debug(f"Orbital analysis complete: OPI = {result['opi_arcsec_yr']:.4f} ± {result['opi_uncertainty'] or 0:.4f}")
+        # Add velocity information from linear fit for consistency with other analysis modes
+        if linear_fit_results:
+            result.update({
+                'v_total': linear_fit_results['v_total_robust'],
+                'v_total_uncertainty': linear_fit_results.get('v_total_uncertainty'),
+                'pa_v_deg': linear_fit_results['pa_v_robust'], 
+                'pa_v_uncertainty': linear_fit_results.get('pa_v_uncertainty'),
+                'rmse': linear_fit_results['rmse'],
+                'n_measurements': len(all_measurements),
+                'time_baseline_years': linear_fit_results.get('time_baseline_years'),
+                'velocity_method': linear_fit_results.get('uncertainty_method', 'robust_fit'),
+                'bootstrap_success_rate': linear_fit_results.get('bootstrap_success_rate', 0.0)
+            })
+            log.debug(f"Added velocity data to orbital analysis: v_total = {result['v_total']:.4f} ± {result['v_total_uncertainty'] or 0:.4f} arcsec/yr")
+        else:
+            # Add None values for consistency in output structure
+            result.update({
+                'v_total': None,
+                'v_total_uncertainty': None,
+                'pa_v_deg': None,
+                'pa_v_uncertainty': None,
+                'rmse': None,
+                'n_measurements': len(all_measurements) if all_measurements else 0,
+                'time_baseline_years': None,
+                'velocity_method': None,
+                'bootstrap_success_rate': 0.0
+            })
+        
+        log_msg = f"Orbital analysis complete: OPI = {result['opi_arcsec_yr']:.4f} ± {result['opi_uncertainty'] or 0:.4f}"
+        if result.get('v_total') is not None:
+            log_msg += f", v_total = {result['v_total']:.4f} ± {result['v_total_uncertainty'] or 0:.4f} arcsec/yr"
+        log.debug(log_msg)
         return result
     except Exception as e:
         log.error(f"Orbital analysis failed for {wds_id}: {e}")
@@ -636,6 +668,11 @@ Examples:
                        default=DEFAULT_GAIA_MAX_RADIUS,
                        help=f'Maximum search radius in arcseconds (default: {DEFAULT_GAIA_MAX_RADIUS})')
 
+    # El-Badry catalog filtering
+    parser.add_argument('--only-el-badry', 
+                       action='store_true',
+                       help='Only analyze systems confirmed to be in the El-Badry et al. (2021) high-confidence catalog.')
+
     return parser
 
 async def main_async(args: argparse.Namespace):
@@ -668,13 +705,20 @@ async def main_async(args: argparse.Namespace):
             log.warning("Ignoring input_file because --all flag was specified.")
         
         log.info("Fetching all WDS IDs from the local database...")
-
-        all_ids = data_source.get_all_wds_ids()
+        
+        all_ids = data_source.get_all_wds_ids(only_el_badry=args.only_el_badry)
         if not all_ids:
-            log.error("Could not retrieve any WDS IDs from the database.")
+            if args.only_el_badry:
+                log.error("No systems found in the El-Badry et al. (2021) catalog. Check that the database was created with --el-badry-file option.")
+            else:
+                log.error("Could not retrieve any WDS IDs from the database.")
             sys.exit(1)
         df_targets = pd.DataFrame(all_ids, columns=['wds_id'])
-        log.info(f"Found {len(df_targets)} total systems to analyze.")
+        
+        if args.only_el_badry:
+            log.info(f"Found {len(df_targets)} systems in El-Badry et al. (2021) high-confidence catalog to analyze.")
+        else:
+            log.info(f"Found {len(df_targets)} total systems to analyze.")
 
     elif args.input_file:
         log.info(f"Loading data from: {args.input_file}")
@@ -708,14 +752,29 @@ async def main_async(args: argparse.Namespace):
         log.warning("No stars to process after filtering. Exiting.")
         return
 
-    # 3. Initialize the Gaia validator if requested
+    # 3. Initialize the validator (HYBRID APPROACH)
     gaia_validator = None
     if args.validate_gaia:
-        log.info(f"Gaia validation enabled with p-value threshold: {args.gaia_p_value}")
-        gaia_validator = GaiaValidator(
+        log.info("Gaia validation enabled (using hybrid local/online approach).")
+        
+        # Create the online validator as a component
+        from ..data.gaia_source import GaiaValidator
+        online_validator = GaiaValidator(
             physical_p_value_threshold=args.gaia_p_value,
             ambiguous_p_value_threshold=args.gaia_p_value / AMBIGUOUS_P_VALUE_RATIO
         )
+        
+        # The main validator is the hybrid one
+        from ..data.validators import HybridValidator
+        gaia_validator = HybridValidator(data_source, online_validator)
+        
+        # Log cache statistics for transparency
+        cache_stats = gaia_validator.get_cache_statistics()
+        if 'cached_systems' in cache_stats and cache_stats['cached_systems'] != 'unknown':
+            log.info(f"Validation cache: {cache_stats['cached_systems']} systems pre-computed from El-Badry catalog "
+                    f"({cache_stats.get('cache_coverage_percent', 0):.1f}% coverage)")
+        else:
+            log.info("No El-Badry cache available - will use online-only validation")
 
     # 4. Create a pre-configured processing function using functools.partial
     configured_process_star = functools.partial(
@@ -746,8 +805,8 @@ async def main_async(args: argparse.Namespace):
             # Define valid sort keys for each mode based on what's actually calculated
             VALID_SORT_KEYS = {
                 'discovery': ['v_total', 'v_total_significance', 'rmse', 'date_last', 'pa_v_deg', 'uncertainty_quality'],
-                'characterize': ['rmse', 'v_total_robust', 'v_total_significance', 'n_measurements', 'time_baseline_years', 'bootstrap_success_rate'],
-                'orbital': ['opi_arcsec_yr', 'opi_significance', 'deviation_arcsec', 'prediction_divergence_arcsec', 'orbital_period', 'eccentricity']
+                'characterize': ['rmse', 'v_total', 'v_total_significance', 'n_measurements', 'time_baseline_years', 'bootstrap_success_rate'],
+                'orbital': ['opi_arcsec_yr', 'opi_significance', 'deviation_arcsec', 'prediction_divergence_arcsec', 'orbital_period', 'eccentricity', 'v_total', 'v_total_significance']
             }
             
             # Use mode-specific sorting with strict validation
