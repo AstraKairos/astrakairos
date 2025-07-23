@@ -81,6 +81,31 @@ class ConversionProcessError(AstraKairosError):
     pass
 
 
+class AnalysisError(AstraKairosError):
+    """Raised when analysis computation fails."""
+    pass
+
+
+class ValidationError(AstraKairosError):
+    """Raised when input validation fails."""
+    pass
+
+
+class ConfigurationError(AstraKairosError):
+    """Raised when configuration is invalid."""
+    pass
+
+
+class DataSourceError(AstraKairosError):
+    """Raised when data source operations fail."""
+    pass
+
+
+class StarProcessingError(AstraKairosError):
+    """Raised when individual star processing fails."""
+    pass
+
+
 __all__ = [
     'AstraKairosError',
     'ConvergenceError', 
@@ -92,5 +117,10 @@ __all__ = [
     'FileFormatError',
     'DataValidationError',
     'ElBadryCrossmatchError',
-    'ConversionProcessError'
+    'ConversionProcessError',
+    'AnalysisError',
+    'ValidationError',
+    'ConfigurationError',
+    'DataSourceError',
+    'StarProcessingError'
 ]

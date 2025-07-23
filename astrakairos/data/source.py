@@ -39,6 +39,16 @@ class CacheStatsError(AstraKairosDataError):
     pass
 
 
+class AnalysisError(AstraKairosDataError):
+    """Raised when analysis operations fail."""
+    pass
+
+
+class ValidationError(AstraKairosDataError):
+    """Raised when data validation fails."""
+    pass
+
+
 class PhysicalityLabel(Enum):
     """Standardized physicality assessment labels."""
     LIKELY_PHYSICAL = "Likely Physical"

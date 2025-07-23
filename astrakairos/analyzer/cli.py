@@ -3,699 +3,101 @@ import asyncio
 import sys
 import pandas as pd
 import logging
-import random
-from typing import List, Dict, Any, Optional, Callable
-import functools
-from astropy.time import Time
+import time
+from typing import List, Dict, Any, Optional, Tuple
 
-from ..data.source import DataSource, WdsSummary, OrbitalElements, PhysicalityAssessment
+from ..data.source import DataSource
 from ..data.local_source import LocalDataSource
 from ..data.gaia_source import GaiaValidator
-from ..physics.dynamics import (
-    estimate_velocity_from_endpoints, 
-    estimate_velocity_from_endpoints_mc,
-    calculate_observation_priority_index,
-    calculate_observation_priority_index_mc,
-    calculate_robust_linear_fit,
-    calculate_robust_linear_fit_bootstrap,
-    calculate_prediction_divergence
-)
-from ..utils.io import load_csv_data, save_results_to_csv
+from ..data.validators import HybridValidator
+from ..exceptions import ConfigurationError
 from ..config import (
-    DEFAULT_CONCURRENT_REQUESTS, DEFAULT_MIN_OBS,
+    CLI_RESULT_KEYS, DEFAULT_CONCURRENT_REQUESTS, DEFAULT_MIN_OBS,
     DEFAULT_GAIA_P_VALUE, DEFAULT_GAIA_RADIUS_FACTOR,
     DEFAULT_GAIA_MIN_RADIUS, DEFAULT_GAIA_MAX_RADIUS,
-    MIN_EPOCH_YEAR, MAX_EPOCH_YEAR, MIN_SEPARATION_ARCSEC, MAX_SEPARATION_ARCSEC,
-    MIN_POSITION_ANGLE_DEG, MAX_POSITION_ANGLE_DEG,
     DEFAULT_ANALYSIS_MODE, AVAILABLE_ANALYSIS_MODES, DEFAULT_SORT_KEYS,
-    AMBIGUOUS_P_VALUE_RATIO, ENABLE_VALIDATION_WARNINGS, 
-    VALIDATION_WARNING_SAMPLE_RATE, ALLOW_SINGLE_EPOCH_SYSTEMS,
-    DEFAULT_MC_SAMPLES
+    AMBIGUOUS_P_VALUE_RATIO, DEFAULT_MC_SAMPLES,
+    CLI_TOP_RESULTS_DISPLAY_COUNT, CLI_DISPLAY_LINE_WIDTH,
+    CLI_WDS_ID_COLUMN_WIDTH, CLI_METRIC_COLUMN_WIDTH,
+    CLI_VALID_SORT_KEYS
 )
-
-# CLI-specific display constants
-TOP_RESULTS_DISPLAY_COUNT = 10
-DISPLAY_LINE_WIDTH = 90
-WDS_ID_COLUMN_WIDTH = 18
-METRIC_COLUMN_WIDTH = 35
+from ..utils.io import load_csv_data, save_results_to_csv
+from .engine import AnalyzerRunner, analyze_stars
+from .reporting import format_metric_with_uncertainty, print_error_summary
 
 log = logging.getLogger(__name__)
 
-# Helper Functions
-def format_metric_with_uncertainty(result: dict, metric_key: str, uncertainty_key: str, quality_key: str) -> str:
+
+def _create_analysis_config(args: argparse.Namespace) -> Dict[str, Any]:
     """
-    Format a metric value with its uncertainty and quality score for CLI display.
+    Create analysis configuration dictionary from CLI arguments.
     
     Args:
-        result: Dictionary containing analysis results
-        metric_key: Key for the main metric value
-        uncertainty_key: Key for the uncertainty value
-        quality_key: Key for the quality score
+        args: Parsed command line arguments
         
     Returns:
-        Formatted string with value ± uncertainty (Q=quality)
+        Analysis configuration dictionary for AnalyzerRunner
     """
-    value = result.get(metric_key)
-    uncertainty = result.get(uncertainty_key)
-    quality = result.get(quality_key)
-    
-    if value is None:
-        return "N/A"
-    
-    value_str = f"{value:.4f}"
-    
-    if uncertainty is not None:
-        uncertainty_str = f" ± {uncertainty:.4f}"
-    else:
-        uncertainty_str = ""
-    
-    if quality is not None and quality > 0:
-        quality_str = f" (Q={quality:.2f})"
-    else:
-        quality_str = ""
-        
-    return f"{value_str}{uncertainty_str}{quality_str}"
+    return {
+        'mode': args.mode,
+        'validate_gaia': args.validate_gaia,
+        'calculate_masses': getattr(args, 'calculate_masses', False),
+        'parallax_source': getattr(args, 'parallax_source', 'auto'),
+        'gaia_radius_factor': args.gaia_radius_factor,
+        'gaia_min_radius': args.gaia_min_radius,
+        'gaia_max_radius': args.gaia_max_radius,
+        'gaia_p_value': args.gaia_p_value
+    }
 
-def _should_log_validation_warning() -> bool:
-    """Determine if a validation warning should be logged based on sampling rate."""
-    return ENABLE_VALIDATION_WARNINGS and random.random() < VALIDATION_WARNING_SAMPLE_RATE
 
-def _validate_wds_summary_for_analysis(wds_summary: WdsSummary) -> bool:
+def _create_dependencies(args: argparse.Namespace) -> Tuple[DataSource, Optional[HybridValidator]]:
     """
-    Validate WDS summary data for analysis.
-    
-    Performs validation of WDS summary data including:
-    - Required field presence
-    - Value range validation
-    - Temporal consistency checks (relaxed for WDSS single-epoch systems)
+    Factory function to create and configure data source and validator dependencies.
     
     Args:
-        wds_summary: WDS summary data to validate
+        args: Parsed command line arguments
         
     Returns:
-        bool: True if data is valid for analysis, False otherwise
+        Tuple of (data_source, gaia_validator)
+        
+    Raises:
+        ConfigurationError: When required configuration is missing or invalid
     """
-    # Minimal required fields for any analysis
-    essential_fields = ['wds_id', 'date_first']
+    # 1. Set up the data source (only local source supported)
+    if not args.database_path:
+        raise ConfigurationError("--database-path is required for local source. "
+                               "Run: python scripts/convert_catalogs_to_sqlite.py to create the database first.")
     
-    # Check essential fields exist and are not None
-    for field in essential_fields:
-        if field not in wds_summary or wds_summary[field] is None:
-            if _should_log_validation_warning():
-                log.warning(f"Missing essential field: {field}")
-            return False
+    data_source = LocalDataSource(database_path=args.database_path)
     
-    # Value range validation for existing fields
-    if wds_summary.get('date_first') and not (MIN_EPOCH_YEAR <= wds_summary['date_first'] <= MAX_EPOCH_YEAR):
-        if _should_log_validation_warning():
-            log.warning(f"Invalid first epoch: {wds_summary['date_first']}")
-        return False
-    
-    if wds_summary.get('date_last') and not (MIN_EPOCH_YEAR <= wds_summary['date_last'] <= MAX_EPOCH_YEAR):
-        if _should_log_validation_warning():
-            log.warning(f"Invalid last epoch: {wds_summary['date_last']}")
-        return False
-    
-    # Temporal consistency check - only if both dates exist
-    if wds_summary.get('date_first') and wds_summary.get('date_last'):
-        if ALLOW_SINGLE_EPOCH_SYSTEMS:
-            # For single epoch systems, allow date_first == date_last
-            if wds_summary['date_first'] > wds_summary['date_last']:
-                if _should_log_validation_warning():
-                    log.warning(f"Invalid epoch sequence: {wds_summary['date_first']} > {wds_summary['date_last']}")
-                return False
-        else:
-            # Original strict validation
-            if wds_summary['date_first'] >= wds_summary['date_last']:
-                if _should_log_validation_warning():
-                    log.warning(f"Invalid epoch sequence: {wds_summary['date_first']} >= {wds_summary['date_last']}")
-                return False
-    
-    # Separation validation - only if fields exist
-    if wds_summary.get('sep_first') and not (MIN_SEPARATION_ARCSEC <= wds_summary['sep_first'] <= MAX_SEPARATION_ARCSEC):
-        if _should_log_validation_warning():
-            log.warning(f"Invalid first separation: {wds_summary['sep_first']}")
-        return False
-    if wds_summary.get('sep_last') and not (MIN_SEPARATION_ARCSEC <= wds_summary['sep_last'] <= MAX_SEPARATION_ARCSEC):
-        if _should_log_validation_warning():
-            log.warning(f"Invalid last separation: {wds_summary['sep_last']}")
-        return False
-    
-    # Position angle validation - only if fields exist (normalized to 0-360)
-    if wds_summary.get('pa_first'):
-        pa_first = wds_summary['pa_first'] % 360
-        if not (MIN_POSITION_ANGLE_DEG <= pa_first <= MAX_POSITION_ANGLE_DEG):
-            if _should_log_validation_warning():
-                log.warning(f"Invalid first position angle: {pa_first}")
-            return False
-    if wds_summary.get('pa_last'):
-        pa_last = wds_summary['pa_last'] % 360
-        if not (MIN_POSITION_ANGLE_DEG <= pa_last <= MAX_POSITION_ANGLE_DEG):
-            if _should_log_validation_warning():
-                log.warning(f"Invalid last position angle: {pa_last}")
-            return False
-    
-    return True
-
-def _get_current_decimal_year() -> float:
-    """
-    Get current time as decimal year using astropy.time.Time.
-    
-    Returns:
-        float: Current decimal year
-    """
-    return Time.now().decimalyear
-
-def _calculate_search_radius(wds_summary: WdsSummary, cli_args: argparse.Namespace) -> float:
-    """
-    Calculate Gaia search radius based on system separation.
-    
-    Calculates the appropriate search radius for Gaia catalog queries
-    based on the last separation measurement and CLI configuration parameters.
-    
-    Args:
-        wds_summary: WDS summary data
-        cli_args: CLI arguments with radius configuration
+    # 2. Initialize the validator (HYBRID APPROACH) if requested
+    gaia_validator = None
+    if args.validate_gaia:
+        log.info("Gaia validation enabled (using hybrid local/online approach).")
         
-    Returns:
-        float: Search radius in arcseconds
-    """
-    if wds_summary.get('sep_last') is not None:
-        radius = wds_summary['sep_last'] * cli_args.gaia_radius_factor
-        radius = max(radius, cli_args.gaia_min_radius)
-        radius = min(radius, cli_args.gaia_max_radius)
-        return radius
-    
-    return DEFAULT_GAIA_MIN_RADIUS
-
-# Analysis Functions
-
-async def _perform_discovery_analysis(wds_id: str, wds_summary: WdsSummary, data_source: DataSource) -> Optional[Dict[str, Any]]:
-    """
-    Perform discovery mode analysis for basic motion estimation with uncertainty propagation.
-    
-    Args:
-        wds_id: WDS identifier
-        wds_summary: WDS summary data
-        
-    Returns:
-        Dict containing discovery analysis results with uncertainties or None if failed
-    """
-    log.debug(f"Running discovery analysis for {wds_id}")
-    
-    try:
-        # Try Monte Carlo analysis first (if error data available)
-        velocity_result = estimate_velocity_from_endpoints_mc(wds_summary)
-        
-        if velocity_result is None:
-            log.debug(f"Monte Carlo analysis failed for {wds_id}, falling back to point estimate")
-            # Fallback to point estimate
-            velocity_result = estimate_velocity_from_endpoints(wds_summary)
-            if velocity_result is None:
-                log.error(f"Could not calculate velocity for {wds_id}")
-                return None
-        
-        # Handle both Monte Carlo and point estimate results
-        if 'v_total_median' in velocity_result:
-            # Monte Carlo result
-            result = {
-                'v_total': velocity_result['v_total_median'],
-                'v_total_uncertainty': velocity_result.get('v_total_uncertainty'),
-                'pa_v_deg': velocity_result['pa_v_median'],
-                'pa_v_uncertainty': velocity_result.get('pa_v_uncertainty'),
-                'uncertainty_quality': velocity_result.get('quality_score', 0.0),
-                'uncertainty_source': velocity_result.get('uncertainty_source', 'none'),
-                'analysis_method': velocity_result.get('method', 'two_point_mc')
-            }
-        else:
-            # Point estimate result
-            result = {
-                'v_total': velocity_result['v_total_estimate'],
-                'v_total_uncertainty': None,
-                'pa_v_deg': velocity_result['pa_v_estimate'],
-                'pa_v_uncertainty': None,
-                'uncertainty_quality': 0.0,
-                'uncertainty_source': 'none',
-                'analysis_method': velocity_result.get('method', 'two_point_estimate')
-            }
-        
-        # Try to calculate RMSE for discovery mode when sufficient measurements are available
-        rmse = None
-        try:
-            all_measurements = await data_source.get_all_measurements(wds_id)
-            if all_measurements and len(all_measurements) >= 3:
-                log.debug(f"Calculating RMSE for discovery mode: {wds_id} with {len(all_measurements)} measurements")
-                robust_fit = calculate_robust_linear_fit(all_measurements)
-                if robust_fit:
-                    rmse = robust_fit.get('rmse')
-                    log.debug(f"RMSE calculated for {wds_id}: {rmse:.4f}\"")
-        except Exception as e:
-            log.debug(f"RMSE calculation failed for {wds_id}: {e}")
-        
-        # Add RMSE to result if calculated
-        if rmse is not None:
-            result['rmse'] = rmse
-        
-        log.debug(f"Discovery analysis complete: v_total = {result['v_total']:.6f} ± {result['v_total_uncertainty'] or 0:.6f} arcsec/year")
-        return result
-        
-    except Exception as e:
-        log.error(f"Discovery analysis failed for {wds_id}: {e}")
-        return None
-
-
-async def _perform_characterize_analysis(wds_id: str, data_source: DataSource) -> Optional[Dict[str, Any]]:
-    """
-    Perform characterize mode analysis with robust fitting and bootstrap uncertainties.
-    
-    Args:
-        wds_id: WDS identifier
-        data_source: Data source for measurements
-        
-    Returns:
-        Dict containing characterization results with uncertainties or None if failed
-    """
-    log.debug(f"Running characterization analysis for {wds_id}")
-    
-    try:
-        # Get all measurements for robust fitting
-        all_measurements = await data_source.get_all_measurements(wds_id)
-        if not all_measurements or len(all_measurements) < 3:
-            log.warning(f"Insufficient measurements for characterization of {wds_id}")
-            return None
-        
-        # Try bootstrap analysis first
-        robust_fit = calculate_robust_linear_fit_bootstrap(all_measurements)
-        
-        if not robust_fit:
-            log.error(f"Robust fitting failed for {wds_id}")
-            return None
-        
-        # Handle both bootstrap and standard results
-        result = {
-            'rmse': robust_fit['rmse'],
-            'v_total_robust': robust_fit['v_total_robust'],
-            'v_total_uncertainty': robust_fit.get('v_total_uncertainty'),
-            'pa_v_robust': robust_fit['pa_v_robust'],
-            'pa_v_uncertainty': robust_fit.get('pa_v_uncertainty'),
-            'n_measurements': len(all_measurements),
-            'time_baseline_years': robust_fit.get('time_baseline_years'),
-            'uncertainty_method': robust_fit.get('uncertainty_method', 'none'),
-            'bootstrap_success_rate': robust_fit.get('bootstrap_success_rate', 0.0),
-            'analysis_method': 'robust_linear_fit'
-        }
-        
-        result['v_total'] = robust_fit['v_total_robust']
-
-        log.debug(f"Characterization complete: v_total = {result['v_total_robust']:.4f} ± {result['v_total_uncertainty'] or 0:.4f} arcsec/yr")
-        return result
-        
-    except Exception as e:
-        log.error(f"Characterization analysis failed for {wds_id}: {e}")
-        return None
-
-
-async def _calculate_system_masses(
-    wds_id: str,
-    orbital_elements: 'OrbitalElements',
-    wds_summary: 'WdsSummary',
-    gaia_validator: Optional['GaiaValidator'],
-    parallax_source: str
-) -> Optional[Dict[str, Any]]:
-    """
-    Calculate system masses using Kepler's Third Law and available parallax data.
-    
-    Args:
-        wds_id: WDS identifier
-        orbital_elements: Orbital elements dictionary
-        wds_summary: WDS summary data
-        gaia_validator: Gaia validator for parallax queries
-        parallax_source: Preferred parallax source
-        
-    Returns:
-        Dictionary with mass calculation results or None if failed
-    """
-    try:
-        from ..physics.masses import calculate_total_mass_kepler3
-        
-        # Check if we have the required orbital elements
-        period = orbital_elements.get('P')
-        semimajor_axis = orbital_elements.get('a')
-        
-        if not period or not semimajor_axis:
-            log.debug(f"Missing orbital elements for mass calculation: {wds_id}")
-            return None
-        
-        # Get uncertainties if available
-        period_error = orbital_elements.get('e_P', 0.0) or 0.0
-        semimajor_axis_error = orbital_elements.get('e_a', 0.0) or 0.0
-        
-        # Get parallax data based on source preference
-        parallax_data = None
-        
-        if parallax_source == 'auto' or parallax_source == 'gaia':
-            if gaia_validator:
-                try:
-                    parallax_data = await gaia_validator.get_parallax_data(wds_summary)
-                    if parallax_data:
-                        log.debug(f"Using Gaia parallax for {wds_id}: {parallax_data['parallax']:.3f} ± {parallax_data['parallax_error']:.3f} mas")
-                except Exception as e:
-                    log.warning(f"Failed to get Gaia parallax for {wds_id}: {e}")
-        
-        # Could add other parallax sources here (Hipparcos, literature, etc.)
-        # For now, only Gaia is implemented
-        
-        if not parallax_data:
-            log.debug(f"No parallax data available for mass calculation: {wds_id}")
-            return None
-        
-        # Calculate masses
-        try:
-            mass_result = calculate_total_mass_kepler3(
-                period_years=period,
-                semimajor_axis_arcsec=semimajor_axis,
-                parallax_mas=parallax_data['parallax'],
-                period_error=period_error,
-                semimajor_axis_error=semimajor_axis_error,
-                parallax_error=parallax_data['parallax_error'],
-                parallax_source=parallax_data['source']
-            )
-            
-            log.debug(f"Mass calculation successful for {wds_id}: {mass_result.total_mass_solar:.2f} ± {mass_result.total_mass_error:.2f} M☉")
-            
-            # Convert to dictionary for JSON serialization
-            return {
-                'total_mass_solar': mass_result.total_mass_solar,
-                'total_mass_error': mass_result.total_mass_error,
-                'distance_pc': mass_result.distance_used_pc,
-                'parallax_mas': mass_result.parallax_used_mas,
-                'parallax_source': mass_result.parallax_source,
-                'quality_score': mass_result.quality_score,
-                'mc_samples': mass_result.mc_samples,
-                'warnings': mass_result.warnings
-            }
-            
-        except Exception as e:
-            log.warning(f"Mass calculation failed for {wds_id}: {e}")
-            return None
-            
-    except Exception as e:
-        log.error(f"Error in mass calculation for {wds_id}: {e}")
-        return None
-
-
-async def _perform_orbital_analysis(wds_id: str, wds_summary: WdsSummary, data_source: DataSource, 
-                                   gaia_validator: Optional['GaiaValidator'] = None,
-                                   calculate_masses: bool = False,
-                                   parallax_source: str = 'auto') -> Optional[Dict[str, Any]]:
-    """
-    Perform orbital mode analysis with OPI calculation and optional mass calculation.
-    
-    Args:
-        wds_id: WDS identifier
-        wds_summary: WDS summary data
-        data_source: Data source for orbital elements
-        gaia_validator: Optional Gaia validator for parallax data
-        calculate_masses: Whether to calculate system masses
-        parallax_source: Source preference for parallax ('auto', 'gaia', 'none')
-        
-    Returns:
-        Dict containing orbital analysis results or None if failed
-    """
-    log.debug(f"Running orbital analysis for {wds_id}")
-    
-    try:
-        # Get orbital elements (required for this mode)
-        orbital_elements = await data_source.get_orbital_elements(wds_id)
-        if not orbital_elements:
-            if _should_log_validation_warning():
-                log.warning(f"No orbital elements found for {wds_id}")
-            return None
-        
-        # Calculate OPI with Monte Carlo uncertainty propagation
-        current_year = _get_current_decimal_year()
-        
-        # Try Monte Carlo OPI calculation first
-        opi_result = calculate_observation_priority_index_mc(
-            orbital_elements, wds_summary, current_year
+        # Create the online validator as a component
+        from ..data.gaia_source import GaiaValidator
+        online_validator = GaiaValidator(
+            physical_p_value_threshold=args.gaia_p_value,
+            ambiguous_p_value_threshold=args.gaia_p_value / AMBIGUOUS_P_VALUE_RATIO
         )
         
-        if opi_result is None:
-            log.debug(f"Monte Carlo OPI failed for {wds_id}, falling back to point estimate")
-            # Fallback to point estimate
-            opi_point = calculate_observation_priority_index(
-                orbital_elements, wds_summary, current_year
-            )
-            if not opi_point:
-                log.error(f"OPI calculation failed for {wds_id}")
-                return None
-            
-            opi, deviation = opi_point
-            opi_result = {
-                'opi_median': opi,
-                'opi_uncertainty': None,
-                'deviation_median': deviation,
-                'deviation_uncertainty': None,
-                'quality_score': 0.0,
-                'uncertainty_source': 'none',
-                'method': 'opi_point'
-            }
+        # The main validator is the hybrid one
+        gaia_validator = HybridValidator(data_source, online_validator)
         
-        # Calculate prediction divergence and velocity from linear fit if measurements available
-        prediction_divergence = None
-        linear_fit_results = None
-        
-        # Mass calculation if requested and parallax available
-        mass_result = None
-        if calculate_masses and parallax_source != 'none':
-            mass_result = await _calculate_system_masses(
-                wds_id, orbital_elements, wds_summary, gaia_validator, parallax_source
-            )
-        
+        # Log cache statistics for transparency
         try:
-            all_measurements = await data_source.get_all_measurements(wds_id)
-            if all_measurements and len(all_measurements) >= 3:
-                log.debug(f"Calculating linear fit and prediction divergence for {wds_id} with {len(all_measurements)} measurements")
-
-                linear_fit_results = calculate_robust_linear_fit_bootstrap(all_measurements)
-                if linear_fit_results:
-                    log.debug(f"Linear fit successful for {wds_id}, calculating prediction divergence")
-                    prediction_divergence = calculate_prediction_divergence(
-                        orbital_elements, 
-                        linear_fit_results, 
-                        current_year
-                    )
-                    if prediction_divergence is not None:
-                        log.debug(f"Prediction divergence calculated for {wds_id}: {prediction_divergence:.4f}\"")
-                    else:
-                        log.warning(f"Prediction divergence calculation failed for {wds_id}")
-                else:
-                    log.warning(f"Linear fit failed for {wds_id} with {len(all_measurements)} measurements")
+            cache_stats = gaia_validator.get_cache_statistics()
+            if 'cached_systems' in cache_stats and cache_stats['cached_systems'] != 'unknown':
+                log.info(f"Validation cache: {cache_stats['cached_systems']} systems pre-computed from El-Badry catalog "
+                        f"({cache_stats.get('cache_coverage_percent', 0):.1f}% coverage)")
             else:
-                log.debug(f"Insufficient measurements for linear fit analysis: {wds_id} has {len(all_measurements) if all_measurements else 0} measurements")
+                log.info("No El-Badry cache available - will use online-only validation")
         except Exception as e:
-            log.warning(f"Linear fit and prediction divergence calculation failed for {wds_id}: {e}")
-        
-        result = {
-            'opi_arcsec_yr': opi_result['opi_median'],
-            'opi_uncertainty': opi_result.get('opi_uncertainty'),
-            'deviation_arcsec': opi_result['deviation_median'],
-            'deviation_uncertainty': opi_result.get('deviation_uncertainty'),
-            'prediction_divergence_arcsec': prediction_divergence,
-            'orbital_period': orbital_elements.get('P'),
-            'eccentricity': orbital_elements.get('e'),
-            'semi_major_axis': orbital_elements.get('a'),
-            'uncertainty_quality': opi_result.get('quality_score', 0.0),
-            'uncertainty_source': opi_result.get('uncertainty_source', 'none'),
-            'analysis_method': opi_result.get('method', 'opi_mc'),
-            # Mass calculation results
-            'mass_analysis': mass_result
-        }
-        
-        # Add velocity information from linear fit for consistency with other analysis modes
-        if linear_fit_results:
-            result.update({
-                'v_total': linear_fit_results['v_total_robust'],
-                'v_total_uncertainty': linear_fit_results.get('v_total_uncertainty'),
-                'pa_v_deg': linear_fit_results['pa_v_robust'], 
-                'pa_v_uncertainty': linear_fit_results.get('pa_v_uncertainty'),
-                'rmse': linear_fit_results['rmse'],
-                'n_measurements': len(all_measurements),
-                'time_baseline_years': linear_fit_results.get('time_baseline_years'),
-                'velocity_method': linear_fit_results.get('uncertainty_method', 'robust_fit'),
-                'bootstrap_success_rate': linear_fit_results.get('bootstrap_success_rate', 0.0)
-            })
-            log.debug(f"Added velocity data to orbital analysis: v_total = {result['v_total']:.4f} ± {result['v_total_uncertainty'] or 0:.4f} arcsec/yr")
-        else:
-            # Add None values for consistency in output structure
-            result.update({
-                'v_total': None,
-                'v_total_uncertainty': None,
-                'pa_v_deg': None,
-                'pa_v_uncertainty': None,
-                'rmse': None,
-                'n_measurements': len(all_measurements) if all_measurements else 0,
-                'time_baseline_years': None,
-                'velocity_method': None,
-                'bootstrap_success_rate': 0.0
-            })
-        
-        log_msg = f"Orbital analysis complete: OPI = {result['opi_arcsec_yr']:.4f} ± {result['opi_uncertainty'] or 0:.4f}"
-        if result.get('v_total') is not None:
-            log_msg += f", v_total = {result['v_total']:.4f} ± {result['v_total_uncertainty'] or 0:.4f} arcsec/yr"
-        log.debug(log_msg)
-        return result
-    except Exception as e:
-        log.error(f"Orbital analysis failed for {wds_id}: {e}")
-        return None
-
-
-async def _perform_gaia_validation(wds_id: str, wds_summary: WdsSummary, 
-                                   gaia_validator: GaiaValidator, cli_args: argparse.Namespace) -> Dict[str, Any]:
-    """
-    Perform Gaia validation for physicality assessment.
+            log.warning(f"Could not retrieve cache statistics: {e}")
     
-    Args:
-        wds_id: WDS identifier
-        wds_summary: WDS summary data
-        gaia_validator: Gaia validator instance
-        cli_args: CLI arguments for search radius calculation
-        
-    Returns:
-        Dict containing Gaia validation results
-    """
-    log.debug(f"Running Gaia validation for {wds_id}")
-    
-    try:
-        search_radius = _calculate_search_radius(wds_summary, cli_args)
-        
-        physicality_assessment = await gaia_validator.validate_physicality(
-            wds_summary, search_radius_arcsec=search_radius
-        )
-        
-        if physicality_assessment:
-            result = {
-                'physicality_p_value': physicality_assessment.get('p_value'),
-                'physicality_label': physicality_assessment['label'].value,
-                'physicality_method': physicality_assessment['method'].value,
-                'physicality_confidence': physicality_assessment.get('confidence')
-            }
-            log.debug(f"Gaia validation complete: p_value={physicality_assessment.get('p_value')}")
-            return result
-        else:
-            return {
-                'physicality_p_value': None,
-                'physicality_label': 'Failed',
-                'physicality_method': None,
-                'physicality_confidence': None
-            }
-    except Exception as e:
-        log.error(f"Gaia validation failed for {wds_id}: {e}")
-        return {
-            'physicality_p_value': None,
-            'physicality_label': 'Error',
-            'physicality_method': None,
-            'physicality_confidence': None
-        }
+    return data_source, gaia_validator
 
-
-async def process_star(row: pd.Series,
-                       data_source: DataSource,
-                       gaia_validator: Optional[GaiaValidator],
-                       cli_args: argparse.Namespace,
-                       semaphore: asyncio.Semaphore) -> Optional[Dict[str, Any]]:
-    """
-    Process a single star with mode-specific analysis.
-    
-    Performs analysis based on the selected mode:
-    - discovery: Basic motion analysis for new discoveries
-    - characterize: Robust fitting for detailed characterization
-    - orbital: OPI calculation for orbital systems
-    """
-    async with semaphore:
-        wds_id = row['wds_id']
-        
-        try:
-            # 1. Always get basic WDS summary data
-            wds_summary = await data_source.get_wds_summary(wds_id)
-            if not wds_summary:
-                log.warning(f"No WDS data found for {wds_id}")
-                return None
-
-            # Log with correct observation count
-            n_obs = wds_summary.get('n_observations', 'N/A')
-            log.info(f"Processing {wds_id} in {cli_args.mode} mode (obs: {n_obs})")
-
-            # Validate data
-            if not _validate_wds_summary_for_analysis(wds_summary):
-                if _should_log_validation_warning():
-                    log.warning(f"Invalid WDS data for {wds_id}")
-                return None
-
-            # Initialize result with common fields
-            result = {
-                'wds_id': wds_id,
-                'mode': cli_args.mode,
-                'obs_wds': wds_summary.get('n_observations'),
-                'date_last': wds_summary.get('date_last', wds_summary.get('date_first')),
-            }
-
-            # 2. Mode-specific analysis using specialized functions
-            if cli_args.mode == 'discovery':
-                analysis_result = await _perform_discovery_analysis(wds_id, wds_summary, data_source)
-            elif cli_args.mode == 'characterize':
-                analysis_result = await _perform_characterize_analysis(wds_id, data_source)
-            elif cli_args.mode == 'orbital':
-                analysis_result = await _perform_orbital_analysis(
-                    wds_id, wds_summary, data_source, 
-                    gaia_validator=gaia_validator,
-                    calculate_masses=cli_args.calculate_masses,
-                    parallax_source=cli_args.parallax_source
-                )
-            else:
-                log.error(f"Unknown analysis mode: {cli_args.mode}")
-                return None
-            
-            if analysis_result is None:
-                return None
-                
-            result.update(analysis_result)
-
-            # 3. Optional Gaia validation (available for all modes)
-            if cli_args.validate_gaia and wds_summary.get('ra_deg') is not None:
-                gaia_result = await _perform_gaia_validation(wds_id, wds_summary, gaia_validator, cli_args)
-                result.update(gaia_result)
-            else:
-                result.update({
-                    'physicality_p_value': None,
-                    'physicality_label': 'Not checked',
-                    'physicality_method': None,
-                    'physicality_confidence': None
-                })
-
-            return result
-
-        except Exception as e:
-            log.error(f"Unexpected error processing {wds_id}: {e}")
-            return None
-
-async def analyze_stars(df: pd.DataFrame,
-                       process_func: Callable,
-                       max_concurrent: int = 5) -> List[Dict[str, Any]]:
-    """
-    Analyzes multiple stars concurrently using a pre-configured processing function.
-    """
-    semaphore = asyncio.Semaphore(max_concurrent)
-    tasks = []
-    for _, row in df.iterrows():
-        # Call the pre-configured function, passing only the arguments that vary per star
-        task = process_func(row=row, semaphore=semaphore)
-        tasks.append(task)
-    
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    valid_results = [r for r in results if r is not None and not isinstance(r, Exception)]
-    return valid_results
 
 def create_argument_parser():
     """Create command line argument parser with proper defaults from config."""
@@ -812,22 +214,16 @@ async def main_async(args: argparse.Namespace):
     
     This function handles:
     1. Loading and filtering the input data.
-    2. Setting up the local data source.
-    3. Initializing the GaiaValidator with command-line configurations.
-    4. Creating a pre-configured processing function for cleaner execution.
-    5. Running the analysis concurrently.
-    6. Sorting and presenting the final results.
+    2. Setting up dependencies (data source and validators).
+    3. Creating the analysis runner.
+    4. Running the analysis concurrently.
+    5. Sorting and presenting the final results.
     """
     # Configure logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    # 1. Set up the data source (only local source supported)
-    data_source: DataSource
-    if not args.database_path:
-        log.error("--database-path is required for local source.")
-        log.error("Run: python scripts/convert_catalogs_to_sqlite.py to create the database first.")
-        sys.exit(1)
-    data_source = LocalDataSource(database_path=args.database_path)
+    # 1. Create dependencies using factory function
+    data_source, gaia_validator = _create_dependencies(args)
 
     # 2. Determine target list (from file or --all flag)
     df_targets = None
@@ -883,70 +279,41 @@ async def main_async(args: argparse.Namespace):
         log.warning("No stars to process after filtering. Exiting.")
         return
 
-    # 3. Initialize the validator (HYBRID APPROACH)
-    gaia_validator = None
-    if args.validate_gaia:
-        log.info("Gaia validation enabled (using hybrid local/online approach).")
-        
-        # Create the online validator as a component
-        from ..data.gaia_source import GaiaValidator
-        online_validator = GaiaValidator(
-            physical_p_value_threshold=args.gaia_p_value,
-            ambiguous_p_value_threshold=args.gaia_p_value / AMBIGUOUS_P_VALUE_RATIO
-        )
-        
-        # The main validator is the hybrid one
-        from ..data.validators import HybridValidator
-        gaia_validator = HybridValidator(data_source, online_validator)
-        
-        # Log cache statistics for transparency
-        cache_stats = gaia_validator.get_cache_statistics()
-        if 'cached_systems' in cache_stats and cache_stats['cached_systems'] != 'unknown':
-            log.info(f"Validation cache: {cache_stats['cached_systems']} systems pre-computed from El-Badry catalog "
-                    f"({cache_stats.get('cache_coverage_percent', 0):.1f}% coverage)")
-        else:
-            log.info("No El-Badry cache available - will use online-only validation")
-
-    # 4. Create a pre-configured processing function using functools.partial
-    configured_process_star = functools.partial(
-        process_star,
-        data_source=data_source,
-        gaia_validator=gaia_validator,
-        cli_args=args
-    )
+    # 3. Create AnalyzerRunner with configured dependencies
+    runner = AnalyzerRunner(data_source, gaia_validator)
+    
+    # 4. Create analysis configuration from CLI arguments
+    analysis_config = _create_analysis_config(args)
     
     try:
-        # 5. Run the concurrent analysis
+        # 5. Run the concurrent analysis with detailed error reporting
         log.info(f"Processing {len(df_filtered)} stars with up to {args.concurrent} concurrent tasks...")
-        results = await analyze_stars(df_filtered, configured_process_star, args.concurrent)
+        results, error_summary = await analyze_stars(runner, df_filtered, analysis_config, args.concurrent)
+        
+        # Print detailed error summary
+        print_error_summary(len(df_filtered), len(results), error_summary)
         
         # Calculate statistical significance for results with uncertainties
-        log.info("Calculating significance for results with uncertainties...")
-        for result in results:
-            # Calculate velocity significance for discovery and characterize modes
-            if result.get('v_total_uncertainty') and result['v_total_uncertainty'] > 0:                
-                result['v_total_significance'] = abs(result.get('v_total', 0)) / result['v_total_uncertainty']
+        if results:
+            log.info("Calculating significance for results with uncertainties...")
+            for result in results:
+                # Calculate velocity significance for discovery and characterize modes
+                if result.get('v_total_uncertainty') and result['v_total_uncertainty'] > 0:                
+                    result['v_total_significance'] = abs(result.get('v_total', 0)) / result['v_total_uncertainty']
 
-            # Calculate OPI significance for orbital mode
-            if result.get('opi_uncertainty') and result['opi_uncertainty'] > 0:
-                result['opi_significance'] = abs(result.get('opi_arcsec_yr', 0)) / result['opi_uncertainty']
+                # Calculate OPI significance for orbital mode
+                if result.get('opi_uncertainty') and result['opi_uncertainty'] > 0:
+                    result['opi_significance'] = abs(result.get('opi_arcsec_yr', 0)) / result['opi_uncertainty']
         
         # 6. Sort and present the results
         if results:
-            # Define valid sort keys for each mode based on what's actually calculated
-            VALID_SORT_KEYS = {
-                'discovery': ['v_total', 'v_total_significance', 'rmse', 'date_last', 'pa_v_deg', 'uncertainty_quality'],
-                'characterize': ['rmse', 'v_total', 'v_total_significance', 'n_measurements', 'time_baseline_years', 'bootstrap_success_rate'],
-                'orbital': ['opi_arcsec_yr', 'opi_significance', 'deviation_arcsec', 'prediction_divergence_arcsec', 'orbital_period', 'eccentricity', 'v_total', 'v_total_significance']
-            }
-            
             # Use mode-specific sorting with strict validation
             sort_key = args.sort_by if args.sort_by else DEFAULT_SORT_KEYS[args.mode]
             
             # Validate sort key for current mode - exit on error for robustness
-            if sort_key not in VALID_SORT_KEYS[args.mode]:
+            if sort_key not in CLI_VALID_SORT_KEYS[args.mode]:
                 log.error(f"Sort key '{sort_key}' is not valid for {args.mode} mode.")
-                log.error(f"Valid options for {args.mode} mode: {', '.join(VALID_SORT_KEYS[args.mode])}")
+                log.error(f"Valid options for {args.mode} mode: {', '.join(CLI_VALID_SORT_KEYS[args.mode])}")
                 log.error("Please use a valid sort key or omit --sort-by to use the default.")
                 sys.exit(1)
             
@@ -960,11 +327,11 @@ async def main_async(args: argparse.Namespace):
             )
             
             # Display summary in the console
-            print("\n" + "=" * DISPLAY_LINE_WIDTH)
-            print(f"TOP {TOP_RESULTS_DISPLAY_COUNT} ANALYSIS RESULTS - {args.mode.upper()} MODE (sorted by {sort_key})")
-            print("=" * DISPLAY_LINE_WIDTH)
+            print("\n" + "=" * CLI_DISPLAY_LINE_WIDTH)
+            print(f"TOP {CLI_TOP_RESULTS_DISPLAY_COUNT} ANALYSIS RESULTS - {args.mode.upper()} MODE (sorted by {sort_key})")
+            print("=" * CLI_DISPLAY_LINE_WIDTH)
             
-            for i, result in enumerate(results_sorted[:TOP_RESULTS_DISPLAY_COUNT], 1):
+            for i, result in enumerate(results_sorted[:CLI_TOP_RESULTS_DISPLAY_COUNT], 1):
                 # Mode-specific display format with uncertainty information
                 if sort_key.endswith('_significance'):
                     # Display significance value when sorting by significance
@@ -992,9 +359,9 @@ async def main_async(args: argparse.Namespace):
                     metric_str = f"Value = {result.get(sort_key, 'N/A')}"
                 
                 phys_str = f"p_val: {result['physicality_p_value']}" if result.get('physicality_p_value') is not None else f"Gaia: {result['physicality_label']}"
-                print(f"{i:2d}. {result['wds_id']:<{WDS_ID_COLUMN_WIDTH}} | {metric_str:<{METRIC_COLUMN_WIDTH}} | {phys_str}")
+                print(f"{i:2d}. {result['wds_id']:<{CLI_WDS_ID_COLUMN_WIDTH}} | {metric_str:<{CLI_METRIC_COLUMN_WIDTH}} | {phys_str}")
             
-            print("-" * DISPLAY_LINE_WIDTH)
+            print("-" * CLI_DISPLAY_LINE_WIDTH)
             print(f"\nProcessed {len(results)} of {len(df_filtered)} stars successfully in {args.mode} mode.")
             
             # Save full results to a CSV file if requested

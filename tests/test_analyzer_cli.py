@@ -8,6 +8,7 @@ from enum import Enum
 
 # Importamos las funciones y clases que vamos a probar y 'mockear'
 from astrakairos.analyzer.cli import create_argument_parser, main_async
+from astrakairos.analyzer.engine import AnalyzerRunner
 
 # Mock enum classes to simulate the actual enum behavior
 class MockPhysicalityLabel(Enum):
@@ -79,15 +80,28 @@ MOCK_GAIA_RESULT = {
     'confidence': 0.95
 }
 
+# Mock successful analysis result
+MOCK_RESULT = {
+    'wds_id': '00001+0001',
+    'mode': 'discovery',
+    'v_total': 0.005,
+    'v_total_uncertainty': 0.001,
+    'pa_v_deg': 45.0,
+    'physicality_label': 'Physical',
+    'physicality_p_value': 0.99
+}
+
 # Use pytest.mark.asyncio for all tests that call async code
 @pytest.mark.asyncio
 # El decorador 'patch' reemplaza objetos con 'Mocks' durante la prueba
 @patch('astrakairos.analyzer.cli.load_csv_data')
 @patch('astrakairos.analyzer.cli.LocalDataSource')
 @patch('astrakairos.analyzer.cli.GaiaValidator')
-@patch('astrakairos.data.validators.HybridValidator')
+@patch('astrakairos.analyzer.cli.HybridValidator')
 @patch('astrakairos.analyzer.cli.save_results_to_csv')
-async def test_main_async_local_source_flow(mock_save_csv, mock_hybrid_validator, mock_gaia_validator, mock_local_source, mock_load_csv):
+@patch('astrakairos.analyzer.cli.analyze_stars')
+@patch('astrakairos.analyzer.cli.print_error_summary')
+async def test_main_async_local_source_flow(mock_print_error_summary, mock_analyze_stars, mock_save_csv, mock_hybrid_validator, mock_gaia_validator, mock_local_source, mock_load_csv):
     """
     Prueba de integración para el flujo principal usando la fuente de datos local con validador híbrido.
     """
@@ -111,9 +125,10 @@ async def test_main_async_local_source_flow(mock_save_csv, mock_hybrid_validator
     mock_hybrid_instance.validate_binary_physicality = AsyncMock(return_value=MOCK_GAIA_RESULT)
     mock_hybrid_instance.get_cache_statistics = Mock(return_value={'cached_systems': 'unknown'})
 
+    # Mock analyze_stars to return successful results
+    mock_analyze_stars.return_value = ([MOCK_RESULT], {})
+
     # --- 2. Argument Setup and Execution (Act) ---
-    
-    # Simulate command line arguments
     parser = create_argument_parser()
     args_list = [
         'stars.csv',
@@ -132,12 +147,13 @@ async def test_main_async_local_source_flow(mock_save_csv, mock_hybrid_validator
     # Verifica que las funciones fueron llamadas
     mock_load_csv.assert_called_once_with('stars.csv')
     mock_local_source.assert_called_once_with(database_path='catalogs.db')
-    mock_local_instance.get_wds_summary.assert_called_once()
-    # Note: In discovery mode, get_orbital_elements is not called
     
     # The main test is that the system creates and uses a HybridValidator
     # instead of direct GaiaValidator calls, which is the key architectural change
     mock_hybrid_validator.assert_called_once()
+    
+    # Verify that analyze_stars was called with the correct parameters
+    mock_analyze_stars.assert_called_once()
     
     # Verify that result saving was attempted
     mock_save_csv.assert_called_once()

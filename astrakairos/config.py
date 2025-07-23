@@ -798,3 +798,64 @@ ENCODING_FALLBACK_ORDER = ['utf-8', 'latin-1']  # Preferred encoding order for a
 VALIDATOR_CACHE_CATALOG_NAME = 'El-Badry et al. (2021)'
 VALIDATOR_CACHE_STRATEGY_NAME = 'hybrid'
 VALIDATOR_CACHE_UNAVAILABLE_VALUE = -1  # Indicator for unavailable cache statistics
+
+# === CLI Configuration ===
+# Display constants for CLI output
+CLI_TOP_RESULTS_DISPLAY_COUNT = 10
+CLI_DISPLAY_LINE_WIDTH = 90
+CLI_WDS_ID_COLUMN_WIDTH = 18
+CLI_METRIC_COLUMN_WIDTH = 35
+
+# CLI Analysis Constants
+CLI_ANALYSIS_MODES = ['discovery', 'characterize', 'orbital']
+CLI_PARALLAX_SOURCES = ['gaia', 'external', 'both']
+
+# CLI Result Dictionary Keys
+CLI_RESULT_KEYS = {
+    'WDS_ID': 'wds_id',
+    'MODE': 'mode',
+    'OBS_WDS': 'obs_wds',
+    'DATE_LAST': 'date_last',
+    'N_OBSERVATIONS': 'n_observations',
+    'DATE_FIRST': 'date_first',
+    'PHYSICALITY_P_VALUE': 'physicality_p_value',
+    'PHYSICALITY_LABEL': 'physicality_label',
+    'PHYSICALITY_METHOD': 'physicality_method',
+    'PHYSICALITY_CONFIDENCE': 'physicality_confidence'
+}
+
+# CLI Statistics Keys
+CLI_STATS_KEYS = {
+    'PROCESSED': 'processed',
+    'SUCCESSFUL': 'successful',
+    'FAILED': 'failed',
+    'VALIDATION_ERRORS': 'validation_errors',
+    'ANALYSIS_ERRORS': 'analysis_errors',
+    'DATA_ERRORS': 'data_errors'
+}
+
+# CLI Default Values
+CLI_DEFAULT_PHYSICALITY_VALUES = {
+    'ERROR': {
+        'physicality_p_value': None,
+        'physicality_label': 'Error',
+        'physicality_method': None,
+        'physicality_confidence': None
+    },
+    'NOT_CHECKED': {
+        'physicality_p_value': None,
+        'physicality_label': 'Not checked',
+        'physicality_method': None,
+        'physicality_confidence': None
+    }
+}
+
+# Valid sort keys for each analysis mode
+CLI_VALID_SORT_KEYS = {
+    'discovery': ['v_total', 'v_total_significance', 'rmse', 'date_last', 'pa_v_deg', 'uncertainty_quality'],
+    'characterize': ['rmse', 'v_total', 'v_total_significance', 'n_measurements', 'time_baseline_years', 'bootstrap_success_rate'],
+    'orbital': ['opi_arcsec_yr', 'opi_significance', 'deviation_arcsec', 'prediction_divergence_arcsec', 'orbital_period', 'eccentricity', 'v_total', 'v_total_significance']
+}
+
+# Error handling configuration
+CLI_FAIL_ON_ERROR_DEFAULT = False  # Whether to stop on first error by default
