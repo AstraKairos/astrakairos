@@ -29,6 +29,16 @@ class PhysicalityValidationError(AstraKairosDataError):
     pass
 
 
+class InvalidInputError(AstraKairosDataError):
+    """Raised when input data is invalid or missing required fields."""
+    pass
+
+
+class CacheStatsError(AstraKairosDataError):
+    """Raised when cache statistics cannot be retrieved."""
+    pass
+
+
 class PhysicalityLabel(Enum):
     """Standardized physicality assessment labels."""
     LIKELY_PHYSICAL = "Likely Physical"

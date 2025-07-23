@@ -792,3 +792,9 @@ ASTROPY_FORMAT = 'hmsdms'  # Default format string for coordinate display
 
 # File encoding fallback order
 ENCODING_FALLBACK_ORDER = ['utf-8', 'latin-1']  # Preferred encoding order for astronomical catalogs
+
+# === VALIDATORS Configuration ===
+# Hybrid Validator Constants
+VALIDATOR_CACHE_CATALOG_NAME = 'El-Badry et al. (2021)'
+VALIDATOR_CACHE_STRATEGY_NAME = 'hybrid'
+VALIDATOR_CACHE_UNAVAILABLE_VALUE = -1  # Indicator for unavailable cache statistics
