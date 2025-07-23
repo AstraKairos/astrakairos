@@ -3,6 +3,7 @@ import pytest
 import math
 import numpy as np
 from astrakairos.physics.kepler import solve_kepler, predict_position, compute_orbital_anomalies
+from astrakairos.exceptions import InvalidOrbitalElementsError, ConvergenceError
 
 # Basic existing tests
 def test_solve_kepler_circular_orbit():
@@ -75,11 +76,11 @@ def test_solve_kepler_invalid_eccentricity():
     M = 1.0
     
     # Test e >= 1 (parabolic/hyperbolic)
-    with pytest.raises(ValueError, match="outside stable range"):
+    with pytest.raises(InvalidOrbitalElementsError, match="outside stable range"):
         solve_kepler(M, 1.0)
     
     # Test negative eccentricity
-    with pytest.raises(ValueError, match="outside stable range"):
+    with pytest.raises(InvalidOrbitalElementsError, match="outside stable range"):
         solve_kepler(M, -0.1)
 
 def test_predict_position_validation():
@@ -92,19 +93,19 @@ def test_predict_position_validation():
     # Test invalid period
     invalid_elements = base_elements.copy()
     invalid_elements['P'] = -5.0
-    with pytest.raises(ValueError, match="outside valid range"):
+    with pytest.raises(InvalidOrbitalElementsError, match="outside valid range"):
         predict_position(invalid_elements, 2020.0)
     
     # Test invalid eccentricity
     invalid_elements = base_elements.copy()
     invalid_elements['e'] = 1.5
-    with pytest.raises(ValueError, match="outside valid range"):
+    with pytest.raises(InvalidOrbitalElementsError, match="outside valid range"):
         predict_position(invalid_elements, 2020.0)
     
     # Test invalid inclination
     invalid_elements = base_elements.copy()
     invalid_elements['i'] = 200.0
-    with pytest.raises(ValueError, match="outside valid range"):
+    with pytest.raises(InvalidOrbitalElementsError, match="outside valid range"):
         predict_position(invalid_elements, 2020.0)
 
 def test_compute_orbital_anomalies_array():
@@ -184,7 +185,7 @@ def test_missing_orbital_elements():
     """Test error handling for missing orbital elements."""
     incomplete_elements = {'P': 10.0, 'T': 2000.0}  # Missing e, a, i, etc.
     
-    with pytest.raises(ValueError, match="Missing required orbital element"):
+    with pytest.raises(InvalidOrbitalElementsError, match="Missing required orbital element"):
         predict_position(incomplete_elements, 2020.0)
 
 def test_compute_anomalies_validation():
@@ -193,10 +194,10 @@ def test_compute_anomalies_validation():
     
     # Missing elements
     incomplete_elements = {'P': 10.0}  # Missing T, e
-    with pytest.raises(ValueError, match="Missing required orbital element"):
+    with pytest.raises(InvalidOrbitalElementsError, match="Missing required orbital element"):
         compute_orbital_anomalies(incomplete_elements, dates)
     
     # Invalid period
     invalid_elements = {'P': -5.0, 'T': 2000.0, 'e': 0.1}
-    with pytest.raises(ValueError, match="outside valid range"):
+    with pytest.raises(InvalidOrbitalElementsError, match="outside valid range"):
         compute_orbital_anomalies(invalid_elements, dates)

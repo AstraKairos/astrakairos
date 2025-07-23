@@ -41,11 +41,50 @@ from astrakairos.config import (
     MIN_ARGUMENT_PERIASTRON_DEG,
     MAX_ARGUMENT_PERIASTRON_DEG,
     MIN_EPOCH_PERIASTRON_YEAR,
-    MAX_EPOCH_PERIASTRON_YEAR
+    MAX_EPOCH_PERIASTRON_YEAR,
+    LONG_PERIOD_WARNING_THRESHOLD_YEARS
+)
+
+# Import centralized exceptions
+from astrakairos.exceptions import (
+    ConvergenceError,
+    InvalidOrbitalElementsError,
+    NumericalInstabilityError
 )
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+def _validate_base_orbital_elements(orbital_elements: Dict[str, float]) -> Tuple[float, float, float]:
+    """Validates and extracts basic orbital elements P, T, and e.
+    
+    Args:
+        orbital_elements: Dictionary containing orbital elements.
+        
+    Returns:
+        Tuple of (P, T, e) values.
+        
+    Raises:
+        InvalidOrbitalElementsError: If elements are missing or outside valid ranges.
+    """
+    try:
+        P = orbital_elements['P']
+        T = orbital_elements['T']
+        e = orbital_elements['e']
+    except KeyError as exc:
+        raise InvalidOrbitalElementsError(f"Missing required orbital element: {exc}")
+    
+    # Validate orbital elements
+    if not (MIN_PERIOD_YEARS <= P <= MAX_PERIOD_YEARS):
+        raise InvalidOrbitalElementsError(f"Orbital period {P:.3f} years outside valid range [{MIN_PERIOD_YEARS}, {MAX_PERIOD_YEARS}]")
+    
+    if not (MIN_ECCENTRICITY <= e <= MAX_ECCENTRICITY):
+        raise InvalidOrbitalElementsError(f"Eccentricity {e:.{KEPLER_LOGGING_PRECISION}f} outside valid range [{MIN_ECCENTRICITY}, {MAX_ECCENTRICITY}]")
+    
+    if not (MIN_EPOCH_PERIASTRON_YEAR <= T <= MAX_EPOCH_PERIASTRON_YEAR):
+        raise InvalidOrbitalElementsError(f"Epoch of periastron {T:.1f} outside reasonable range [{MIN_EPOCH_PERIASTRON_YEAR}, {MAX_EPOCH_PERIASTRON_YEAR}]")
+    
+    return P, T, e
 
 def solve_kepler(M_rad: Union[float, np.ndarray],
                  e: float,
@@ -53,9 +92,7 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
                  max_iter: Optional[int] = None,
                  e_threshold: Optional[float] = None,
                  coeff_high_e: Optional[float] = None) -> Union[float, np.ndarray]:
-    """
-    Solves Kepler's equation (M = E - e*sin(E)) for Eccentric Anomaly (E)
-    using the Newton-Raphson method with hybrid initial guess strategy.
+    """Solves Kepler's equation using Newton-Raphson method with hybrid initial guess strategy.
 
     This implementation handles all elliptical eccentricities (0 <= e < 1)
     and operates on scalars or arrays. Uses centralized configuration 
@@ -65,7 +102,7 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
         M_rad: Mean anomaly in radians. Can be a scalar or numpy array.
         e: Eccentricity of the orbit (0 <= e < 1).
         tol: Convergence tolerance. Uses DEFAULT_KEPLER_TOLERANCE if None.
-        max_iter: Maximum iterations. Uses DEFAULT_KEPLER_MAX_ITER if None.
+        max_iter: Maximum iterations. Uses DEFAULT_KEPLER_MAX_ITERATIONS if None.
         e_threshold: Eccentricity threshold for initial guess. Uses HIGH_ECCENTRICITY_THRESHOLD if None.
         coeff_high_e: Coefficient for high-eccentricity initial guess. Uses HIGH_E_COEFFICIENT if None.
 
@@ -73,11 +110,12 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
         The Eccentric Anomaly (E) in radians. Same shape as input M_rad.
         
     Raises:
-        ValueError: If eccentricity is outside valid range.
+        InvalidOrbitalElementsError: If eccentricity is outside valid range.
+        ConvergenceError: If Newton-Raphson iteration fails to converge.
         
     Notes:
-        - Issues warning for e > 0.95 due to potential convergence issues
-        - Initial guess strategy based on Napier (2024)
+        Issues warning for e > 0.95 due to potential convergence issues.
+        Initial guess strategy based on Napier (2024).
     """
     # Use centralized configuration with fallback to provided values
     tol = tol if tol is not None else DEFAULT_KEPLER_TOLERANCE
@@ -87,7 +125,7 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
     
     # Validate eccentricity range
     if not (MIN_ECCENTRICITY <= e <= MAX_ECCENTRICITY_STABLE):
-        raise ValueError(f"Eccentricity {e:.6f} outside stable range [{MIN_ECCENTRICITY}, {MAX_ECCENTRICITY_STABLE}]")
+        raise InvalidOrbitalElementsError(f"Eccentricity {e:.6f} outside stable range [{MIN_ECCENTRICITY}, {MAX_ECCENTRICITY_STABLE}]")
     
     # Validate eccentricity range for numerical stability
     if e > DANGEROUS_ECCENTRICITY_WARNING:
@@ -132,10 +170,13 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
         # Check for convergence: if the correction step is smaller than the tolerance.
         converged[mask] = np.abs(delta) < tol
 
-    # Performance warning for low convergence
+    # Check convergence and handle failures
     convergence_rate = np.sum(converged) / len(converged) * 100
+    
     if convergence_rate < KEPLER_CONVERGENCE_WARNING_THRESHOLD:
-        logger.warning(f"Low convergence rate: {convergence_rate:.1f}% (e={e:.{KEPLER_LOGGING_PRECISION}f})")
+        error_msg = f"Kepler's equation solver failed to converge for {100 - convergence_rate:.1f}% of inputs (e={e:.{KEPLER_LOGGING_PRECISION}f})"
+        logger.error(error_msg)
+        raise ConvergenceError(error_msg)
     
     # Reshape result and handle scalar vs array return type
     result = E.reshape(original_shape)
@@ -147,64 +188,55 @@ def solve_kepler(M_rad: Union[float, np.ndarray],
         return result
 
 def predict_position(orbital_elements: Dict[str, float], date: float) -> Tuple[float, float]:
-    """
-    Predicts the sky position (Position Angle and Separation) of a binary star 
-    for a given observation date, based on its Keplerian orbital elements.
+    """Predicts the sky position of a binary star for a given observation date.
     
+    Calculates position angle and separation based on Keplerian orbital elements
+    using coordinate transformations from orbital plane to sky plane.
     Uses centralized configuration for validation of orbital elements.
 
     Args:
-        orbital_elements: A dictionary containing the 7 Keplerian elements:
-                          'P' (Period, in years), 'T' (Time of periastron passage, in years),
-                          'e' (Eccentricity), 'a' (Semi-major axis, in arcseconds),
-                          'i' (Inclination, in degrees), 'Omega' (Longitude of Ascending Node, in degrees),
-                          'omega' (Argument of Periastron, in degrees).
+        orbital_elements: Dictionary containing the 7 Keplerian elements:
+            'P' (Period, in years), 'T' (Time of periastron passage, in years),
+            'e' (Eccentricity), 'a' (Semi-major axis, in arcseconds),
+            'i' (Inclination, in degrees), 'Omega' (Longitude of Ascending Node, in degrees),
+            'omega' (Argument of Periastron, in degrees).
         date: The observation date in decimal years.
 
     Returns:
-        A tuple containing (position_angle_deg, separation_arcsec).
+        Tuple containing (position_angle_deg, separation_arcsec).
         
     Raises:
-        ValueError: If any orbital element is outside valid ranges.
-        KeyError: If required orbital elements are missing.
+        InvalidOrbitalElementsError: If any orbital element is outside valid ranges.
+        ConvergenceError: If Kepler's equation fails to converge.
     """
     # 1. Extract and validate orbital elements
     try:
-        P = orbital_elements['P']
-        T = orbital_elements['T']
-        e = orbital_elements['e']
         a = orbital_elements['a']
         i_deg = orbital_elements['i']
         Omega_deg = orbital_elements['Omega']
         omega_deg = orbital_elements['omega']
     except KeyError as exc:
-        raise ValueError(f"Missing required orbital element in dictionary: {exc}")
+        raise InvalidOrbitalElementsError(f"Missing required orbital element in dictionary: {exc}")
 
-    # Validation using centralized configuration
-    if not (MIN_PERIOD_YEARS <= P <= MAX_PERIOD_YEARS):
-        raise ValueError(f"Orbital period {P:.3f} years outside valid range [{MIN_PERIOD_YEARS}, {MAX_PERIOD_YEARS}]")
-    
-    if not (MIN_ECCENTRICITY <= e <= MAX_ECCENTRICITY):
-        raise ValueError(f"Eccentricity {e:.{KEPLER_LOGGING_PRECISION}f} outside valid range [{MIN_ECCENTRICITY}, {MAX_ECCENTRICITY}]")
-    
+    # Validate basic elements (P, T, e) using helper function
+    P, T, e = _validate_base_orbital_elements(orbital_elements)
+
+    # Validate remaining orbital elements
     if not (MIN_SEMIMAJOR_AXIS_ARCSEC <= a <= MAX_SEMIMAJOR_AXIS_ARCSEC):
-        raise ValueError(f"Semi-major axis {a:.3f} arcsec outside valid range [{MIN_SEMIMAJOR_AXIS_ARCSEC}, {MAX_SEMIMAJOR_AXIS_ARCSEC}]")
+        raise InvalidOrbitalElementsError(f"Semi-major axis {a:.3f} arcsec outside valid range [{MIN_SEMIMAJOR_AXIS_ARCSEC}, {MAX_SEMIMAJOR_AXIS_ARCSEC}]")
     
     if not (MIN_INCLINATION_DEG <= i_deg <= MAX_INCLINATION_DEG):
-        raise ValueError(f"Inclination {i_deg:.1f}° outside valid range [{MIN_INCLINATION_DEG}°, {MAX_INCLINATION_DEG}°]")
+        raise InvalidOrbitalElementsError(f"Inclination {i_deg:.1f}° outside valid range [{MIN_INCLINATION_DEG}°, {MAX_INCLINATION_DEG}°]")
 
     # Additional validation for angular elements
     if not (MIN_LONGITUDE_ASCENDING_NODE_DEG <= Omega_deg <= MAX_LONGITUDE_ASCENDING_NODE_DEG):
-        raise ValueError(f"Longitude of ascending node {Omega_deg:.1f}° outside valid range [{MIN_LONGITUDE_ASCENDING_NODE_DEG}°, {MAX_LONGITUDE_ASCENDING_NODE_DEG}°]")
+        raise InvalidOrbitalElementsError(f"Longitude of ascending node {Omega_deg:.1f}° outside valid range [{MIN_LONGITUDE_ASCENDING_NODE_DEG}°, {MAX_LONGITUDE_ASCENDING_NODE_DEG}°]")
     
     if not (MIN_ARGUMENT_PERIASTRON_DEG <= omega_deg <= MAX_ARGUMENT_PERIASTRON_DEG):
-        raise ValueError(f"Argument of periastron {omega_deg:.1f}° outside valid range [{MIN_ARGUMENT_PERIASTRON_DEG}°, {MAX_ARGUMENT_PERIASTRON_DEG}°]")
-    
-    if not (MIN_EPOCH_PERIASTRON_YEAR <= T <= MAX_EPOCH_PERIASTRON_YEAR):
-        raise ValueError(f"Epoch of periastron {T:.1f} outside reasonable range [{MIN_EPOCH_PERIASTRON_YEAR}, {MAX_EPOCH_PERIASTRON_YEAR}]")
+        raise InvalidOrbitalElementsError(f"Argument of periastron {omega_deg:.1f}° outside valid range [{MIN_ARGUMENT_PERIASTRON_DEG}°, {MAX_ARGUMENT_PERIASTRON_DEG}°]")
 
     # Conditionally log high-eccentricity cases
-    if e > DANGEROUS_ECCENTRICITY_WARNING and P > 1000:
+    if e > DANGEROUS_ECCENTRICITY_WARNING and P > LONG_PERIOD_WARNING_THRESHOLD_YEARS:
         logger.info(f"Computing high-eccentricity ({e:.3f}) long-period ({P:.0f}y) orbit")
 
     # Convert angles to radians
@@ -250,36 +282,26 @@ def predict_position(orbital_elements: Dict[str, float], date: float) -> Tuple[f
     return (position_angle_deg, separation_arcsec)
 
 def compute_orbital_anomalies(orbital_elements: Dict[str, float], dates: np.ndarray) -> Dict[str, np.ndarray]:
-    """
-    Computes Mean Anomaly (M), Eccentric Anomaly (E), and True Anomaly (nu)
-    for an array of dates, useful for plotting orbits or detailed analysis.
+    """Computes Mean, Eccentric, and True Anomalies for an array of dates.
 
     Args:
-        orbital_elements: Dictionary with orbital elements.
-        dates: A numpy array of dates in decimal years.
+        orbital_elements: Dictionary with orbital elements containing at least 'P', 'T', and 'e'.
+        dates: Numpy array of dates in decimal years.
         
     Returns:
-        A dictionary with numpy arrays for M, E, and nu (all in radians).
+        Dictionary with numpy arrays for 'M', 'E', and 'nu' (all in radians).
+        
+    Raises:
+        InvalidOrbitalElementsError: If any orbital element is outside valid ranges.
+        ConvergenceError: If Kepler's equation fails to converge.
         
     Notes:
-        - All anomalies are returned in radians for mathematical consistency
-        - Mean anomaly is normalized to [0, 2π] range
-        - Uses numerically stable atan2 formulation for true anomaly
+        All anomalies are returned in radians for mathematical consistency.
+        Mean anomaly is normalized to [0, 2π] range.
+        Uses numerically stable atan2 formulation for true anomaly.
     """
-    # Extract and validate required elements
-    try:
-        P = orbital_elements['P']
-        T = orbital_elements['T']
-        e = orbital_elements['e']
-    except KeyError as exc:
-        raise ValueError(f"Missing required orbital element for anomaly calculation: {exc}")
-    
-    # Validate orbital elements
-    if not (MIN_PERIOD_YEARS <= P <= MAX_PERIOD_YEARS):
-        raise ValueError(f"Orbital period {P:.3f} years outside valid range")
-    
-    if not (MIN_ECCENTRICITY <= e <= MAX_ECCENTRICITY):
-        raise ValueError(f"Eccentricity {e:.6f} outside valid range")
+    # Validate basic orbital elements using helper function
+    P, T, e = _validate_base_orbital_elements(orbital_elements)
     
     # Calculate Mean Anomaly for the array of dates
     mean_motion = 2 * np.pi / P
@@ -288,9 +310,10 @@ def compute_orbital_anomalies(orbital_elements: Dict[str, float], dates: np.ndar
     # Calculate anomalies for all epochs
     E_array = solve_kepler(M_array, e)
     
-    # Convert Eccentric to True Anomaly using stable formula
-    tan_nu_half_array = np.sqrt((1 + e) / (1 - e)) * np.tan(E_array / 2)
-    nu_array = 2 * np.arctan(tan_nu_half_array)
+    # Convert Eccentric to True Anomaly using numerically stable atan2 formula
+    sin_E_half = np.sin(E_array / 2)
+    cos_E_half = np.cos(E_array / 2)
+    nu_array = 2 * np.arctan2(np.sqrt(1 + e) * sin_E_half, np.sqrt(1 - e) * cos_E_half)
     
     return {
         'M': M_array % (2 * np.pi), # Normalize M to [0, 2π]

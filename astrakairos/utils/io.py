@@ -1,7 +1,7 @@
 import pandas as pd
 import re
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
@@ -28,6 +28,11 @@ class DataSaveError(Exception):
 
 class InvalidWdsFormatError(Exception):
     """Exception raised when WDS designation format is invalid."""
+    pass
+
+
+class CoordinateOutOfRangeError(Exception):
+    """Exception raised when coordinates are outside valid astronomical ranges."""
     pass
 
 
@@ -255,4 +260,134 @@ def parse_wds_designation(wds_id: str) -> Dict[str, float]:
 
     except (ValueError, IndexError) as e:
         raise InvalidWdsFormatError(f"Failed to parse WDS designation '{wds_id}': {e}")
+
+
+# === Safe Parsing Utilities ===
+# These functions provide robust parsing for astronomical catalog data
+
+def safe_int(s: str) -> Optional[int]:
+    """
+    Safely convert string to int, returning None on error.
+    
+    Args:
+        s: String to convert
+        
+    Returns:
+        Integer value or None if conversion fails
+    """
+    try:
+        return int(s.strip()) if s.strip() else None
+    except (ValueError, AttributeError):
+        return None
+
+
+def safe_float(s: str) -> Optional[float]:
+    """
+    Safely convert string to float, returning None on error.
+    
+    Args:
+        s: String to convert
+        
+    Returns:
+        Float value or None if conversion fails
+    """
+    try:
+        return float(s.strip()) if s.strip() else None
+    except (ValueError, AttributeError):
+        return None
+
+
+def parse_wdss_coordinates(wdss_id: str) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Parse coordinates from WDSS identifier (first 14 chars).
+    
+    Args:
+        wdss_id: WDSS identifier string
+        
+    Returns:
+        Tuple of (ra_deg, dec_deg) or (None, None) if parsing fails
+    """
+    if not wdss_id or len(wdss_id) < 14:
+        return None, None
+    
+    try:
+        # Format: HHMMSss+DDMMss or HHMMSss-DDMMss
+        coord_part = wdss_id[:14]
+        
+        # Find the sign position
+        sign_pos = -1
+        for i, char in enumerate(coord_part):
+            if char in ['+', '-']:
+                sign_pos = i
+                break
+        
+        if sign_pos == -1:
+            return None, None
+        
+        # Parse RA part (before sign)
+        ra_str = coord_part[:sign_pos]
+        if len(ra_str) >= 6:
+            hours = int(ra_str[0:2])
+            minutes = int(ra_str[2:4])
+            seconds = int(ra_str[4:6]) if len(ra_str) >= 6 else 0
+            ra_deg = (hours + minutes/60.0 + seconds/3600.0) * 15.0
+        else:
+            ra_deg = None
+        
+        # Parse Dec part (after sign)
+        dec_str = coord_part[sign_pos:]
+        if len(dec_str) >= 6:
+            sign = -1 if dec_str[0] == '-' else 1
+            degrees = int(dec_str[1:3])
+            minutes = int(dec_str[3:5])
+            seconds = int(dec_str[5:7]) if len(dec_str) >= 7 else 0
+            dec_deg = sign * (degrees + minutes/60.0 + seconds/3600.0)
+        else:
+            dec_deg = None
+        
+        return ra_deg, dec_deg
+        
+    except Exception:
+        return None, None
+
+
+def parse_wdss_coordinate_string(coord_str: str) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Parse WDSS coordinate string to decimal degrees.
+    
+    Args:
+        coord_str: Coordinate string in WDSS format
+        
+    Returns:
+        Tuple of (ra_deg, dec_deg) or (None, None) if parsing fails
+    """
+    if not coord_str or len(coord_str) < 17:
+        return None, None
+    
+    try:
+        # RA: hhmmss.ss (positions 0-8)
+        ra_str = coord_str[0:9].strip()
+        if len(ra_str) >= 6:
+            hours = int(ra_str[0:2])
+            minutes = int(ra_str[2:4])
+            seconds = float(ra_str[4:]) if len(ra_str) > 4 else 0.0
+            ra_deg = (hours + minutes/60.0 + seconds/3600.0) * 15.0
+        else:
+            ra_deg = None
+        
+        # Dec: +ddmmss.s (positions 9-17)
+        dec_str = coord_str[9:18].strip()
+        if len(dec_str) >= 6:
+            sign = -1 if dec_str[0] == '-' else 1
+            degrees = int(dec_str[1:3])
+            minutes = int(dec_str[3:5])
+            seconds = float(dec_str[5:]) if len(dec_str) > 5 else 0.0
+            dec_deg = sign * (degrees + minutes/60.0 + seconds/3600.0)
+        else:
+            dec_deg = None
+        
+        return ra_deg, dec_deg
+        
+    except Exception:
+        return None, None
 

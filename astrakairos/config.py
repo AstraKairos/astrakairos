@@ -142,6 +142,55 @@ WDSS_MEASUREMENT_COLSPECS = {
     'technique': (128, 130)
 }
 
+# WDSS Component line specifications
+WDSS_COMPONENT_COLSPECS = {
+    'wdss_id': (0, 14),
+    'component': (15, 18),
+    'date_first': (24, 28),
+    'n_obs': (29, 32),
+    'pa_first': (33, 36),
+    'sep_first': (37, 43),
+    'vmag': (45, 50),
+    'kmag': (52, 57),
+    'spectral_type': (59, 64),
+    'pm_ra': (65, 73),
+    'pm_dec': (73, 81),
+    'parallax': (82, 89),
+    'name': (90, 114),
+    'coordinates': (118, 136),
+    'wds_correspondence': (137, 147),
+    'discoverer_designation': (148, 155)
+}
+
+# Regex patterns for data extraction
+GAIA_ID_PATTERN = r'Gaia\s+(?:DR3|EDR3)?\s*(\d+)'
+
+# ORB6 Catalog Column Specifications
+# Based on orb6format.txt documentation (1-based index converted to 0-based for pandas)
+ORB6_COLSPECS = [
+    (18, 29),   # WDS designation (cols 19-29)
+    (80, 93),   # Period (P) string with unit (cols 81-93)
+    (93, 105),  # Error in P (cols 94-105)
+    (104, 117), # Semi-major axis (a) string with unit (cols 105-117)
+    (115, 125), # Error in a (cols 116-125)
+    (124, 134), # Inclination (i) (cols 125-134)
+    (133, 143), # Error in i (cols 134-143)
+    (142, 154), # Node (Omega) string with flag (cols 143-154)
+    (152, 162), # Error in Omega (cols 153-162)
+    (161, 177), # Time of periastron (T) string with unit (cols 162-177)
+    (175, 187), # Error in T (cols 176-187)
+    (186, 196), # Eccentricity (e) (cols 187-196)
+    (195, 205), # Error in e (cols 196-205)
+    (204, 215), # Longitude of periastron (omega) string with flag (cols 205-215)
+    (213, 223), # Error in omega (cols 214-223)
+    (232, 235), # Orbit grade (cols 233-235)
+]
+
+ORB6_COLUMN_NAMES = [
+    'wds_id', 'P_str', 'e_P', 'a_str', 'e_a', 'i_str', 'e_i', 'Omega_str', 
+    'e_Omega', 'T_str', 'e_T', 'e_str', 'e_e', 'omega_str', 'e_omega_arg', 'grade'
+]
+
 # CLI Analysis Configuration
 MIN_MEASUREMENTS_FOR_CHARACTERIZE = 5
 DEFAULT_MIN_OBS = 2
@@ -412,6 +461,31 @@ OPTIMAL_MIN_ALTITUDE_DEG = 30.0       # Standard minimum for quality observation
 ZENITH_AVOIDANCE_ZONE_DEG = 5.0       # Degrees from zenith to avoid for tracking
 
 # Airmass Calculation Parameters
+
+# === LOCAL DATA SOURCE Configuration ===
+
+# SQLite Performance Settings
+DEFAULT_SQLITE_CACHE_SIZE_KB = 100 * 1024  # 100MB fallback cache
+MAX_SQLITE_CACHE_SIZE_KB = 500 * 1024      # 500MB maximum cache
+SQLITE_MMAP_SIZE_GB = 1                    # 1GB memory-mapped I/O
+RAM_FRACTION_FOR_CACHE = 0.1               # Use 10% of available RAM
+
+# Database Schema Configuration
+WDSS_SUMMARY_TABLE = 'wdss_summary'
+WDS_SUMMARY_TABLE = 'wds_summary'
+ORBITAL_ELEMENTS_TABLE = 'orbital_elements'
+MEASUREMENTS_TABLE = 'measurements'
+
+# El-Badry Physicality Thresholds
+EL_BADRY_PHYSICAL_THRESHOLD = 0.1    # R_chance_align < 0.1 indicates likely physical
+EL_BADRY_OPTICAL_THRESHOLD = 0.9     # R_chance_align > 0.9 indicates likely optical
+EL_BADRY_DEFAULT_CONFIDENCE = 0.9    # Default confidence when in catalog but no R_chance
+
+# Database Required Tables
+REQUIRED_TABLES = {
+    'summary_tables': [WDSS_SUMMARY_TABLE, WDS_SUMMARY_TABLE],
+    'orbital_table': ORBITAL_ELEMENTS_TABLE
+}
 MAX_AIRMASS_FOR_PHOTOMETRY = 3.0      # Beyond this, systematic errors increase
 MAX_AIRMASS_FOR_SPECTROSCOPY = 2.0    # Stricter limit for spectroscopic work
 AIRMASS_WARNING_THRESHOLD = 2.5       # Issue warnings above this threshold
@@ -461,6 +535,20 @@ MASS_MC_CONVERGENCE_THRESHOLD = 0.001       # Convergence criterion for error es
 LARGE_MASS_ERROR_THRESHOLD = 0.5             # Warn if relative error > 50%
 EXTREME_MASS_WARNING_SOLAR = 100.0           # Warn for very massive systems
 LOW_PARALLAX_WARNING_MAS = 1.0               # Warn for distant/uncertain systems
+
+# Mass Calculation Quality Assessment
+MAX_QUALITY_PENALTY_FACTOR = 0.9             # Maximum quality reduction factor for large errors
+LARGE_PARALLAX_UNCERTAINTY_THRESHOLD = 0.2   # Relative parallax error threshold for warnings
+
+# Parallax Source Quality Mapping
+PARALLAX_SOURCE_QUALITY = {
+    'gaia_dr3': 1.0,
+    'gaia': 0.9,
+    'hipparcos': 0.7,
+    'literature': 0.5,
+    'estimated': 0.3,
+    'unknown': 0.1
+}
 LUNAR_K_EXTINCTION = 0.25             # Lunar V-band extinction coefficient
 LUNAR_C1_COEFFICIENT = 3.84           # Moonlight scattering parameter 1
 LUNAR_C2_COEFFICIENT = 0.026          # Phase-dependent scattering parameter
@@ -539,6 +627,9 @@ MAX_ECCENTRICITY_STABLE = 0.99              # Maximum stable eccentricity
 # Kepler Solver Quality Control
 KEPLER_CONVERGENCE_WARNING_THRESHOLD = 95.0  # Percentage threshold for convergence warnings
 KEPLER_LOGGING_PRECISION = 6                # Decimal places for logging
+
+# Long Period Warning Threshold
+LONG_PERIOD_WARNING_THRESHOLD_YEARS = 1000  # Years above which to log high-e orbits
 
 # Orbital Element Validation Ranges (Additional)
 MIN_LONGITUDE_ASCENDING_NODE_DEG = 0.0      # Minimum Omega (degrees)

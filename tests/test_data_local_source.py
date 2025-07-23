@@ -8,7 +8,9 @@ import tempfile
 from pathlib import Path
 
 from astrakairos.data.local_source import LocalDataSource
-from astrakairos.data.source import WdsSummary, OrbitalElements
+from astrakairos.data.source import (WdsSummary, OrbitalElements, 
+                                     AstraKairosDataError, WdsIdNotFoundError,
+                                     MeasurementsUnavailableError, OrbitalElementsUnavailableError)
 
 
 @pytest.fixture
@@ -134,7 +136,7 @@ class TestLocalDataSource:
     
     def test_initialization_file_not_found(self):
         """Test initialization with non-existent file."""
-        with pytest.raises((FileNotFoundError, sqlite3.Error)):
+        with pytest.raises(AstraKairosDataError):
             LocalDataSource("nonexistent.db")
     
     def test_get_catalog_statistics(self, sample_sqlite_db):
@@ -176,8 +178,8 @@ class TestLocalDataSource:
         """Test WDS summary retrieval for non-existent system."""
         source = LocalDataSource(sample_sqlite_db)
         
-        result = await source.get_wds_summary("99999+9999")
-        assert result is None
+        with pytest.raises(WdsIdNotFoundError):
+            await source.get_wds_summary("99999+9999")
         
         source.close()
     
@@ -200,8 +202,8 @@ class TestLocalDataSource:
         """Test orbital elements retrieval for non-existent system."""
         source = LocalDataSource(sample_sqlite_db)
         
-        result = await source.get_orbital_elements("99999+9999")
-        assert result is None
+        with pytest.raises(OrbitalElementsUnavailableError):
+            await source.get_orbital_elements("99999+9999")
         
         source.close()
     
@@ -224,8 +226,8 @@ class TestLocalDataSource:
         """Test measurements retrieval for non-existent system."""
         source = LocalDataSource(sample_sqlite_db)
         
-        result = await source.get_all_measurements("99999+9999")
-        assert result is None
+        with pytest.raises(WdsIdNotFoundError):
+            await source.get_all_measurements("99999+9999")
         
         source.close()
     
@@ -269,6 +271,6 @@ class TestLocalDataSource:
         # Close connection
         source.close()
         
-        # Should return None after close (due to error handling)
-        stats_after_close = source.get_catalog_statistics()
-        assert stats_after_close is None
+        # Should raise exception after close
+        with pytest.raises(AstraKairosDataError):
+            source.get_catalog_statistics()
