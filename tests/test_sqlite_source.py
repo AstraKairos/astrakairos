@@ -287,20 +287,22 @@ class TestWdssLocalDataSource:
     @pytest.mark.asyncio
     async def test_database_error_handling(self, wdss_sqlite_db):
         """Test error handling for database issues."""
+        from astrakairos.data.source import AstraKairosDataError
+        
         source = LocalDataSource(wdss_sqlite_db)
         
         # Close connection to simulate database error
         source.conn.close()
         
-        # These should handle errors gracefully
-        result = await source.get_wds_summary("16169+0113")
-        assert result is None
+        # These should handle errors gracefully by raising exceptions
+        with pytest.raises(AstraKairosDataError, match="Database query failed"):
+            await source.get_wds_summary("16169+0113")
         
-        orbital = await source.get_orbital_elements("16169+0113")
-        assert orbital is None
+        with pytest.raises(AstraKairosDataError, match="Database query failed"):
+            await source.get_orbital_elements("16169+0113")
         
-        measurements = await source.get_all_measurements("16169+0113")
-        assert measurements is None
+        with pytest.raises(AstraKairosDataError, match="Database query failed"):
+            await source.get_all_measurements("16169+0113")
     
     @pytest.mark.asyncio
     async def test_coordinate_extraction_validation(self, wdss_sqlite_db):
@@ -335,17 +337,19 @@ class TestWdssLocalDataSource:
     @pytest.mark.asyncio
     async def test_wdss_not_found(self, wdss_sqlite_db):
         """Test behavior for non-existent systems."""
+        from astrakairos.data.source import WdsIdNotFoundError, OrbitalElementsUnavailableError, MeasurementsUnavailableError
+        
         source = LocalDataSource(wdss_sqlite_db)
         
-        # Test non-existent system
-        result = await source.get_wds_summary("99999+9999")
-        assert result is None
+        # Test non-existent system - should raise specific exceptions
+        with pytest.raises(WdsIdNotFoundError, match="WDS ID '99999\\+9999' not found"):
+            await source.get_wds_summary("99999+9999")
         
-        orbital = await source.get_orbital_elements("99999+9999")
-        assert result is None
+        with pytest.raises(OrbitalElementsUnavailableError, match="No orbital elements found"):
+            await source.get_orbital_elements("99999+9999")
         
-        measurements = await source.get_all_measurements("99999+9999")
-        assert measurements is None
+        with pytest.raises(WdsIdNotFoundError, match="WDS ID '99999\\+9999' not found"):
+            await source.get_all_measurements("99999+9999")
         
         source.close()
     

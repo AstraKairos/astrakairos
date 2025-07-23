@@ -104,6 +104,8 @@ class TestGaiaValidator:
     @pytest.mark.asyncio
     async def test_validate_physicality_missing_coordinates(self, gaia_validator):
         """Test physicality validation with missing coordinates."""
+        from astrakairos.exceptions import PhysicalityValidationError
+        
         wds_summary = {
             'wds_id': '00000+0000',
             'mag_pri': 8.5,
@@ -111,14 +113,9 @@ class TestGaiaValidator:
             # Missing ra_deg and dec_deg
         }
         
-        result = await gaia_validator.validate_physicality(wds_summary)
-        
-        # The result should be a PhysicalityAssessment with Unknown label
-        from astrakairos.data.source import PhysicalityLabel
-        assert result['label'] == PhysicalityLabel.UNKNOWN
-        assert result['p_value'] is None
-        assert 'method' in result
-        assert 'validation_date' in result
+        # Should raise PhysicalityValidationError instead of returning UNKNOWN
+        with pytest.raises(PhysicalityValidationError, match="Missing coordinates in WDS summary"):
+            await gaia_validator.validate_physicality(wds_summary)
     
     def test_validate_physicality_sync_success(self, gaia_validator):
         """Test synchronous physicality validation."""
@@ -151,24 +148,22 @@ class TestGaiaValidator:
     
     def test_validate_physicality_sync_not_enough_sources(self, gaia_validator):
         """Test synchronous physicality validation with insufficient sources."""
-        from astrakairos.data.source import PhysicalityLabel, ValidationMethod
+        from astrakairos.exceptions import InsufficientAstrometricDataError
         
         with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
             with patch.object(gaia_validator, '_validate_astrometric_quality', return_value=False):
                 mock_query.return_value = [Mock()]  # Only one source
                 
-                result = gaia_validator._validate_physicality_sync(
-                    [Mock()],  # Only one source
-                    (8.5, 9.2)  # wds_mags
-                )
-                
-                assert result['label'] == PhysicalityLabel.UNKNOWN
-                assert result['p_value'] is None
-                assert result['method'] is None
+                # Should raise InsufficientAstrometricDataError instead of returning UNKNOWN
+                with pytest.raises(InsufficientAstrometricDataError, match="quality sources available"):
+                    gaia_validator._validate_physicality_sync(
+                        [Mock()],  # Only one source
+                        (8.5, 9.2)  # wds_mags
+                    )
     
     def test_validate_physicality_sync_component_matching_failed(self, gaia_validator):
         """Test synchronous physicality validation with component matching failure."""
-        from astrakairos.data.source import PhysicalityLabel, ValidationMethod
+        from astrakairos.exceptions import InsufficientAstrometricDataError
         
         with patch.object(gaia_validator, '_query_gaia_for_pair_sync') as mock_query:
             with patch.object(gaia_validator, '_identify_components_by_mag') as mock_identify:
@@ -177,14 +172,12 @@ class TestGaiaValidator:
                     mock_query.return_value = [Mock(), Mock()]
                     mock_identify.return_value = (None, None)
                     
-                    result = gaia_validator._validate_physicality_sync(
-                        [Mock(), Mock()],  # gaia_results
-                        (8.5, 9.2)  # wds_mags
-                    )
-                    
-                    assert result['label'] == PhysicalityLabel.AMBIGUOUS
-                    assert result['p_value'] is None
-                    assert result['method'] is None
+                    # Should raise InsufficientAstrometricDataError instead of returning AMBIGUOUS
+                    with pytest.raises(InsufficientAstrometricDataError, match="Cannot identify binary components"):
+                        gaia_validator._validate_physicality_sync(
+                            [Mock(), Mock()],  # gaia_results
+                            (8.5, 9.2)  # wds_mags
+                        )
     
     def test_validate_physicality_sync_fallback_tests(self, gaia_validator):
         """Test synchronous physicality validation with fallback to 2D and 1D tests."""

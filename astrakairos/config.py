@@ -519,6 +519,35 @@ MAX_MASS_RATIO = 1.0                         # Primary always more massive
 
 # Parallax Sources Priority (lower number = higher priority)
 PARALLAX_SOURCE_PRIORITY = {
+    'gaia': 1,
+    'hipparcos': 2,
+    'literature': 3,
+    'catalog': 4
+}
+
+# === GAIA Configuration - Component Matching and Quality Scoring ===
+
+# Component Matching Parameters
+GAIA_MATCHING_MAG_TOLERANCE = 1.5            # Magnitude tolerance for component matching
+GAIA_MATCHING_SPATIAL_PENALTY_FACTOR = 10.0  # Spatial penalty factor (arcsec/10)
+GAIA_MATCHING_MAX_SPATIAL_PENALTY = 5.0      # Maximum spatial penalty cap
+GAIA_MATCHING_MIN_PARALLAX_SIGNIFICANCE = 3.0 # Minimum parallax significance for mass calc
+
+# Quality Score Weights for Best Parallax Source Selection
+QUALITY_SCORE_RUWE_WEIGHT = 0.4              # Weight for RUWE quality
+QUALITY_SCORE_SIGNIFICANCE_WEIGHT = 0.4      # Weight for parallax significance
+QUALITY_SCORE_MAGNITUDE_WEIGHT = 0.2         # Weight for magnitude (brightness)
+
+# Quality score thresholds and normalization values
+QUALITY_SCORE_RUWE_THRESHOLD = 1.4           # Maximum acceptable RUWE for good quality
+QUALITY_SCORE_SIGNIFICANCE_NORMALIZATION = 10.0  # Normalization factor for significance scores  
+QUALITY_SCORE_MAG_REFERENCE = 20.0           # Reference magnitude for brightness scoring
+
+# Parallax Quality Thresholds
+GAIA_PARALLAX_MIN_SIGNIFICANCE = 3.0         # Minimum significance for reliable parallax
+GAIA_PARALLAX_NORMALIZATION_FACTOR = 10.0    # Normalization for significance scoring
+GAIA_MAGNITUDE_NORMALIZATION_LIMIT = 20.0    # Faint magnitude limit for scoring
+PARALLAX_SOURCE_PRIORITY = {
     'gaia_dr3': 1,      # Highest priority: Gaia DR3
     'gaia': 2,          # Second: Gaia DR2 or earlier
     'hipparcos': 3,     # Third: Hipparcos

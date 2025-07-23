@@ -51,6 +51,26 @@ class DataValidationError(AstraKairosError):
     pass
 
 
+class PhysicalityValidationError(AstraKairosError):
+    """Raised when physicality validation cannot be completed."""
+    pass
+
+
+class ParallaxDataUnavailableError(AstraKairosError):
+    """Raised when parallax data cannot be retrieved or is insufficient."""
+    pass
+
+
+class GaiaQueryError(AstraKairosError):
+    """Raised when Gaia database queries fail."""
+    pass
+
+
+class InsufficientAstrometricDataError(AstraKairosError):
+    """Raised when insufficient astrometric data is available for analysis."""
+    pass
+
+
 class ElBadryCrossmatchError(AstraKairosError):
     """Raised when El-Badry catalog cross-matching fails."""
     pass

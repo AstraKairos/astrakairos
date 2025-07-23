@@ -318,8 +318,18 @@ class LocalDataSource(DataSource):
             query_columns += [col for col in error_columns if col in available_columns]
             query_columns += [col for col in metadata_columns if col in available_columns]
             
-            column_list = ', '.join(query_columns)
-            select_clause = column_list.replace('omega_arg', 'omega_arg as omega') if 'omega_arg' in query_columns else column_list
+            # Handle omega_arg -> omega alias properly
+            select_columns = []
+            for col in query_columns:
+                if col == 'omega_arg':
+                    select_columns.append('omega_arg as omega')
+                elif col == 'Omega':
+                    # Use a different alias to avoid confusion with omega
+                    select_columns.append('Omega as node_longitude')
+                else:
+                    select_columns.append(col)
+            
+            select_clause = ', '.join(select_columns)
             
             cursor = self.conn.execute(
                 f"SELECT {select_clause} FROM {ORBITAL_ELEMENTS_TABLE} WHERE wds_id = ?",
@@ -336,7 +346,13 @@ class LocalDataSource(DataSource):
             # Filter out None values only for non-error fields
             filtered_data = {}
             for k, v in data.items():
-                if k.startswith('e_') and k != 'e':  # Error fields (but not eccentricity 'e')
+                # Skip omega_arg if we have omega alias
+                if k == 'omega_arg' and 'omega' in data:
+                    continue
+                # Restore Omega from node_longitude alias
+                elif k == 'node_longitude':
+                    filtered_data['Omega'] = v
+                elif k.startswith('e_') and k != 'e':  # Error fields (but not eccentricity 'e')
                     # Keep error fields even if None - indicates missing uncertainty
                     filtered_data[k] = v
                 elif v is not None:
