@@ -11,10 +11,11 @@ import logging
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from astropy.table import Table
 
 from astrakairos.config import (
     DAYS_PER_JULIAN_YEAR, CENTURIES_PER_YEAR, MILLIARCSEC_PER_ARCSEC,
@@ -22,25 +23,38 @@ from astrakairos.config import (
     MIN_SEMIMAJOR_AXIS_ARCSEC, MAX_SEMIMAJOR_AXIS_ARCSEC,
     MIN_ECCENTRICITY, MAX_ECCENTRICITY,
     MIN_INCLINATION_DEG, MAX_INCLINATION_DEG,
-    TECHNIQUE_ERROR_MODEL, WDSS_MEASUREMENT_COLSPECS,
-    ORB6_ERROR_VALIDATION_THRESHOLDS
+    TECHNIQUE_ERROR_MODEL, WDSS_MEASUREMENT_COLSPECS, WDSS_COMPONENT_COLSPECS,
+    ORB6_ERROR_VALIDATION_THRESHOLDS, ORB6_COLSPECS, ORB6_COLUMN_NAMES,
+    GAIA_ID_PATTERN
+)
+from astrakairos.exceptions import (
+    CatalogParsingError, FileFormatError, DataValidationError, ElBadryCrossmatchError, ConversionProcessError
+)
+from astrakairos.utils.io import (
+    safe_int, safe_float, parse_wdss_coordinates, parse_wdss_coordinate_string
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 log = logging.getLogger(__name__)
 
 
-def parse_el_badry_catalog(filepath: str) -> Optional[pd.DataFrame]:
+def parse_el_badry_catalog(filepath: str) -> pd.DataFrame:
     """
     Parse the El-Badry et al. (2021) catalog from FITS format.
     
+    Args:
+        filepath: Path to the El-Badry FITS catalog
+        
     Returns:
         DataFrame with consistent column naming for cross-matching
+        
+    Raises:
+        CatalogParsingError: If catalog cannot be parsed
+        FileFormatError: If file format is invalid
     """
     try:
         log.info(f"Loading El-Badry catalog: {filepath}")
         
-        from astropy.table import Table
         el_badry_table = Table.read(filepath)
         df = el_badry_table.to_pandas()
         log.info(f"Loaded El-Badry catalog with {len(df)} binary systems")
@@ -49,8 +63,7 @@ def parse_el_badry_catalog(filepath: str) -> Optional[pd.DataFrame]:
         required_cols = ['source_id1', 'source_id2']
         missing_required = [col for col in required_cols if col not in df.columns]
         if missing_required:
-            log.error(f"El-Badry catalog missing required columns: {missing_required}")
-            return None
+            raise CatalogParsingError(f"El-Badry catalog missing required columns: {missing_required}")
         
         # Add missing optional columns with default values
         optional_cols = ['R_chance_align', 'binary_type']
@@ -78,17 +91,19 @@ def parse_el_badry_catalog(filepath: str) -> Optional[pd.DataFrame]:
         
         return df_cleaned
         
-    except ImportError:
-        log.error("astropy is required to read FITS files. Install with: pip install astropy")
-        return None
+    except ImportError as e:
+        raise CatalogParsingError("astropy is required to read FITS files. Install with: pip install astropy") from e
     except Exception as e:
-        log.error(f"Failed to load El-Badry catalog: {e}")
-        return None
+        raise CatalogParsingError(f"Failed to load El-Badry catalog: {e}") from e
 
 
 def perform_el_badry_crossmatch(df_components: pd.DataFrame, df_el_badry: pd.DataFrame) -> pd.DataFrame:
     """
     Perform pair-wise cross-match with El-Badry catalog using efficient pandas operations.
+    
+    Note: This cross-match specifically targets pairs with components labeled 'A' and 'B',
+    as this is the standard for primary binary systems in the WDSS catalog. Systems with
+    other component labels (C, D, etc.) are not included in the cross-match.
     
     Args:
         df_components: DataFrame of all components parsed from WDSS
@@ -96,350 +111,377 @@ def perform_el_badry_crossmatch(df_components: pd.DataFrame, df_el_badry: pd.Dat
     
     Returns:
         DataFrame with matched systems including El-Badry physicality data
+        
+    Raises:
+        ElBadryCrossmatchError: If cross-matching fails
     """
     log.info("Performing pair-wise cross-match with El-Badry catalog...")
     
-    # 1. Prepare components: extract Gaia IDs from A and B components only
-    df_comps = df_components[df_components['component'].isin(['A', 'B'])].copy()
-    # Robust regex to extract Gaia IDs from various formats
-    df_comps['gaia_id'] = df_comps['name'].str.extract(r'Gaia\s+(?:DR3|EDR3)?\s*(\d+)')[0]
-    df_comps.dropna(subset=['gaia_id'], inplace=True)
-    
-    # 2. Pivot to have A and B components in the same row - much cleaner than groupby
-    df_pairs = df_comps.pivot(index='wdss_id', columns='component', values='gaia_id').reset_index()
-    df_pairs.dropna(subset=['A', 'B'], inplace=True)
-    df_pairs.rename(columns={'A': 'gaia_id_A', 'B': 'gaia_id_B'}, inplace=True)
-
-    # 3. Create sorted pair key for both DataFrames
-    sorted_ids_wdss = np.sort(df_pairs[['gaia_id_A', 'gaia_id_B']].values, axis=1)
-    df_pairs['pair_id'] = [f"{id1}_{id2}" for id1, id2 in sorted_ids_wdss]
-
-    # 4. Perform the cross-match using inner join
-    df_matched = pd.merge(
-        df_pairs[['wdss_id', 'pair_id']],
-        df_el_badry[['pair_id', 'R_chance_align', 'binary_type']],
-        on='pair_id',
-        how='inner'  # Only keep matches
-    )
-    
-    df_matched['in_el_badry_catalog'] = True
-    log.info(f"Cross-match complete. Found {len(df_matched)} WDSS systems in El-Badry catalog.")
-    
-    return df_matched[['wdss_id', 'R_chance_align', 'binary_type', 'in_el_badry_catalog']]
-
-
-def cross_match_with_el_badry(df_components: pd.DataFrame, el_badry_filepath: str) -> pd.DataFrame:
-    """
-    Wrapper function for backwards compatibility with existing code.
-    
-    Returns:
-        DataFrame with El-Badry cross-match results
-    """
     try:
-        # Parse El-Badry catalog
-        df_el_badry = parse_el_badry_catalog(el_badry_filepath)
-        if df_el_badry is None:
+        # 1. Prepare components: extract Gaia IDs from A and B components only
+        df_comps = df_components[df_components['component'].isin(['A', 'B'])].copy()
+        # Robust regex to extract Gaia IDs from various formats
+        df_comps['gaia_id'] = df_comps['name'].str.extract(GAIA_ID_PATTERN)[0]
+        df_comps.dropna(subset=['gaia_id'], inplace=True)
+        
+        # 2. Pivot to have A and B components in the same row - much cleaner than groupby
+        df_pairs = df_comps.pivot(index='wdss_id', columns='component', values='gaia_id').reset_index()
+        
+        # Handle case where only A or B components exist (return empty result gracefully)
+        if 'A' not in df_pairs.columns or 'B' not in df_pairs.columns:
+            log.info("Insufficient component pairs for cross-matching (need both A and B components)")
             return pd.DataFrame(columns=['wdss_id', 'R_chance_align', 'binary_type', 'in_el_badry_catalog'])
         
-        # Perform cross-match
-        return perform_el_badry_crossmatch(df_components, df_el_badry)
+        df_pairs.dropna(subset=['A', 'B'], inplace=True)
+        df_pairs.rename(columns={'A': 'gaia_id_A', 'B': 'gaia_id_B'}, inplace=True)
+
+        # 3. Create sorted pair key for both DataFrames
+        sorted_ids_wdss = np.sort(df_pairs[['gaia_id_A', 'gaia_id_B']].values, axis=1)
+        df_pairs['pair_id'] = [f"{id1}_{id2}" for id1, id2 in sorted_ids_wdss]
+
+        # 4. Perform the cross-match using inner join
+        df_matched = pd.merge(
+            df_pairs[['wdss_id', 'pair_id']],
+            df_el_badry[['pair_id', 'R_chance_align', 'binary_type']],
+            on='pair_id',
+            how='inner'  # Only keep matches
+        )
+        
+        df_matched['in_el_badry_catalog'] = True
+        log.info(f"Cross-match complete. Found {len(df_matched)} WDSS systems in El-Badry catalog.")
+        
+        return df_matched[['wdss_id', 'R_chance_align', 'binary_type', 'in_el_badry_catalog']]
         
     except Exception as e:
-        log.error(f"Failed to cross-match with El-Badry catalog: {e}")
-        return pd.DataFrame(columns=['wdss_id', 'R_chance_align', 'binary_type', 'in_el_badry_catalog'])
+        raise ElBadryCrossmatchError(f"Failed to perform El-Badry cross-match: {e}") from e
 
 
-def detect_wds_format(filepath: str) -> dict:
-    """Auto-detect WDS file format by analyzing first few lines."""
-    log.info(f"Auto-detecting format for: {filepath}")
-    
-    with open(filepath, 'r') as f:
-        sample_lines = [f.readline().rstrip() for _ in range(10)]
-    
-    # Remove empty lines
-    sample_lines = [line for line in sample_lines if line.strip()]
-    
-    if not sample_lines:
-        raise ValueError("File appears to be empty")
-    
-    # Analyze line length and content patterns
-    line_lengths = [len(line) for line in sample_lines]
-    avg_length = sum(line_lengths) / len(line_lengths)
-    
-    log.info(f"Detected average line length: {avg_length:.1f}")
-    log.info(f"Sample line: {repr(sample_lines[0][:50])}")
-    
-    # Basic format detection based on typical WDS catalog characteristics
-    format_info = {
-        'avg_line_length': avg_length,
-        'sample_line': sample_lines[0],
-        'format_detected': 'unknown'
-    }
-    
-    if 130 <= avg_length <= 150:
-        format_info['format_detected'] = 'wds_summary'
-    elif 80 <= avg_length <= 120:
-        format_info['format_detected'] = 'measurements'  
-    elif avg_length > 200:
-        format_info['format_detected'] = 'orb6'
-    
-    log.info(f"Detected format: {format_info['format_detected']}")
-    return format_info
 
-
-def parse_wdss_master_catalog(filepath: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Parse WDSS master catalog into three clean DataFrames using optimized approach.
-    
-    This function reads the master WDSS file once and extracts all data types efficiently.
+def _parse_component_lines_vectorized(df_lines: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse component lines using vectorized operations with centralized column specs.
     
     Args:
-        filepath: Path to the master WDSS catalog file
+        df_lines: DataFrame with component lines
         
     Returns:
-        Tuple of (df_components, df_measurements, df_correspondence)
+        DataFrame with parsed component data
     """
-    log.info(f"Parsing WDSS master catalog: {filepath}")
+    # Reconstruct full lines for parsing
+    df_lines['full_line'] = df_lines['wdss_id'] + df_lines['component_pair'].str.ljust(3) + df_lines['data_rest']
     
-    components_data = []
-    measurements_data = []
-    correspondence_data = []
+    # Use centralized column specifications
+    cols = WDSS_COMPONENT_COLSPECS
     
-    # Use a set for fast correspondence lookup instead of list search
-    correspondence_seen = set()
+    # Extract all fields using vectorized string operations
+    df_components = pd.DataFrame({
+        'wdss_id': df_lines['wdss_id'].str.strip(),
+        'component': df_lines['component_clean'],
+        'date_first': df_lines['full_line'].str[cols['date_first'][0]:cols['date_first'][1]].apply(safe_int),
+        'n_obs': df_lines['full_line'].str[cols['n_obs'][0]:cols['n_obs'][1]].apply(safe_int),
+        'pa_first': df_lines['full_line'].str[cols['pa_first'][0]:cols['pa_first'][1]].apply(safe_float),
+        'sep_first': df_lines['full_line'].str[cols['sep_first'][0]:cols['sep_first'][1]].apply(safe_float),
+        'vmag': df_lines['full_line'].str[cols['vmag'][0]:cols['vmag'][1]].apply(safe_float),
+        'kmag': df_lines['full_line'].str[cols['kmag'][0]:cols['kmag'][1]].apply(safe_float),
+        'spectral_type': df_lines['full_line'].str[cols['spectral_type'][0]:cols['spectral_type'][1]].str.strip(),
+        'pm_ra': df_lines['full_line'].str[cols['pm_ra'][0]:cols['pm_ra'][1]].apply(safe_float),
+        'pm_dec': df_lines['full_line'].str[cols['pm_dec'][0]:cols['pm_dec'][1]].apply(safe_float),
+        'parallax': df_lines['full_line'].str[cols['parallax'][0]:cols['parallax'][1]].apply(safe_float),
+        'name': df_lines['full_line'].str[cols['name'][0]:cols['name'][1]].str.strip()
+    })
     
-    total_lines = 0
-    systems_processed = set()
+    # Parse coordinates vectorized
+    coordinates_str = df_lines['full_line'].str[cols['coordinates'][0]:cols['coordinates'][1]]
+    coords_parsed = coordinates_str.apply(parse_wdss_coordinate_string)
+    df_components['ra_deg'] = coords_parsed.apply(lambda x: x[0] if x else None)
+    df_components['dec_deg'] = coords_parsed.apply(lambda x: x[1] if x else None)
+    
+    # Fallback to WDSS ID coordinates if needed
+    missing_coords = (df_components['ra_deg'].isna()) | (df_components['dec_deg'].isna())
+    if missing_coords.any():
+        wdss_coords = df_components.loc[missing_coords, 'wdss_id'].apply(parse_wdss_coordinates)
+        df_components.loc[missing_coords, 'ra_deg'] = wdss_coords.apply(lambda x: x[0] if x else None)
+        df_components.loc[missing_coords, 'dec_deg'] = wdss_coords.apply(lambda x: x[1] if x else None)
+    
+    return df_components.dropna(subset=['wdss_id', 'component'])
+
+
+def _parse_measurement_lines_vectorized(df_lines: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse measurement lines using vectorized operations with centralized column specs.
+    
+    Args:
+        df_lines: DataFrame with measurement lines
+        
+    Returns:
+        DataFrame with parsed measurement data
+    """
+    # Reconstruct full lines for parsing
+    df_lines['full_line'] = df_lines['wdss_id'] + df_lines['component_pair'].str.ljust(8) + df_lines['data_rest']
+    
+    # Use centralized column specifications
+    cols = WDSS_MEASUREMENT_COLSPECS
+    
+    # Extract technique first for error estimation
+    technique_series = df_lines['full_line'].str[cols['technique'][0]:cols['technique'][1]].str.strip()
+    
+    # Extract all measurement fields
+    df_measurements = pd.DataFrame({
+        'wdss_id': df_lines['wdss_id'].str.strip(),
+        'pair': df_lines['component_clean'],
+        'epoch': df_lines['full_line'].str[cols['epoch'][0]:cols['epoch'][1]].apply(safe_float),
+        'theta': df_lines['full_line'].str[cols['theta'][0]:cols['theta'][1]].apply(safe_float),
+        'rho': df_lines['full_line'].str[cols['rho'][0]:cols['rho'][1]].apply(safe_float),
+        'mag1': df_lines['full_line'].str[cols['mag1'][0]:cols['mag1'][1]].apply(safe_float),
+        'mag2': df_lines['full_line'].str[cols['mag2'][0]:cols['mag2'][1]].apply(safe_float),
+        'reference': df_lines['full_line'].str[cols['reference'][0]:cols['reference'][1]].str.strip(),
+        'technique': technique_series
+    })
+    
+    # Extract explicit error columns
+    theta_error = df_lines['full_line'].str[cols['theta_error'][0]:cols['theta_error'][1]].apply(safe_float)
+    rho_error = df_lines['full_line'].str[cols['rho_error'][0]:cols['rho_error'][1]].apply(safe_float)
+    
+    # Set zero errors to None
+    theta_error = theta_error.replace(0.0, None)
+    rho_error = rho_error.replace(0.0, None)
+    
+    # Estimate errors from technique for missing values
+    technique_errors = technique_series.apply(estimate_uncertainty_from_technique)
+    est_theta_errors = technique_errors.apply(lambda x: x[0])
+    est_rho_errors = technique_errors.apply(lambda x: x[1])
+    
+    # Use explicit errors if available, otherwise use estimates
+    df_measurements['theta_error'] = theta_error.fillna(est_theta_errors)
+    df_measurements['rho_error'] = rho_error.fillna(est_rho_errors)
+    
+    # Flag error source
+    df_measurements['error_source'] = 'estimated'
+    df_measurements.loc[theta_error.notna() | rho_error.notna(), 'error_source'] = 'mixed'
+    df_measurements.loc[theta_error.notna() & rho_error.notna(), 'error_source'] = 'measured'
+    
+    return df_measurements.dropna(subset=['wdss_id', 'pair'])
+
+
+def _extract_correspondence_vectorized(df_lines: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extract WDS correspondence data from component lines using vectorized operations.
+    
+    Args:
+        df_lines: DataFrame with component lines
+        
+    Returns:
+        DataFrame with correspondence data (one per system)
+    """
+    # Reconstruct full lines for parsing
+    df_lines['full_line'] = df_lines['wdss_id'] + df_lines['component_pair'].str.ljust(3) + df_lines['data_rest']
+    
+    # Use centralized column specifications
+    cols = WDSS_COMPONENT_COLSPECS
+    
+    # Extract correspondence fields
+    wds_correspondence = df_lines['full_line'].str[cols['wds_correspondence'][0]:cols['wds_correspondence'][1]].str.strip()
+    discoverer_designation = df_lines['full_line'].str[cols['discoverer_designation'][0]:cols['discoverer_designation'][1]].str.strip()
+    
+    # Create correspondence DataFrame
+    df_correspondence = pd.DataFrame({
+        'wdss_id': df_lines['wdss_id'].str.strip(),
+        'wds_id': wds_correspondence,
+        'discoverer_designation': discoverer_designation
+    })
+    
+    # Filter out empty correspondences and keep only one per system
+    df_correspondence = df_correspondence[
+        (df_correspondence['wds_id'].notna()) & 
+        (df_correspondence['wds_id'] != '') & 
+        (~df_correspondence['wds_id'].str.isspace())
+    ]
+    
+    # Keep first occurrence per system
+    df_correspondence = df_correspondence.drop_duplicates(subset=['wdss_id'], keep='first')
+    
+    return df_correspondence
+
+
+def parse_wdss_master_catalog(filepath: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Parse the WDSS master catalog file to extract all data components.
+    
+    This function processes the complete WDSS master catalog file using
+    vectorized operations to efficiently extract stellar components,
+    orbital measurements, and WDS correspondence data.
+    
+    Args:
+        filepath: Path to the WDSS master catalog file
+        
+    Returns:
+        A tuple containing three DataFrames:
+            - df_components: Stellar component data (coordinates, magnitudes, 
+              spectral types, proper motions, parallax) indexed by wdss_id
+            - df_measurements: Orbital measurement data (epochs, position angles,
+              separations with uncertainties) indexed by wdss_id  
+            - df_correspondence: WDS-WDSS designation correspondence mapping
+              
+    Raises:
+        FileNotFoundError: If the catalog file doesn't exist
+        CatalogParsingError: If parsing fails or file format is invalid
+        
+    Note:
+        Uses vectorized string operations for optimal performance on large
+        catalog files. Assumes components A and B represent primary and
+        secondary stars for cross-matching purposes.
+    """
+    log.info(f"Parsing WDSS master catalog using pandas.read_fwf: {filepath}")
     
     try:
-        with open(filepath, 'r', encoding='latin-1') as f:
-            for line_num, line in enumerate(f, 1):
-                total_lines += 1
-                if total_lines % 100000 == 0:
-                    log.info(f"Processed {total_lines} lines, {len(systems_processed)} systems")
-                
-                # Skip empty lines and headers
-                if not line.strip() or line.startswith('=') or len(line) < 160:
-                    continue
-                
-                # Extract basic identifiers
-                wdss_id = line[0:14].strip()
-                component = line[15:18].strip()
-                
-                if not wdss_id:
-                    continue
-                
-                systems_processed.add(wdss_id)
-                
-                # Parse WDS correspondence efficiently (once per system)
-                wds_correspondence = None
-                discoverer_designation = None
-                if len(line) >= 147:
-                    wds_corr = line[137:147].strip()
-                    if wds_corr and wds_corr != '' and not wds_corr.isspace():
-                        wds_correspondence = wds_corr
-                
-                if len(line) >= 155:
-                    disc_des = line[148:155].strip()
-                    if disc_des and disc_des != '' and not disc_des.isspace():
-                        discoverer_designation = disc_des
-                
-                # Add correspondence mapping using set for O(1) lookup instead of O(N) list search
-                if wds_correspondence and wdss_id not in correspondence_seen:
-                    correspondence_seen.add(wdss_id)
-                    correspondence_data.append({
-                        'wdss_id': wdss_id,
-                        'wds_id': wds_correspondence,
-                        'discoverer_designation': discoverer_designation
-                    })
-                
-                # Determine line type and parse accordingly
-                if component and len(component) == 1 and component.isalpha():
-                    # Component line (A, B, C, etc.)
-                    comp_data = _parse_component_line_data(line, wdss_id, component)
-                    if comp_data:
-                        components_data.append(comp_data)
-                        
-                elif component and len(component) >= 2:
-                    # Measurement line (AB, AC, BC, etc.)
-                    meas_data = _parse_measurement_line_data(line, wdss_id, component)
-                    if meas_data:
-                        measurements_data.append(meas_data)
+        # Read the entire file using pandas.read_fwf with minimal column specification
+        # We use very broad columns to capture all data, then post-process
+        basic_colspecs = [
+            (0, 14),    # wdss_id
+            (15, 18),   # component/pair  
+            (18, 160)   # rest of data
+        ]
         
-        log.info(f"Extracted {len(components_data)} components, {len(measurements_data)} measurements, {len(correspondence_data)} correspondences")
+        df_raw = pd.read_fwf(
+            filepath, 
+            colspecs=basic_colspecs, 
+            names=['wdss_id', 'component_pair', 'data_rest'],
+            dtype=str,
+            encoding='latin-1',
+            comment='=',  # Skip header lines
+            skip_blank_lines=True
+        )
         
-        # Convert to DataFrames efficiently
-        df_components = pd.DataFrame(components_data)
-        df_measurements = pd.DataFrame(measurements_data)
-        df_correspondence = pd.DataFrame(correspondence_data)
+        # Filter out invalid lines
+        df_raw = df_raw.dropna(subset=['wdss_id'])
+        df_raw = df_raw[df_raw['wdss_id'].str.strip() != '']
+        df_raw = df_raw[df_raw['data_rest'].str.len() >= 100]  # Minimum line length
         
-        log.info(f"Created DataFrames from {total_lines} input lines")
+        log.info(f"Read {len(df_raw)} valid lines from WDSS catalog")
+        
+        # Separate component lines (single letter) from measurement lines (2+ letters)
+        df_raw['component_clean'] = df_raw['component_pair'].str.strip()
+        
+        component_mask = (df_raw['component_clean'].str.len() == 1) & df_raw['component_clean'].str.isalpha()
+        measurement_mask = (df_raw['component_clean'].str.len() >= 2) & df_raw['component_clean'].str.isalpha()
+        
+        df_component_lines = df_raw[component_mask].copy()
+        df_measurement_lines = df_raw[measurement_mask].copy()
+        
+        log.info(f"Separated {len(df_component_lines)} component lines and {len(df_measurement_lines)} measurement lines")
+        
+        # Parse component lines using centralized column specifications
+        df_components = _parse_component_lines_vectorized(df_component_lines)
+        
+        # Parse measurement lines using centralized column specifications  
+        df_measurements = _parse_measurement_lines_vectorized(df_measurement_lines)
+        
+        # Extract correspondence data from component lines (one per system)
+        df_correspondence = _extract_correspondence_vectorized(df_component_lines)
+        
+        log.info(f"Extracted {len(df_components)} components, {len(df_measurements)} measurements, {len(df_correspondence)} correspondences")
+        
         return df_components, df_measurements, df_correspondence
         
+    except pd.errors.EmptyDataError:
+        raise FileFormatError(f"File {filepath} is empty or contains no valid data")
     except Exception as e:
-        log.error(f"Failed to parse WDSS master catalog: {e}")
-        raise
+        raise CatalogParsingError(f"Failed to parse WDSS master catalog {filepath}: {e}") from e
 
 
-def _parse_component_line_data(line: str, wdss_id: str, component: str) -> dict:
-    """Extract component data from a WDSS component line."""
-    try:
-        # Parse coordinates from line (cols 119-136)
-        coordinates = line[118:136].strip() if len(line) > 136 else ''
-        ra_deg, dec_deg = parse_coordinates(coordinates)
-        
-        # Fallback to WDSS ID coordinates if needed
-        if ra_deg is None or dec_deg is None:
-            ra_deg, dec_deg = parse_wdss_coordinates(wdss_id)
-        
-        return {
-            'wdss_id': wdss_id,
-            'component': component,
-            'date_first': safe_int(line[24:28]),
-            'n_obs': safe_int(line[29:32]),
-            'pa_first': safe_float(line[33:36]),
-            'sep_first': safe_float(line[37:43]),
-            'vmag': safe_float(line[45:50]),
-            'kmag': safe_float(line[52:57]),
-            'spectral_type': line[59:64].strip() if len(line) > 64 else '',
-            'pm_ra': safe_float(line[65:73]) if len(line) > 73 else None,
-            'pm_dec': safe_float(line[73:81]) if len(line) > 81 else None,
-            'parallax': safe_float(line[82:89]) if len(line) > 89 else None,
-            'name': line[90:114].strip() if len(line) > 114 else '',
-            'ra_deg': ra_deg,
-            'dec_deg': dec_deg
-        }
-    except Exception as e:
-        log.debug(f"Error parsing component line: {e}")
-        return None
-
-
-def _parse_measurement_line_data(line: str, wdss_id: str, pair: str) -> dict:
-    """Extract measurement data from a WDSS measurement line with error columns."""
-    try:
-        # Use centralized column specifications
-        cols = WDSS_MEASUREMENT_COLSPECS
-        
-        # Extract technique first for error estimation
-        technique = line[cols['technique'][0]:cols['technique'][1]].strip() if len(line) > cols['technique'][1] else ''
-        
-        # Basic measurement data
-        data = {
-            'wdss_id': wdss_id,
-            'pair': pair,
-            'epoch': safe_float(line[cols['epoch'][0]:cols['epoch'][1]]),
-            'theta': safe_float(line[cols['theta'][0]:cols['theta'][1]]),
-            'rho': safe_float(line[cols['rho'][0]:cols['rho'][1]]),
-            'mag1': safe_float(line[cols['mag1'][0]:cols['mag1'][1]]),
-            'mag2': safe_float(line[cols['mag2'][0]:cols['mag2'][1]]),
-            'reference': line[cols['reference'][0]:cols['reference'][1]].strip() if len(line) > cols['reference'][1] else '',
-            'technique': technique
-        }
-        
-        # Extract explicit error columns when available
-        theta_error = None
-        if len(line) >= cols['theta_error'][1]:
-            theta_error = safe_float(line[cols['theta_error'][0]:cols['theta_error'][1]])
-            if theta_error == 0.0:
-                theta_error = None
-                
-        rho_error = None
-        if len(line) >= cols['rho_error'][1]:
-            rho_error = safe_float(line[cols['rho_error'][0]:cols['rho_error'][1]])
-            if rho_error == 0.0:
-                rho_error = None
-        
-        # If no explicit errors, estimate from technique
-        if theta_error is None or rho_error is None:
-            est_theta_err, est_rho_err = estimate_uncertainty_from_technique(technique)
-            
-            # Use explicit errors if available, otherwise use estimates
-            data['theta_error'] = theta_error if theta_error is not None else est_theta_err
-            data['rho_error'] = rho_error if rho_error is not None else est_rho_err
-            
-            # Flag whether errors are estimated vs measured
-            data['error_source'] = 'mixed' if (theta_error is not None or rho_error is not None) else 'estimated'
-        else:
-            data['theta_error'] = theta_error
-            data['rho_error'] = rho_error  
-            data['error_source'] = 'measured'
-            
-        return data
-        
-    except Exception as e:
-        log.debug(f"Error parsing measurement line: {e}")
-        return None
-
-
-
-
-
-def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.DataFrame, 
-                          df_correspondence: pd.DataFrame, df_el_badry: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+def _aggregate_measurements(df_measurements: pd.DataFrame) -> pd.DataFrame:
     """
-    Generate the summary table with integrated El-Badry cross-matching.
-    
-    Now performs pair-wise cross-matching with the El-Badry catalog for maximum accuracy,
-    rather than individual component matching. This ensures 100% precision in identifying
-    systems that are truly in the gold-standard catalog.
+    Aggregate measurement data with error propagation.
     
     Args:
-        df_components: Component data from WDSS catalogs
-        df_measurements: Measurement data from WDSS catalogs
-        df_correspondence: WDS-WDSS correspondence mapping
-        df_el_badry: El-Badry catalog data with matched pairs (optional)
-    
+        df_measurements: DataFrame with measurement data
+        
     Returns:
-        DataFrame with summary data and El-Badry enrichment
+        DataFrame with aggregated measurements indexed by wdss_id
     """
-    log.info("Generating summary table using vectorized operations with error propagation")
-
-    # 1. Aggregate measurements using groupby with error propagation
-    if not df_measurements.empty:
-        agg_measurements = (
-            df_measurements.sort_values(['wdss_id', 'epoch'])
-            .groupby('wdss_id')
-            .agg(
-                date_first=('epoch', 'first'),
-                date_last=('epoch', 'last'),
-                n_obs=('epoch', 'count'),
-                pa_first=('theta', 'first'),
-                pa_last=('theta', 'last'),
-                sep_first=('rho', 'first'),
-                sep_last=('rho', 'last'),
-                pa_first_error=('theta_error', 'first'),    # Add error aggregation
-                pa_last_error=('theta_error', 'last'),      # Add error aggregation
-                sep_first_error=('rho_error', 'first'),     # Add error aggregation
-                sep_last_error=('rho_error', 'last')        # Add error aggregation
-            )
+    if df_measurements.empty:
+        return pd.DataFrame(columns=['wdss_id']).set_index('wdss_id')
+    
+    return (
+        df_measurements.sort_values(['wdss_id', 'epoch'])
+        .groupby('wdss_id')
+        .agg(
+            date_first=('epoch', 'first'),
+            date_last=('epoch', 'last'),
+            n_obs=('epoch', 'count'),
+            pa_first=('theta', 'first'),
+            pa_last=('theta', 'last'),
+            sep_first=('rho', 'first'),
+            sep_last=('rho', 'last'),
+            pa_first_error=('theta_error', 'first'),
+            pa_last_error=('theta_error', 'last'),
+            sep_first_error=('rho_error', 'first'),
+            sep_last_error=('rho_error', 'last')
         )
-    else:
-        agg_measurements = pd.DataFrame(columns=['wdss_id']).set_index('wdss_id')
+    )
 
-    # 2. Pivot component data from long to wide format
-    if not df_components.empty:
-        # Select only primary (A) and secondary (B) for simplicity
-        df_ab = df_components[df_components['component'].isin(['A', 'B'])]
-        
-        # Remove duplicates - keep first occurrence of each component per system
-        df_ab = df_ab.drop_duplicates(subset=['wdss_id', 'component'], keep='first')
-        
-        df_wide_components = df_ab.pivot(
-            index='wdss_id', 
-            columns='component', 
-            values=['vmag', 'kmag', 'spectral_type', 'ra_deg', 'dec_deg', 'pm_ra', 'pm_dec', 'parallax', 'name']
-        )
-        # Flatten the multi-level column index
-        df_wide_components.columns = [f'{val}_{comp}' for val, comp in df_wide_components.columns]
-    else:
-        df_wide_components = pd.DataFrame(columns=['wdss_id']).set_index('wdss_id')
 
-    # 3. Merge all data sources together
-    # Start with the aggregated measurements, then join everything else
+def _pivot_components(df_components: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pivot component data from long to wide format.
+    
+    Args:
+        df_components: DataFrame with component data
+        
+    Returns:
+        DataFrame with pivoted component data indexed by wdss_id
+    """
+    if df_components.empty:
+        return pd.DataFrame(columns=['wdss_id']).set_index('wdss_id')
+    
+    # Select only primary (A) and secondary (B) for simplicity
+    df_ab = df_components[df_components['component'].isin(['A', 'B'])]
+    
+    # Remove duplicates - keep first occurrence of each component per system
+    df_ab = df_ab.drop_duplicates(subset=['wdss_id', 'component'], keep='first')
+    
+    df_wide_components = df_ab.pivot(
+        index='wdss_id', 
+        columns='component', 
+        values=['vmag', 'kmag', 'spectral_type', 'ra_deg', 'dec_deg', 'pm_ra', 'pm_dec', 'parallax', 'name']
+    )
+    # Flatten the multi-level column index
+    df_wide_components.columns = [f'{val}_{comp}' for val, comp in df_wide_components.columns]
+    
+    return df_wide_components
+
+
+def _merge_data_sources(agg_measurements: pd.DataFrame, wide_components: pd.DataFrame, 
+                       df_correspondence: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge all data sources together.
+    
+    Args:
+        agg_measurements: Aggregated measurement data
+        wide_components: Pivoted component data
+        df_correspondence: WDS correspondence data
+        
+    Returns:
+        DataFrame with merged data
+    """
     df_summary = agg_measurements
-    df_summary = df_summary.join(df_wide_components, how='outer')
+    df_summary = df_summary.join(wide_components, how='outer')
     df_summary = df_summary.join(df_correspondence.set_index('wdss_id'), how='left')
+    
+    return df_summary
 
-    # 4. **NEW**: Enriching summary table with El-Badry physicality data using pair-wise matching
+
+def _enrich_with_el_badry_data(df_summary: pd.DataFrame, df_el_badry: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """
+    Enrich summary table with El-Badry physicality data.
+    
+    Args:
+        df_summary: Summary DataFrame to enrich
+        df_el_badry: El-Badry catalog data (optional)
+        
+    Returns:
+        DataFrame enriched with El-Badry data
+    """
     log.info("Enriching summary table with El-Badry physicality data...")
     
     if df_el_badry is not None and not df_el_badry.empty:
@@ -464,10 +506,26 @@ def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.Data
         df_summary['R_chance_align'] = np.nan
         df_summary['binary_type'] = None
         df_summary['in_el_badry_catalog'] = False
+    
+    return df_summary
 
+
+def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
+    """
+    Finalize columns and rename for SQLite schema compatibility.
+    
+    Args:
+        df_summary: Summary DataFrame to finalize
+        
+    Returns:
+        DataFrame with finalized column structure
+    """
     df_summary.reset_index(inplace=True)
 
-    # 5. Finalize columns and rename for SQLite schema
+    # The LocalDataSource expects specific column names for compatibility:
+    # - 'vmag' for primary magnitude (from pivoted 'vmag_A')
+    # - 'kmag' for secondary magnitude (from pivoted 'vmag_B')
+    # - Primary component data (A) becomes the default for coordinates and stellar properties
     df_summary.rename(columns={
         'wds_id': 'wds_correspondence', # from correspondence merge
         'vmag_A': 'vmag',              # LocalDataSource expects 'vmag as mag_pri'
@@ -498,105 +556,48 @@ def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.Data
         if col not in df_summary.columns:
             df_summary[col] = np.nan
     
-    log.info(f"Generated summary table with {len(df_summary)} systems")
     return df_summary[final_cols]
 
-def parse_coordinates(coord_str: str) -> tuple:
-    """Parse WDSS coordinate string to decimal degrees."""
-    if not coord_str or len(coord_str) < 17:
-        return None, None
+
+def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.DataFrame, 
+                          df_correspondence: pd.DataFrame, df_el_badry: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """
+    Generate the summary table with integrated El-Badry cross-matching.
     
-    try:
-        # RA: hhmmss.ss (positions 0-8)
-        ra_str = coord_str[0:9].strip()
-        if len(ra_str) >= 6:
-            hours = int(ra_str[0:2])
-            minutes = int(ra_str[2:4])
-            seconds = float(ra_str[4:]) if len(ra_str) > 4 else 0.0
-            ra_deg = (hours + minutes/60.0 + seconds/3600.0) * 15.0
-        else:
-            ra_deg = None
-        
-        # Dec: +ddmmss.s (positions 9-17)
-        dec_str = coord_str[9:18].strip()
-        if len(dec_str) >= 6:
-            sign = -1 if dec_str[0] == '-' else 1
-            degrees = int(dec_str[1:3])
-            minutes = int(dec_str[3:5])
-            seconds = float(dec_str[5:]) if len(dec_str) > 5 else 0.0
-            dec_deg = sign * (degrees + minutes/60.0 + seconds/3600.0)
-        else:
-            dec_deg = None
-        
-        return ra_deg, dec_deg
-        
-    except Exception:
-        return None, None
-
-
-def parse_wdss_coordinates(wdss_id: str) -> tuple:
-    """Parse coordinates from WDSS identifier (first 14 chars)."""
-    if not wdss_id or len(wdss_id) < 14:
-        return None, None
+    Now performs pair-wise cross-matching with the El-Badry catalog for maximum accuracy,
+    rather than individual component matching. This ensures 100% precision in identifying
+    systems that are truly in the gold-standard catalog.
     
-    try:
-        # Format: HHMMSss+DDMMss or HHMMSss-DDMMss
-        coord_part = wdss_id[:14]
-        
-        # Find the sign position
-        sign_pos = -1
-        for i, char in enumerate(coord_part):
-            if char in ['+', '-']:
-                sign_pos = i
-                break
-        
-        if sign_pos == -1:
-            return None, None
-        
-        # Parse RA part (before sign)
-        ra_str = coord_part[:sign_pos]
-        if len(ra_str) >= 6:
-            hours = int(ra_str[0:2])
-            minutes = int(ra_str[2:4])
-            seconds = int(ra_str[4:6]) if len(ra_str) >= 6 else 0
-            ra_deg = (hours + minutes/60.0 + seconds/3600.0) * 15.0
-        else:
-            ra_deg = None
-        
-        # Parse Dec part (after sign)
-        dec_str = coord_part[sign_pos:]
-        if len(dec_str) >= 6:
-            sign = -1 if dec_str[0] == '-' else 1
-            degrees = int(dec_str[1:3])
-            minutes = int(dec_str[3:5])
-            seconds = int(dec_str[5:7]) if len(dec_str) >= 7 else 0
-            dec_deg = sign * (degrees + minutes/60.0 + seconds/3600.0)
-        else:
-            dec_deg = None
-        
-        return ra_deg, dec_deg
-        
-    except Exception:
-        return None, None
+    Args:
+        df_components: Component data from WDSS catalogs
+        df_measurements: Measurement data from WDSS catalogs
+        df_correspondence: WDS-WDSS correspondence mapping
+        df_el_badry: El-Badry catalog data with matched pairs (optional)
+    
+    Returns:
+        DataFrame with summary data and El-Badry enrichment
+    """
+    log.info("Generating summary table using vectorized operations with error propagation")
 
+    # 1. Aggregate measurements using groupby with error propagation
+    agg_measurements = _aggregate_measurements(df_measurements)
 
-def safe_int(s: str) -> Optional[int]:
-    """Safely convert string to int, returning None on error."""
-    try:
-        return int(s.strip()) if s.strip() else None
-    except (ValueError, AttributeError):
-        return None
+    # 2. Pivot component data from long to wide format
+    wide_components = _pivot_components(df_components)
 
+    # 3. Merge all data sources together
+    df_summary = _merge_data_sources(agg_measurements, wide_components, df_correspondence)
 
-def safe_float(s: str) -> Optional[float]:
-    """Safely convert string to float, returning None on error."""
-    try:
-        return float(s.strip()) if s.strip() else None
-    except (ValueError, AttributeError):
-        return None
+    # 4. Enrich with El-Badry physicality data using pair-wise matching
+    df_summary = _enrich_with_el_badry_data(df_summary, df_el_badry)
 
+    # 5. Finalize and rename columns for schema compatibility
+    df_summary = _finalize_and_rename_columns(df_summary)
+    
+    log.info(f"Generated summary table with {len(df_summary)} systems")
+    return df_summary
 
-def estimate_uncertainty_from_technique(technique: str) -> tuple[float, float]:
+def estimate_uncertainty_from_technique(technique: str) -> Tuple[float, float]:
     """
     Estimate positional uncertainties based on observation technique.
     
@@ -631,37 +632,23 @@ def parse_orb6_catalog(filepath: str) -> pd.DataFrame:
     This function reads orbital elements and their formal errors, which are
     interleaved in a single line per record.
     
-    Based on orb6format.txt documentation with correct column specifications.
+    Based on orb6format.txt documentation with centralized column specifications.
+    
+    Args:
+        filepath: Path to the ORB6 catalog file
+        
+    Returns:
+        DataFrame with processed orbital elements
+        
+    Raises:
+        CatalogParsingError: If parsing fails
+        FileFormatError: If file format is invalid
     """
     log.info(f"Parsing ORB6 catalog: {filepath}")
 
-    # Column specifications (1-based index from documentation, converted to 0-based for pandas)
-    colspecs = [
-        (19, 29),   # WDS designation
-        (81, 93),   # Period (P) string with unit
-        (94, 105),  # Error in P
-        (105, 117), # Semi-major axis (a) string with unit
-        (116, 125), # Error in a
-        (125, 134), # Inclination (i)
-        (134, 143), # Error in i
-        (143, 154), # Node (Omega) string with flag
-        (153, 162), # Error in Omega
-        (162, 177), # Time of periastron (T) string with unit
-        (176, 187), # Error in T
-        (187, 196), # Eccentricity (e)
-        (196, 205), # Error in e
-        (205, 215), # Longitude of periastron (omega) string with flag
-        (214, 223), # Error in omega
-        (233, 235), # Orbit grade
-    ]
-
-    names = [
-        'wds_id', 'P_str', 'e_P', 'a_str', 'e_a', 'i_str', 'e_i', 'Omega_str', 
-        'e_Omega', 'T_str', 'e_T', 'e_str', 'e_e', 'omega_str', 'e_omega_arg', 'grade'
-    ]
-
     try:
-        df = pd.read_fwf(filepath, colspecs=colspecs, names=names, 
+        # Use centralized column specifications from config
+        df = pd.read_fwf(filepath, colspecs=ORB6_COLSPECS, names=ORB6_COLUMN_NAMES, 
                          comment='R',  # Ignore header/ruler lines
                          dtype=str)   # Read everything as text for robust manual control
         
@@ -671,14 +658,12 @@ def parse_orb6_catalog(filepath: str) -> pd.DataFrame:
         df.dropna(subset=['wds_id'], inplace=True)
         df['wds_id'] = df['wds_id'].str.strip()
 
-        # --- Processing values and errors ---
-        
         # Convert numeric columns and error columns to float
         numeric_cols = ['i_str', 'e_i', 'e_str', 'e_e', 'e_P', 'e_a', 'e_Omega', 'e_T', 'e_omega_arg', 'grade']
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # --- Processing fields with units/flags ---
+        # Processing fields with units/flags
         
         # Period (P)
         df['P'] = pd.to_numeric(df['P_str'].str.rstrip('ydc'), errors='coerce')
@@ -737,8 +722,7 @@ def parse_orb6_catalog(filepath: str) -> pd.DataFrame:
         return df[final_cols]
 
     except Exception as e:
-        log.error(f"Failed to parse ORB6 catalog: {e}")
-        raise
+        raise CatalogParsingError(f"Failed to parse ORB6 catalog: {e}") from e
 
 
 # Removed parse_wds_measurements_catalog - functionality integrated into parse_wdss_master_catalog
@@ -847,6 +831,34 @@ def create_sqlite_database(df_wds: pd.DataFrame, df_orb6: pd.DataFrame,
 
 
 def main():
+    """
+    Main entry point for converting WDSS catalogs to SQLite database.
+    
+    This function coordinates the complete conversion pipeline:
+    1. Parses command line arguments for input/output paths
+    2. Loads and processes WDSS catalog files using vectorized operations
+    3. Optionally cross-matches with El-Badry binary catalog for physicality
+    4. Parses ORB6 orbital elements catalog
+    5. Applies physical validation and data quality checks
+    6. Creates optimized SQLite database with proper indexing
+    
+    The resulting database contains three main tables:
+    - summary: Aggregated stellar component and measurement data
+    - orb6: Orbital elements from published orbits
+    - measurements: Individual epoch measurements with uncertainties
+    
+    Command line arguments:
+        --wdss-files: Paths to WDSS catalog files (required)
+        --orb6: Path to ORB6 orbital elements catalog (required)
+        --output: Output SQLite database path (required)
+        --force: Overwrite existing database (optional)
+        --el-badry-file: El-Badry binary catalog for cross-matching (optional)
+        
+    Raises:
+        SystemExit: On argument parsing errors or file processing failures
+        FileNotFoundError: If required input files don't exist
+        PermissionError: If output database cannot be created
+    """
     parser = argparse.ArgumentParser(description='Convert WDSS catalogs to SQLite')
     parser.add_argument('--wdss-files', required=True, nargs='+', help='Paths to WDSS catalog files (e.g., wdss1.txt wdss2.txt wdss3.txt wdss4.txt)')
     parser.add_argument('--orb6', required=True, help='Path to ORB6 catalog')
@@ -858,8 +870,7 @@ def main():
     
     # Check if output exists
     if Path(args.output).exists() and not args.force:
-        log.error(f"Output file {args.output} already exists. Use --force to overwrite.")
-        sys.exit(1)
+        raise ConversionProcessError(f"Output file {args.output} already exists. Use --force to overwrite.")
     
     try:
         # Parse multiple WDSS files and combine them
@@ -893,7 +904,8 @@ def main():
         # Cross-match with El-Badry catalog if provided
         if args.el_badry_file:
             log.info("Cross-matching with El-Badry catalog using improved pair-wise matching...")
-            df_el_badry_data = cross_match_with_el_badry(combined_components, args.el_badry_file)
+            df_el_badry = parse_el_badry_catalog(args.el_badry_file)
+            df_el_badry_data = perform_el_badry_crossmatch(combined_components, df_el_badry)
         else:
             log.info("No El-Badry catalog provided, skipping cross-match")
             df_el_badry_data = None
@@ -912,10 +924,15 @@ def main():
         
         log.info("Conversion completed successfully!")
         
+    except (CatalogParsingError, FileFormatError, DataValidationError, ElBadryCrossmatchError) as e:
+        raise ConversionProcessError(f"Catalog processing failed: {e}") from e
     except Exception as e:
-        log.error(f"Conversion failed: {e}")
-        sys.exit(1)
+        raise ConversionProcessError(f"Unexpected error during conversion: {e}") from e
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except ConversionProcessError as e:
+        log.error(f"Conversion failed: {e}")
+        sys.exit(1)

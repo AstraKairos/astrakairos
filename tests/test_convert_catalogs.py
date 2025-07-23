@@ -9,48 +9,21 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
 from scripts.convert_catalogs_to_sqlite import (
-    detect_wds_format,
-    parse_coordinates,
-    parse_wdss_coordinates,
-    safe_int,
-    safe_float,
     estimate_uncertainty_from_technique,
     apply_physical_validation,
     create_sqlite_database,
     generate_summary_table
 )
+from astrakairos.utils.io import (
+    parse_wdss_coordinate_string,
+    parse_wdss_coordinates,
+    safe_int,
+    safe_float
+)
 
 
-class TestWDSFormatDetection:
-    """Test WDS file format detection."""
-    
-    def test_detect_wds_format_with_sample_file(self):
-        """Test format detection with sample data."""
-        # Create a temporary file with WDSS format
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
-            f.write("00039+4018STF  60AB  C 2000.0120  21.4  90.8  10.11  11.30     I   2\n")
-            f.write("00039+4018STF  60AB  C 2001.0120  21.5  90.9  10.11  11.30     I   2\n")
-            temp_path = f.name
-        
-        try:
-            result = detect_wds_format(temp_path)
-            
-            # Should return a dictionary with format information
-            assert isinstance(result, dict)
-            
-        finally:
-            Path(temp_path).unlink()  # Clean up
-    
-    def test_detect_wds_format_empty_file(self):
-        """Test format detection with empty file."""
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
-            temp_path = f.name
-        
-        try:
-            with pytest.raises(ValueError, match="File appears to be empty"):
-                detect_wds_format(temp_path)
-        finally:
-            Path(temp_path).unlink()
+# Note: TestWDSFormatDetection removed as detect_wds_format function was eliminated
+# The format detection was unnecessary since files are explicitly categorized by CLI arguments
 
 
 class TestCoordinateParsing:
@@ -66,7 +39,7 @@ class TestCoordinateParsing:
         ]
         
         for coord_str in test_cases:
-            result = parse_coordinates(coord_str)
+            result = parse_wdss_coordinate_string(coord_str)
             assert isinstance(result, tuple)
             assert len(result) == 2  # Should return (ra, dec)
     
@@ -319,7 +292,7 @@ class TestErrorHandling:
         for coord in invalid_coords:
             # Should handle gracefully, not crash
             try:
-                result = parse_coordinates(coord)
+                result = parse_wdss_coordinate_string(coord)
                 # If it returns something, should be a tuple
                 if result is not None:
                     assert isinstance(result, tuple)

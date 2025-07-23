@@ -13,7 +13,7 @@ import os
 from unittest.mock import patch, Mock
 from pathlib import Path
 
-from scripts.convert_catalogs_to_sqlite import cross_match_with_el_badry
+from scripts.convert_catalogs_to_sqlite import parse_el_badry_catalog, perform_el_badry_crossmatch
 
 
 class TestElBadryCrossMatch:
@@ -42,8 +42,9 @@ class TestElBadryCrossMatch:
             mock_table.to_pandas.return_value = mock_el_badry_data
             mock_read.return_value = mock_table
             
-            # Run cross-match
-            result = cross_match_with_el_badry(df_components, 'fake_path.fits')
+            # Run cross-match using the new two-step approach
+            df_el_badry = parse_el_badry_catalog('fake_path.fits')
+            result = perform_el_badry_crossmatch(df_components, df_el_badry)
             
             # Verify results - updated for refactored function
             assert not result.empty
@@ -77,7 +78,8 @@ class TestElBadryCrossMatch:
             mock_table.to_pandas.return_value = mock_el_badry_data
             mock_read.return_value = mock_table
             
-            result = cross_match_with_el_badry(df_components, 'fake_path.fits')
+            df_el_badry = parse_el_badry_catalog('fake_path.fits')
+            result = perform_el_badry_crossmatch(df_components, df_el_badry)
             
             # Should return empty DataFrame with correct columns
             assert result.empty
@@ -102,12 +104,10 @@ class TestElBadryCrossMatch:
             return original_import(name, *args, **kwargs)
         
         with patch.object(builtins, '__import__', side_effect=mock_import):
-            result = cross_match_with_el_badry(df_components, 'fake_path.fits')
-            
-            # Should return empty DataFrame with correct columns
-            assert result.empty
-            assert 'wdss_id' in result.columns
-            assert 'in_el_badry_catalog' in result.columns
+            # Should raise CatalogParsingError
+            from astrakairos.exceptions import CatalogParsingError
+            with pytest.raises(CatalogParsingError):
+                parse_el_badry_catalog('fake_path.fits')
 
     def test_cross_match_file_error(self):
         """Test cross-match when El-Badry file cannot be read."""
@@ -121,12 +121,10 @@ class TestElBadryCrossMatch:
             # Simulate file read error
             mock_read.side_effect = FileNotFoundError("File not found")
             
-            result = cross_match_with_el_badry(df_components, 'nonexistent_path.fits')
-            
-            # Should return empty DataFrame with correct columns
-            assert result.empty
-            assert 'wdss_id' in result.columns
-            assert 'in_el_badry_catalog' in result.columns
+            # Should raise CatalogParsingError
+            from astrakairos.exceptions import CatalogParsingError
+            with pytest.raises(CatalogParsingError):
+                parse_el_badry_catalog('nonexistent_path.fits')
 
     def test_gaia_id_parsing(self):
         """Test various Gaia ID parsing scenarios."""
@@ -158,7 +156,8 @@ class TestElBadryCrossMatch:
             mock_table.to_pandas.return_value = mock_el_badry_data
             mock_read.return_value = mock_table
             
-            result = cross_match_with_el_badry(df_components, 'fake_path.fits')
+            df_el_badry = parse_el_badry_catalog('fake_path.fits')
+            result = perform_el_badry_crossmatch(df_components, df_el_badry)
             
             # Should match the first 3 systems (all with proper Gaia A/B pairs)
             assert len(result) == 3

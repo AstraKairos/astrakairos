@@ -23,7 +23,7 @@ Dependencies:
 import numpy as np
 import logging
 from typing import Dict, Tuple, Optional, List, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 # Centralized configuration imports for consistency
 from ..config import (
@@ -41,8 +41,14 @@ from ..config import (
     # Parallax source priority
     PARALLAX_SOURCE_PRIORITY,
     # Monte Carlo limits
-    MASS_MC_MIN_SAMPLES, MASS_MC_MAX_SAMPLES, MASS_MC_CONVERGENCE_THRESHOLD
+    MASS_MC_MIN_SAMPLES, MASS_MC_MAX_SAMPLES, MASS_MC_CONVERGENCE_THRESHOLD,
+    # Quality assessment parameters
+    MAX_QUALITY_PENALTY_FACTOR, LARGE_PARALLAX_UNCERTAINTY_THRESHOLD,
+    PARALLAX_SOURCE_QUALITY
 )
+
+# Import custom exceptions
+from ..exceptions import InvalidMassInputError, NumericalInstabilityError
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -70,7 +76,7 @@ def _validate_mass_inputs(
     period_error: float = 0.0,
     semimajor_axis_error: float = 0.0,
     parallax_error: float = 0.0
-) -> Tuple[bool, List[str]]:
+) -> List[str]:
     """
     Validate inputs for mass calculation.
     
@@ -81,43 +87,40 @@ def _validate_mass_inputs(
         *_error: Uncertainties (1-sigma)
         
     Returns:
-        Tuple of (is_valid, warning_list)
+        List of warning messages
+        
+    Raises:
+        InvalidMassInputError: If any input is outside valid ranges
     """
     warnings = []
-    is_valid = True
     
     # Basic range validation
     if not (MIN_PERIOD_YEARS <= period_years <= MAX_PERIOD_YEARS):
-        logger.error(f"Period {period_years:.3f} years outside valid range [{MIN_PERIOD_YEARS}, {MAX_PERIOD_YEARS}]")
-        is_valid = False
+        raise InvalidMassInputError(f"Period {period_years:.3f} years outside valid range [{MIN_PERIOD_YEARS}, {MAX_PERIOD_YEARS}]")
         
     if not (MIN_SEMIMAJOR_AXIS_ARCSEC <= semimajor_axis_arcsec):
-        logger.error(f"Semi-major axis {semimajor_axis_arcsec:.3f} arcsec below minimum {MIN_SEMIMAJOR_AXIS_ARCSEC}")
-        is_valid = False
+        raise InvalidMassInputError(f"Semi-major axis {semimajor_axis_arcsec:.3f} arcsec below minimum {MIN_SEMIMAJOR_AXIS_ARCSEC}")
         
     if not (MIN_PARALLAX_MAS <= parallax_mas <= MAX_PARALLAX_MAS):
-        logger.error(f"Parallax {parallax_mas:.3f} mas outside valid range [{MIN_PARALLAX_MAS}, {MAX_PARALLAX_MAS}]")
-        is_valid = False
+        raise InvalidMassInputError(f"Parallax {parallax_mas:.3f} mas outside valid range [{MIN_PARALLAX_MAS}, {MAX_PARALLAX_MAS}]")
     
     # Distance calculation and validation
     distance_pc = 1000.0 / parallax_mas  # Convert mas to pc
     if not (MIN_DISTANCE_PC <= distance_pc <= MAX_DISTANCE_PC):
-        logger.error(f"Distance {distance_pc:.1f} pc outside valid range [{MIN_DISTANCE_PC}, {MAX_DISTANCE_PC}]")
-        is_valid = False
+        raise InvalidMassInputError(f"Distance {distance_pc:.1f} pc outside valid range [{MIN_DISTANCE_PC}, {MAX_DISTANCE_PC}]")
     
     # Warning conditions
     if parallax_mas < LOW_PARALLAX_WARNING_MAS:
         warnings.append(f"Low parallax precision ({parallax_mas:.2f} mas) may affect mass accuracy")
     
-    if parallax_error > 0 and parallax_error / parallax_mas > 0.2:
+    if parallax_error > 0 and parallax_error / parallax_mas > LARGE_PARALLAX_UNCERTAINTY_THRESHOLD:
         warnings.append(f"Large parallax uncertainty ({parallax_error/parallax_mas*100:.1f}%)")
     
     # Error validation
     if period_error < 0 or semimajor_axis_error < 0 or parallax_error < 0:
-        logger.error("Negative uncertainties are not allowed")
-        is_valid = False
+        raise InvalidMassInputError("Negative uncertainties are not allowed")
     
-    return is_valid, warnings
+    return warnings
 
 def _calculate_mc_statistics(samples: np.ndarray) -> Dict[str, float]:
     """
@@ -128,16 +131,18 @@ def _calculate_mc_statistics(samples: np.ndarray) -> Dict[str, float]:
         
     Returns:
         Dictionary with median, uncertainty, and percentiles
+        
+    Raises:
+        NumericalInstabilityError: If no valid samples are available
     """
     if len(samples) == 0:
-        return {'median': 0.0, 'uncertainty': 0.0, 'p_lower': 0.0, 'p_upper': 0.0}
+        raise NumericalInstabilityError("No Monte Carlo samples provided for statistical analysis")
     
     # Remove any invalid samples (NaN, infinite, or negative masses)
     valid_samples = samples[np.isfinite(samples) & (samples > 0)]
     
     if len(valid_samples) == 0:
-        logger.warning("No valid samples in Monte Carlo simulation")
-        return {'median': 0.0, 'uncertainty': np.inf, 'p_lower': 0.0, 'p_upper': 0.0}
+        raise NumericalInstabilityError("No valid samples in Monte Carlo simulation - all samples are NaN, infinite, or negative")
     
     # Calculate percentiles for confidence interval
     lower_percentile = (100.0 - MC_CONFIDENCE_LEVEL) / 2.0
@@ -166,7 +171,7 @@ def calculate_total_mass_kepler3(
     parallax_error: float = 0.0,
     parallax_source: str = 'unknown',
     mc_samples: int = DEFAULT_MC_SAMPLES
-) -> Optional[MassResult]:
+) -> MassResult:
     """
     Calculate total system mass using Kepler's Third Law.
     
@@ -194,8 +199,16 @@ def calculate_total_mass_kepler3(
         
     Returns
     -------
-    MassResult or None
-        Complete mass analysis with uncertainties, or None if calculation fails
+    MassResult
+        Complete mass analysis with uncertainties
+        
+    Raises
+    ------
+    InvalidMassInputError
+        If period, semi-major axis, or parallax values are outside valid ranges,
+        or if any uncertainty values are negative
+    NumericalInstabilityError
+        If Monte Carlo simulation fails to produce valid samples for statistical analysis
         
     Notes
     -----
@@ -204,17 +217,18 @@ def calculate_total_mass_kepler3(
     
     Distance conversion: d [pc] = 1000 / π [mas]
     Semi-major axis: a [AU] = a [arcsec] × d [pc]
+    
+    Error propagation assumes Gaussian (normal) distributions for input uncertainties.
+    This is standard practice for astronomical measurements and is appropriate when
+    uncertainties represent 1-sigma confidence intervals from least-squares fits
+    or similar statistical analyses.
     """
     
-    # Validate inputs
-    is_valid, warnings = _validate_mass_inputs(
+    # Validate inputs (raises InvalidMassInputError if invalid)
+    warnings = _validate_mass_inputs(
         period_years, semimajor_axis_arcsec, parallax_mas,
         period_error, semimajor_axis_error, parallax_error
     )
-    
-    if not is_valid:
-        logger.error("Mass calculation failed due to invalid inputs")
-        return None
     
     # Constrain Monte Carlo samples to reasonable range
     mc_samples = max(MASS_MC_MIN_SAMPLES, min(mc_samples, MASS_MC_MAX_SAMPLES))
@@ -256,7 +270,7 @@ def calculate_total_mass_kepler3(
         semimajor_au_samples = semimajor_samples * distance_samples
         mass_samples = (semimajor_au_samples ** 3) / (period_samples ** 2)
         
-        # Calculate statistics
+        # Calculate statistics (raises NumericalInstabilityError if no valid samples)
         mc_stats = _calculate_mc_statistics(mass_samples)
         total_mass_solar = mc_stats['median']  # Use median as more robust estimate
         total_mass_error = mc_stats['uncertainty']
@@ -266,18 +280,10 @@ def calculate_total_mass_kepler3(
             relative_error = total_mass_error / total_mass_solar
             if relative_error > LARGE_MASS_ERROR_THRESHOLD:
                 warnings.append(f"Large mass uncertainty ({relative_error*100:.1f}%)")
-                quality_score *= (1.0 - min(relative_error, 0.9))  # Reduce quality for large errors
+                quality_score *= (1.0 - min(relative_error, MAX_QUALITY_PENALTY_FACTOR))
     
     # Assess quality based on parallax source
-    source_quality = {
-        'gaia_dr3': 1.0,
-        'gaia': 0.9,
-        'hipparcos': 0.7,
-        'literature': 0.5,
-        'estimated': 0.3,
-        'unknown': 0.1
-    }
-    quality_score *= source_quality.get(parallax_source.lower(), 0.1)
+    quality_score *= PARALLAX_SOURCE_QUALITY.get(parallax_source.lower(), 0.1)
     
     return MassResult(
         total_mass_solar=total_mass_solar,
@@ -303,6 +309,9 @@ def calculate_individual_masses(
     """
     Calculate individual component masses given total mass and mass ratio.
     
+    This is a pure function that does not modify the input MassResult.
+    It creates and returns a new MassResult with individual masses calculated.
+    
     Uses the definitions:
     - q = M2 / M1 (mass ratio, secondary/primary)
     - M1 + M2 = M_total
@@ -323,13 +332,23 @@ def calculate_individual_masses(
     Returns
     -------
     MassResult
-        Updated mass result with individual masses
+        New mass result with individual masses calculated
+        
+    Raises
+    ------
+    InvalidMassInputError
+        If mass ratio is outside valid range [MIN_MASS_RATIO, MAX_MASS_RATIO]
+        or if any individual mass falls outside typical stellar mass range
+    NumericalInstabilityError
+        If Monte Carlo simulation fails to produce valid samples for error estimation
     """
     
     # Validate mass ratio
     if not (MIN_MASS_RATIO <= mass_ratio <= MAX_MASS_RATIO):
-        logger.error(f"Mass ratio {mass_ratio:.3f} outside valid range [{MIN_MASS_RATIO}, {MAX_MASS_RATIO}]")
-        return mass_result
+        raise InvalidMassInputError(f"Mass ratio {mass_ratio:.3f} outside valid range [{MIN_MASS_RATIO}, {MAX_MASS_RATIO}]")
+    
+    # Copy warnings from original result
+    warnings = mass_result.warnings.copy()
     
     # Calculate point estimates
     m1_solar = mass_result.total_mass_solar / (1.0 + mass_ratio)
@@ -338,7 +357,7 @@ def calculate_individual_masses(
     # Validate individual masses
     for mass, label in [(m1_solar, "Primary"), (m2_solar, "Secondary")]:
         if not (MIN_STELLAR_MASS_SOLAR <= mass <= MAX_STELLAR_MASS_SOLAR):
-            mass_result.warnings.append(f"{label} mass ({mass:.2f} M☉) outside typical stellar range")
+            warnings.append(f"{label} mass ({mass:.2f} M☉) outside typical stellar range")
     
     # Monte Carlo error propagation if uncertainties available
     m1_error, m2_error = 0.0, 0.0
@@ -369,7 +388,7 @@ def calculate_individual_masses(
         m1_samples = total_mass_samples / (1.0 + mass_ratio_samples)
         m2_samples = total_mass_samples * mass_ratio_samples / (1.0 + mass_ratio_samples)
         
-        # Calculate uncertainties
+        # Calculate uncertainties (raises NumericalInstabilityError if no valid samples)
         m1_stats = _calculate_mc_statistics(m1_samples)
         m2_stats = _calculate_mc_statistics(m2_samples)
         
@@ -378,71 +397,12 @@ def calculate_individual_masses(
         m1_error = m1_stats['uncertainty']
         m2_error = m2_stats['uncertainty']
     
-    # Update the mass result
-    mass_result.individual_masses_solar = (m1_solar, m2_solar)
-    mass_result.individual_mass_errors = (m1_error, m2_error)
-    mass_result.mass_ratio = mass_ratio
-    mass_result.mass_ratio_error = mass_ratio_error
-    
-    return mass_result
-
-def format_mass_results(mass_result: MassResult, include_warnings: bool = True) -> str:
-    """
-    Format mass calculation results for display.
-    
-    Parameters
-    ----------
-    mass_result : MassResult
-        Mass calculation results
-    include_warnings : bool, optional
-        Whether to include warnings in output
-        
-    Returns
-    -------
-    str
-        Formatted string with mass information
-    """
-    if not mass_result:
-        return "No mass data available"
-    
-    lines = []
-    
-    # Total mass
-    if mass_result.total_mass_error > 0:
-        lines.append(f"Total Mass: {mass_result.total_mass_solar:.2f} ± {mass_result.total_mass_error:.2f} M☉")
-    else:
-        lines.append(f"Total Mass: {mass_result.total_mass_solar:.2f} M☉")
-    
-    # Distance and parallax info
-    lines.append(f"Distance: {mass_result.distance_used_pc:.1f} pc (π = {mass_result.parallax_used_mas:.2f} mas)")
-    lines.append(f"Parallax Source: {mass_result.parallax_source}")
-    
-    # Individual masses if available
-    if mass_result.individual_masses_solar:
-        m1, m2 = mass_result.individual_masses_solar
-        if mass_result.individual_mass_errors:
-            e1, e2 = mass_result.individual_mass_errors
-            lines.append(f"Primary Mass: {m1:.2f} ± {e1:.2f} M☉")
-            lines.append(f"Secondary Mass: {m2:.2f} ± {e2:.2f} M☉")
-        else:
-            lines.append(f"Primary Mass: {m1:.2f} M☉")
-            lines.append(f"Secondary Mass: {m2:.2f} M☉")
-        
-        if mass_result.mass_ratio:
-            if mass_result.mass_ratio_error:
-                lines.append(f"Mass Ratio (q): {mass_result.mass_ratio:.3f} ± {mass_result.mass_ratio_error:.3f}")
-            else:
-                lines.append(f"Mass Ratio (q): {mass_result.mass_ratio:.3f}")
-    
-    # Quality and Monte Carlo info
-    lines.append(f"Quality Score: {mass_result.quality_score:.2f}")
-    if mass_result.total_mass_error > 0:
-        lines.append(f"Monte Carlo Samples: {mass_result.mc_samples}")
-    
-    # Warnings
-    if include_warnings and mass_result.warnings:
-        lines.append("Warnings:")
-        for warning in mass_result.warnings:
-            lines.append(f"  - {warning}")
-    
-    return "\n".join(lines)
+    # Create new MassResult with individual masses (immutable pattern)
+    return replace(
+        mass_result,
+        individual_masses_solar=(m1_solar, m2_solar),
+        individual_mass_errors=(m1_error, m2_error),
+        mass_ratio=mass_ratio,
+        mass_ratio_error=mass_ratio_error,
+        warnings=warnings
+    )

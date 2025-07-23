@@ -370,17 +370,17 @@ async def _calculate_system_masses(
             return None
         
         # Calculate masses
-        mass_result = calculate_total_mass_kepler3(
-            period_years=period,
-            semimajor_axis_arcsec=semimajor_axis,
-            parallax_mas=parallax_data['parallax'],
-            period_error=period_error,
-            semimajor_axis_error=semimajor_axis_error,
-            parallax_error=parallax_data['parallax_error'],
-            parallax_source=parallax_data['source']
-        )
-        
-        if mass_result:
+        try:
+            mass_result = calculate_total_mass_kepler3(
+                period_years=period,
+                semimajor_axis_arcsec=semimajor_axis,
+                parallax_mas=parallax_data['parallax'],
+                period_error=period_error,
+                semimajor_axis_error=semimajor_axis_error,
+                parallax_error=parallax_data['parallax_error'],
+                parallax_source=parallax_data['source']
+            )
+            
             log.debug(f"Mass calculation successful for {wds_id}: {mass_result.total_mass_solar:.2f} ± {mass_result.total_mass_error:.2f} M☉")
             
             # Convert to dictionary for JSON serialization
@@ -394,8 +394,9 @@ async def _calculate_system_masses(
                 'mc_samples': mass_result.mc_samples,
                 'warnings': mass_result.warnings
             }
-        else:
-            log.warning(f"Mass calculation failed for {wds_id}")
+            
+        except Exception as e:
+            log.warning(f"Mass calculation failed for {wds_id}: {e}")
             return None
             
     except Exception as e:
