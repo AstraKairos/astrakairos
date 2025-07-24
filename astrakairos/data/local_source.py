@@ -7,7 +7,7 @@ with proper indexing for efficient querying.
 
 import logging
 import sqlite3
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
 
 from astropy.table import Table
@@ -437,12 +437,18 @@ class LocalDataSource(DataSource):
             log.error(f"Error getting catalog statistics: {e}")
             raise AstraKairosDataError(f"Database query failed: {e}") from e
 
-    def get_all_wds_ids(self, limit: Optional[int] = None, only_el_badry: bool = False) -> list[str]:
-        """Get list of all WDS IDs in the database.
+    def get_all_wds_ids(self, 
+                       limit: Optional[int] = None, 
+                       only_el_badry: bool = False,
+                       ra_range: Optional[Tuple[float, float]] = None,
+                       dec_range: Optional[Tuple[float, float]] = None) -> list[str]:
+        """Get list of all WDS IDs in the database with optional spatial filtering.
         
         Args:
             limit: Maximum number of IDs to return (None for all)
             only_el_badry: If True, only return systems in the El-Badry et al. (2021) catalog
+            ra_range: Optional RA range in hours (min, max). Handles wraparound cases.
+            dec_range: Optional Dec range in degrees (min, max)
             
         Returns:
             List of WDS identifiers
@@ -452,6 +458,9 @@ class LocalDataSource(DataSource):
         """
         try:
             conditions = []
+            params = []
+            
+            # El-Badry catalog filtering
             if only_el_badry:
                 if not self.has_el_badry_data:
                     raise AstraKairosDataError(
@@ -461,14 +470,44 @@ class LocalDataSource(DataSource):
                     )
                 conditions.append("in_el_badry_catalog = 1")
             
+            # Spatial filtering: Declination (simpler case - no wraparound)
+            if dec_range:
+                min_dec, max_dec = dec_range
+                conditions.append("dec_deg BETWEEN ? AND ?")
+                params.extend([min_dec, max_dec])
+                log.debug(f"Applied declination filter: [{min_dec:.2f}, {max_dec:.2f}] degrees")
+            
+            # Spatial filtering: Right Ascension (handles wraparound)
+            if ra_range:
+                min_ra_hours, max_ra_hours = ra_range
+                # Convert hours to degrees for database query
+                min_ra_deg = min_ra_hours * 15.0
+                max_ra_deg = max_ra_hours * 15.0
+                
+                if min_ra_deg <= max_ra_deg:
+                    # Normal case: range doesn't cross 0h (e.g., 6h to 18h)
+                    conditions.append("ra_deg BETWEEN ? AND ?")
+                    params.extend([min_ra_deg, max_ra_deg])
+                    log.debug(f"Applied RA filter (normal): [{min_ra_deg:.1f}, {max_ra_deg:.1f}] degrees")
+                else:
+                    # Wraparound case: range crosses 0h/24h boundary (e.g., 22h to 2h)
+                    # This translates to: (RA >= 22h OR RA <= 2h)
+                    conditions.append("(ra_deg >= ? OR ra_deg <= ?)")
+                    params.extend([min_ra_deg, max_ra_deg])
+                    log.debug(f"Applied RA filter (wraparound): RA >= {min_ra_deg:.1f}° OR RA <= {max_ra_deg:.1f}°")
+
             where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
             query = f"SELECT wds_id FROM {self.summary_table}{where_clause} ORDER BY wds_id"
             
             if limit:
                 query += f" LIMIT {limit}"
             
-            cursor = self.conn.execute(query)
+            cursor = self.conn.execute(query, params)
             result = [row[0] for row in cursor.fetchall()]
+            
+            # Log filtering results for transparency
+            if ra_range or dec_range:
+                log.info(f"Spatial filtering returned {len(result)} systems")
             
             if only_el_badry and result:
                 log.info(f"Filtered to {len(result)} systems from El-Badry et al. (2021) catalog")

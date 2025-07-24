@@ -206,6 +206,21 @@ Examples:
                        action='store_true',
                        help='Only analyze systems confirmed to be in the El-Badry et al. (2021) high-confidence catalog.')
 
+    # Spatial filtering options
+    spatial_group = parser.add_argument_group('Spatial Filtering Options')
+    spatial_group.add_argument(
+        '--ra-range',
+        type=str,
+        help='Filter by Right Ascension range in hours (format: "min,max", e.g., "18.5,20.5"). '
+             'Supports wraparound (e.g., "22.0,2.0" for 22h to 2h). No spaces in the string.'
+    )
+    spatial_group.add_argument(
+        '--dec-range', 
+        type=str,
+        help='Filter by Declination range in degrees (format: "min,max", e.g., "-30.0,15.5"). '
+             'Values must be between -90.0 and +90.0 degrees. No spaces in the string.'
+    )
+
     return parser
 
 async def main_async(args: argparse.Namespace):
@@ -231,9 +246,39 @@ async def main_async(args: argparse.Namespace):
         if args.input_file:
             log.warning("Ignoring input_file because --all flag was specified.")
         
+        # Parse and validate spatial filtering arguments
+        ra_range = None
+        dec_range = None
+        
+        if args.ra_range:
+            from ..utils.coordinate_parsing import parse_coordinate_range
+            ra_range = parse_coordinate_range(args.ra_range, 'ra')
+            
+        if args.dec_range:
+            from ..utils.coordinate_parsing import parse_coordinate_range
+            dec_range = parse_coordinate_range(args.dec_range, 'dec')
+        
+        # Log applied filters for transparency
+        if ra_range or dec_range:
+            if ra_range and dec_range:
+                ra_min, ra_max = ra_range
+                dec_min, dec_max = dec_range
+                log.info(f"Spatial filter: RA=[{ra_min:.2f}, {ra_max:.2f}]h, "
+                        f"Dec=[{dec_min:.2f}, {dec_max:.2f}]°")
+            elif ra_range:
+                ra_min, ra_max = ra_range
+                log.info(f"Spatial filter: RA=[{ra_min:.2f}, {ra_max:.2f}]h (all declinations)")
+            elif dec_range:
+                dec_min, dec_max = dec_range
+                log.info(f"Spatial filter: Dec=[{dec_min:.2f}, {dec_max:.2f}]° (all right ascensions)")
+        
         log.info("Fetching all WDS IDs from the local database...")
         
-        all_ids = data_source.get_all_wds_ids(only_el_badry=args.only_el_badry)
+        all_ids = data_source.get_all_wds_ids(
+            only_el_badry=args.only_el_badry,
+            ra_range=ra_range,
+            dec_range=dec_range
+        )
         if not all_ids:
             if args.only_el_badry:
                 log.error("No systems found in the El-Badry et al. (2021) catalog. Check that the database was created with --el-badry-file option.")
@@ -248,6 +293,12 @@ async def main_async(args: argparse.Namespace):
             log.info(f"Found {len(df_targets)} total systems to analyze.")
 
     elif args.input_file:
+        # Validate that spatial filtering is not used with input files
+        if args.ra_range or args.dec_range:
+            log.error("Spatial filtering (--ra-range, --dec-range) can only be used with --all flag.")
+            log.error("To filter stars from a file, pre-filter the CSV file or use --all with spatial filters.")
+            sys.exit(1)
+        
         log.info(f"Loading data from: {args.input_file}")
         try:
             df_targets = load_csv_data(args.input_file)
