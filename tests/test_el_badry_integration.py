@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Test El-Badry catalog integration functionality.
 
@@ -10,10 +9,15 @@ import pytest
 import pandas as pd
 import tempfile
 import os
+import sys
 from unittest.mock import patch, Mock
 from pathlib import Path
 
-from scripts.convert_catalogs_to_sqlite import parse_el_badry_catalog, perform_el_badry_crossmatch
+# Add scripts directory to path for conversion tool imports
+sys.path.append(str(Path(__file__).parent.parent / "scripts"))
+
+from conversion_tool.parsers import parse_el_badry_catalog
+from conversion_tool.crossmatching import perform_el_badry_crossmatch
 
 
 class TestElBadryCrossMatch:
