@@ -156,14 +156,14 @@ WDSS_COMPONENT_COLSPECS = {
     'pm_ra': (65, 73),
     'pm_dec': (73, 81),
     'parallax': (82, 89),
-    'name': (90, 114),
+    'name': (83, 114),
     'coordinates': (118, 136),
     'wds_correspondence': (137, 147),
     'discoverer_designation': (148, 155)
 }
 
 # Regex patterns for data extraction
-GAIA_ID_PATTERN = r'Gaia\s+(?:DR3|EDR3)?\s*(\d+)'
+GAIA_ID_PATTERN = r'\b(\d{18,20})\b'
 
 # ORB6 Catalog Column Specifications
 # Based on orb6format.txt documentation (1-based index converted to 0-based for pandas)
