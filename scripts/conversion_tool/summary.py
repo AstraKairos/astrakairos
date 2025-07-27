@@ -158,7 +158,8 @@ def _enrich_with_el_badry_data(df_summary: pd.DataFrame, df_el_badry: Optional[p
         # Set index back
         df_summary = df_summary_enriched.set_index('wdss_id')
         
-        matches = df_summary['in_el_badry_catalog'].fillna(False).sum()
+        df_summary['in_el_badry_catalog'] = df_summary['in_el_badry_catalog'].fillna(False)
+        matches = df_summary['in_el_badry_catalog'].sum()
         log.info(f"Successfully cross-matched {matches} systems with El-Badry catalog using efficient pair-wise matching.")
         
     else:

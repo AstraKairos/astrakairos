@@ -408,8 +408,8 @@ def _parse_measurement_lines_vectorized(df_lines: pd.DataFrame) -> pd.DataFrame:
     est_rho_errors = technique_errors.apply(lambda x: x[1])
     
     # Use explicit errors if available, otherwise use estimates
-    df_measurements['theta_error'] = theta_error.fillna(est_theta_errors)
-    df_measurements['rho_error'] = rho_error.fillna(est_rho_errors)
+    df_measurements['theta_error'] = theta_error.fillna(est_theta_errors).infer_objects(copy=False)
+    df_measurements['rho_error'] = rho_error.fillna(est_rho_errors).infer_objects(copy=False)
     
     # Flag error source
     df_measurements['error_source'] = 'estimated'
