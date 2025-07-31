@@ -636,7 +636,6 @@ DEFAULT_GAIA_MAX_ROWS = 1000                 # Maximum rows to retrieve
 # Gaia Physical Validation Thresholds
 DEFAULT_PHYSICAL_P_VALUE_THRESHOLD = 0.05   # Threshold for physical companion classification
 DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD = 0.001 # Threshold for ambiguous classification (must be < physical)
-GAIA_QUERY_TIMEOUT_SECONDS = 30             # Timeout for individual Gaia queries
 GAIA_MAX_RETRY_ATTEMPTS = 3                 # Maximum retry attempts for failed queries
 GAIA_RETRY_DELAY_SECONDS = 2.0              # Delay between retry attempts
 
@@ -738,15 +737,6 @@ DEFAULT_PROCESSING_TIMEOUT_SECONDS = 3600  # 1 hour timeout for large analyses
 CLI_MAX_RETRY_ATTEMPTS = 3  # Maximum retries for failed operations
 CLI_RETRY_DELAY_SECONDS = 2.0  # Delay between retry attempts
 CLI_ERROR_LOG_DETAIL_LEVEL = "DETAILED"  # Options: "BASIC", "DETAILED", "DEBUG"
-
-# === Dynamics Module Configuration ===
-# Observation Priority Index (OPI) Configuration
-OPI_DEVIATION_THRESHOLD_ARCSEC = 0.1  # Threshold for zero-time-baseline OPI calculation
-OPI_INFINITE_THRESHOLD = 1000.0  # Maximum reasonable OPI value before considering infinite
-
-# Robust Fitting Configuration
-MIN_POINTS_FOR_ROBUST_FIT = 3  # Minimum measurements required for robust Theil-Sen analysis
-ROBUST_REGRESSION_RANDOM_STATE = 42  # Fixed seed for reproducible robust regression results
 
 # Astrometric Motion Limits - Physical Constraints
 MAX_ASTROMETRIC_VELOCITY_ARCSEC_PER_YEAR = 10.0  # Maximum reasonable astrometric velocity

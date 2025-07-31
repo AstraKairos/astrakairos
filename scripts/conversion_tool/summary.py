@@ -18,8 +18,7 @@ def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.Data
     """
     Generate the summary table treating each component pair as independent system.
     
-    REVOLUTIONARY CHANGE: Each component pair (AC, BD, CD, CE, etc.) becomes 
-    a separate row/system, eliminating artificial velocity mixing forever.
+    Each component pair (AC, BD, CD, CE, etc.) becomes a separate row/system.
     
     Args:
         df_components: Component data from WDSS catalogs
@@ -30,45 +29,37 @@ def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.Data
     Returns:
         DataFrame with summary data where each row represents one component pair
     """
-    log.info("Generating MULTI-PAIR summary table - each component pair as independent system")
+    log.info("Generating summary table - each component pair as independent system")
 
-    # OPTIMIZATION: Display dataset statistics
     total_measurements = len(df_measurements)
     total_pairs = df_measurements['pair'].nunique() if not df_measurements.empty else 0
-    log.info(f"Processing {total_measurements:,} measurements across {total_pairs} component pairs...")
+    log.info(f"Processing {total_measurements:,} measurements across {total_pairs} component pairs")
 
-    # 1. Aggregate measurements BY COMPONENT PAIR (no more mixing!)
-    log.info("Step 1/5: Aggregating measurements by component pair...")
+    log.info("Step 1/5: Aggregating measurements by component pair")
     agg_measurements = _aggregate_measurements(df_measurements)
 
-    # 2. Create component data matched to each pair
-    log.info("Step 2/5: Creating component data for each pair...")
+    log.info("Step 2/5: Creating component data for each pair")
     wide_components = _pivot_components(df_components, df_measurements)
 
-    # 3. Merge all data sources together
-    log.info("Step 3/5: Merging data sources...")
+    log.info("Step 3/5: Merging data sources")
     df_summary = _merge_data_sources(agg_measurements, wide_components, df_correspondence)
 
-    # 4. Enrich with El-Badry physicality data using pair-wise matching
-    log.info("Step 4/5: Enriching with El-Badry catalog...")
+    log.info("Step 4/5: Enriching with El-Badry catalog")
     df_summary = _enrich_with_el_badry_data(df_summary, df_el_badry)
 
-    # 5. Finalize and rename columns for schema compatibility
-    log.info("Step 5/5: Finalizing schema...")
+    log.info("Step 5/5: Finalizing schema")
     df_summary = _finalize_and_rename_columns(df_summary)
     
-    log.info(f"✅ Multi-pair summary complete: {len(df_summary):,} independent component pair systems")
+    log.info(f"Summary complete: {len(df_summary):,} independent component pair systems")
     return df_summary
 
 
 def _aggregate_measurements(df_measurements: pd.DataFrame) -> pd.DataFrame:
     """
-    Aggregate measurement data BY COMPONENT PAIR with error propagation.
-    
-    OPTIMIZED: Uses categorical data types for faster groupby operations.
+    Aggregate measurement data by component pair with error propagation.
     
     Each component pair (AC, BD, CD, CE, etc.) is treated as a completely 
-    independent system, eliminating artificial velocity mixing.
+    independent system.
     
     Args:
         df_measurements: DataFrame with measurement data
@@ -79,17 +70,15 @@ def _aggregate_measurements(df_measurements: pd.DataFrame) -> pd.DataFrame:
     if df_measurements.empty:
         return pd.DataFrame(columns=['wdss_id', 'component_pair']).set_index(['wdss_id', 'component_pair'])
     
-    # OPTIMIZATION: Convert to categorical for faster groupby
     df_measurements = df_measurements.copy()
     df_measurements['wdss_id'] = df_measurements['wdss_id'].astype('category')
     df_measurements['pair'] = df_measurements['pair'].astype('category')
     
-    # Create unique system identifier per component pair
     df_measurements['system_pair_id'] = df_measurements['wdss_id'].astype(str) + '-' + df_measurements['pair'].astype(str)
     
     result = (
         df_measurements.sort_values(['wdss_id', 'pair', 'epoch'])
-        .groupby(['wdss_id', 'pair'], observed=True)  # observed=True for categorical speedup
+        .groupby(['wdss_id', 'pair'], observed=True)
         .agg(
             system_pair_id=('system_pair_id', 'first'),
             date_first=('epoch', 'first'),
@@ -115,8 +104,6 @@ def _pivot_components(df_components: pd.DataFrame, df_measurements: pd.DataFrame
     """
     Create component data matched to each component pair system.
     
-    OPTIMIZED: Uses vectorized operations instead of iterrows() for massive speed improvement.
-    
     For each measurement pair (AC, BD, etc.), we extract the relevant 
     component data and create a system entry.
     
@@ -130,19 +117,15 @@ def _pivot_components(df_components: pd.DataFrame, df_measurements: pd.DataFrame
     if df_components.empty or df_measurements.empty:
         return pd.DataFrame(columns=['system_pair_id']).set_index('system_pair_id')
 
-    # Get unique pairs from measurements
     unique_pairs = df_measurements[['wdss_id', 'pair']].drop_duplicates()
     unique_pairs['system_pair_id'] = unique_pairs['wdss_id'] + '-' + unique_pairs['pair']
     
-    # OPTIMIZATION: Get primary component for each system using vectorized operations
-    # Group components by wdss_id and take first component (usually 'A')
     primary_components = (df_components
-                         .sort_values(['wdss_id', 'component'])  # Sort to ensure 'A' comes first
+                         .sort_values(['wdss_id', 'component'])
                          .groupby('wdss_id')
                          .first()
                          .reset_index())
     
-    # OPTIMIZATION: Merge unique_pairs with primary_components in one operation
     df_pair_components = unique_pairs.merge(
         primary_components, 
         on='wdss_id', 
@@ -275,9 +258,7 @@ def _enrich_with_el_badry_data(df_summary: pd.DataFrame, df_el_badry: Optional[p
 
 def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
     """
-    Finalize columns and rename for SQLite schema compatibility.
-    
-    CRITICAL: Now includes component_pair field for full transparency.
+    Finalize columns and rename for SQLite schema.
     
     Args:
         df_summary: Summary DataFrame to finalize
@@ -285,17 +266,13 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame with finalized column structure including component_pair
     """
-    # Reset index to make system_pair_id a column if it's currently the index
     if df_summary.index.name == 'system_pair_id':
         df_summary.reset_index(inplace=True)
 
-    # DEBUG: Check available columns
-    log.info(f"Finalizing schema - Available columns: {list(df_summary.columns)[:10]}... (showing first 10)")
+    log.info(f"Finalizing schema - Available columns: {list(df_summary.columns)[:10]}")
 
-    # Rename columns for compatibility with discovery mode
     df_summary.rename(columns={
-        'wds_correspondence': 'wds_id_original',  # Keep original for reference
-        # Component data is already set appropriately in _pivot_components
+        'wds_correspondence': 'wds_id_original',
     }, inplace=True)
 
     # Create clean wds_id: use correspondence if available, otherwise wdss_id

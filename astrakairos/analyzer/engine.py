@@ -157,37 +157,30 @@ class AnalyzerRunner:
             self._stats[CLI_STATS_KEYS['PROCESSED']] += 1
             
             try:
-                # Step 1: Retrieve and validate WDS data for ALL component pairs
                 wds_summaries = await self._get_and_validate_wds_data(wds_id)
                 
                 results = []
                 for wds_summary in wds_summaries:
-                    # Get component pair info for logging
                     component_pair = wds_summary.get('components', 'AB')
                     system_id = f"{wds_id}-{component_pair}" if component_pair else wds_id
                     
-                    # Step 2: Log processing information
                     n_obs = wds_summary.get('n_observations', CLI_VALUE_NOT_AVAILABLE)
                     log.info(f"Processing {system_id} in {analysis_config['mode']} mode (obs: {n_obs})")
 
-                    # Step 3: Initialize result with common fields
                     result = self._initialize_result_dict(wds_id, wds_summary, analysis_config)
                     
-                    # Add component pair info to result (use from wds_summary)
                     if 'components' in wds_summary and wds_summary['components']:
                         result['component_pair'] = wds_summary['components']
                     
                     if 'system_pair_id' in wds_summary and wds_summary['system_pair_id']:
                         result['system_pair_id'] = wds_summary['system_pair_id']
 
-                    # Step 4: Perform mode-specific analysis
                     analysis_result = await self._run_analysis_mode(wds_id, wds_summary, analysis_config)
                     if analysis_result is None:
                         log.warning(f"Mode-specific analysis failed for {system_id}")
                         continue
                     result.update(analysis_result)
 
-                    # Step 5: Optional Gaia validation
                     gaia_result = await self._perform_optional_gaia_validation(
                         wds_id, wds_summary, analysis_config
                     )
@@ -219,7 +212,6 @@ class AnalyzerRunner:
             
             validated_summaries = []
             for wds_summary in wds_summaries:
-                # Validate each component pair's WDS summary data
                 if not _validate_wds_summary_for_analysis(wds_summary):
                     log.warning(f"WDS data validation failed for {wds_id} component pair {getattr(wds_summary, 'components', 'unknown')}")
                     continue
@@ -371,7 +363,6 @@ async def analyze_stars(runner: AnalyzerRunner,
             if isinstance(result, list):
                 successful_results.extend(result)
             else:
-                # Backward compatibility for single results
                 successful_results.append(result)
     
     return successful_results, error_summary
