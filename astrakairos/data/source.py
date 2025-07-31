@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, TypedDict
+from typing import Dict, Any, Optional, TypedDict, List
 from astropy.table import Table
 from enum import Enum
 
@@ -124,6 +124,9 @@ class WdsSummary(TypedDict, total=True):
     # Catalog-specific fields - optional
     wdss_id: Optional[str]
     discoverer_designation: Optional[str]
+    
+    # Multi-pair architecture fields - optional  
+    system_pair_id: Optional[str]
 
 class OrbitalElements(TypedDict, total=True):
     """Data structure for complete Keplerian orbital elements with uncertainties.
@@ -226,6 +229,25 @@ class DataSource(ABC):
     Physicality validation has been separated from data access.
     Use PhysicalityValidator classes for validation logic.
     """
+
+    @abstractmethod
+    async def get_all_component_pairs(self, wds_id: str) -> List[WdsSummary]:
+        """Obtains summary data for ALL component pairs of a star system.
+        
+        For multi-pair systems, this returns a separate WdsSummary for each 
+        component pair (AB, AC, BD, CE, etc.) as independent systems.
+        For traditional databases, this returns a single-element list.
+        
+        Args:
+            wds_id: The WDS identifier for the star.
+            
+        Returns:
+            A list of WdsSummary objects, one for each component pair.
+            
+        Raises:
+            WdsIdNotFoundError: If the WDS identifier is not found in the catalog.
+        """
+        pass
 
     @abstractmethod
     async def get_wds_summary(self, wds_id: str) -> WdsSummary:

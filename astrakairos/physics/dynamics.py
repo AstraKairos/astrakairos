@@ -42,7 +42,9 @@ from ..config import (
     WDS_FALLBACK_ERRORS,
     DEFAULT_MC_SAMPLES,
     MC_CONFIDENCE_LEVEL,
-    MC_RANDOM_SEED
+    MC_RANDOM_SEED,
+    # Minimum uncertainty thresholds
+    MIN_VELOCITY_UNCERTAINTY_ARCSEC_YR
 )
 
 # Configure logging
@@ -553,7 +555,11 @@ def _calculate_mc_statistics(samples: np.ndarray) -> Dict[str, float]:
     p_upper = np.percentile(samples, upper_percentile)
     
     # Uncertainty is half the confidence interval width
-    uncertainty = (p_upper - p_lower) / 2.0
+    raw_uncertainty = (p_upper - p_lower) / 2.0
+    
+    # Apply minimum uncertainty threshold to prevent extreme significance values
+    # This prevents division by near-zero uncertainties that produce unrealistic significances
+    uncertainty = max(raw_uncertainty, MIN_VELOCITY_UNCERTAINTY_ARCSEC_YR)
     
     return {
         'median': median,
@@ -588,10 +594,41 @@ def estimate_velocity_from_endpoints_mc(
     if not all(field in wds_summary and wds_summary[field] is not None for field in required_fields):
         return None
     
-    # Check for error fields and determine if Monte Carlo is possible
+    # Robust error validation function
+    def validate_error(error_value, fallback_value, min_fraction=0.1):
+        """Validate and correct measurement errors."""
+        if error_value is None or error_value <= 0 or not np.isfinite(error_value):
+            # Use fallback for None, negative, zero, or non-finite values
+            return fallback_value
+        else:
+            # Apply minimum threshold to prevent unrealistically small errors
+            min_threshold = fallback_value * min_fraction
+            return max(error_value, min_threshold)
+    
+    # Pre-validate errors to handle invalid/missing values
+    validated_errors = {
+        'pa_first_error': validate_error(
+            wds_summary.get('pa_first_error'), 
+            WDS_FALLBACK_ERRORS['pa_error']
+        ),
+        'pa_last_error': validate_error(
+            wds_summary.get('pa_last_error'), 
+            WDS_FALLBACK_ERRORS['pa_error']
+        ),
+        'sep_first_error': validate_error(
+            wds_summary.get('sep_first_error'), 
+            WDS_FALLBACK_ERRORS['sep_error']
+        ),
+        'sep_last_error': validate_error(
+            wds_summary.get('sep_last_error'), 
+            WDS_FALLBACK_ERRORS['sep_error']
+        )
+    }
+    
+    # Check for error fields using validated errors
     error_fields = ['pa_first_error', 'pa_last_error', 'sep_first_error', 'sep_last_error']
-    has_errors = [wds_summary.get(field) is not None and wds_summary[field] > 0 
-                  for field in error_fields]
+    # After validation, all errors should be valid, so we can proceed with Monte Carlo
+    has_errors = [validated_errors[field] > 0 for field in error_fields]
     
     # If no measured errors are available, fall back to point estimate
     if not any(has_errors):
@@ -606,11 +643,11 @@ def estimate_velocity_from_endpoints_mc(
             })
         return result
     
-    # Set up error values (measured or fallback)
-    pa_first_error = wds_summary.get('pa_first_error') or WDS_FALLBACK_ERRORS['pa_error']
-    pa_last_error = wds_summary.get('pa_last_error') or WDS_FALLBACK_ERRORS['pa_error']
-    sep_first_error = wds_summary.get('sep_first_error') or WDS_FALLBACK_ERRORS['sep_error']
-    sep_last_error = wds_summary.get('sep_last_error') or WDS_FALLBACK_ERRORS['sep_error']
+    # Use the validated errors
+    pa_first_error = validated_errors['pa_first_error']
+    pa_last_error = validated_errors['pa_last_error']
+    sep_first_error = validated_errors['sep_first_error']
+    sep_last_error = validated_errors['sep_last_error']
     
     # Count measured vs fallback errors for quality score
     num_measured = sum(has_errors)

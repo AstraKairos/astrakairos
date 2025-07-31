@@ -106,7 +106,7 @@ class TestLoadCSVData:
             with pytest.raises(DataLoadError) as exc_info:
                 load_csv_data(temp_path)
             
-            assert "File contains no data or invalid CSV format" in str(exc_info.value)
+            assert "File contains no data" in str(exc_info.value)
             
         finally:
             os.unlink(temp_path)

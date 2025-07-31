@@ -25,17 +25,17 @@ class TestElBadryCrossMatch:
 
     def test_cross_match_success(self):
         """Test successful cross-match with El-Badry catalog."""
-        # Mock WDSS components data with proper A/B pairs
+        # Mock WDSS components data with proper A/B pairs and valid Gaia IDs
         df_components = pd.DataFrame({
             'wdss_id': ['00001+1234', '00001+1234', '00002+5678', '00002+5678'],
             'component': ['A', 'B', 'A', 'B'],
-            'name': ['Gaia DR3 123456789', 'Gaia DR3 999999999', 'Other Name', 'Gaia EDR3 987654321']
+            'name': ['Gaia DR3 1234567890123456789', 'Gaia DR3 9999999999999999999', 'Other Name', 'Gaia EDR3 9876543210987654321']
         })
         
         # Mock El-Badry catalog data with matching pairs
         mock_el_badry_data = pd.DataFrame({
-            'source_id1': [123456789, 987654321],
-            'source_id2': [999999999, 444444444],
+            'source_id1': [1234567890123456789, 9876543210987654321],
+            'source_id2': [9999999999999999999, 4444444444444444444],
             'R_chance_align': [0.1, 0.05],
             'binary_type': ['SB2', 'Visual']
         })
@@ -43,7 +43,13 @@ class TestElBadryCrossMatch:
         with patch('astropy.table.Table.read') as mock_read:
             # Configure mock to return our test data
             mock_table = Mock()
-            mock_table.to_pandas.return_value = mock_el_badry_data
+            mock_el_badry_raw = pd.DataFrame({
+                'source_id1': [1234567890123456789, 9876543210987654321],
+                'source_id2': [9999999999999999999, 4444444444444444444],
+                'R_chance_align': [0.1, 0.05],
+                'binary_type': ['SB2', 'Visual']
+            })
+            mock_table.to_pandas.return_value = mock_el_badry_raw
             mock_read.return_value = mock_table
             
             # Run cross-match using the new two-step approach
@@ -136,12 +142,12 @@ class TestElBadryCrossMatch:
             'wdss_id': ['00001+1234', '00001+1234', '00002+5678', '00002+5678', '00003+9012', '00003+9012', '00004+3456', '00004+3456'],
             'component': ['A', 'B', 'A', 'B', 'A', 'B', 'A', 'B'],
             'name': [
-                'Gaia DR3 123456789',      # Standard DR3 format - A component
-                'Gaia DR3 555666777',      # Standard DR3 format - B component  
-                'Gaia EDR3 987654321',     # EDR3 format - A component
-                'Gaia EDR3 888999000',     # EDR3 format - B component
-                'Gaia 111222333',          # Simple format - A component
-                'Gaia 444555666',          # Simple format - B component
+                'Gaia DR3 1234567890123456789',      # Standard DR3 format - A component
+                'Gaia DR3 5556667777777777777',      # Standard DR3 format - B component  
+                'Gaia EDR3 9876543210987654321',     # EDR3 format - A component
+                'Gaia EDR3 8889990000000000000',     # EDR3 format - B component
+                'Gaia 1112223334444444444',          # Simple format - A component
+                'Gaia 4445556666666666666',          # Simple format - B component
                 'HD 12345',                # Non-Gaia name - A component
                 'HD 67890'                 # Non-Gaia name - B component
             ]
@@ -149,8 +155,8 @@ class TestElBadryCrossMatch:
         
         # Mock El-Badry data with matching pairs
         mock_el_badry_data = pd.DataFrame({
-            'source_id1': [123456789, 987654321, 111222333],
-            'source_id2': [555666777, 888999000, 444555666],
+            'source_id1': [1234567890123456789, 9876543210987654321, 1112223334444444444],
+            'source_id2': [5556667777777777777, 8889990000000000000, 4445556666666666666],
             'R_chance_align': [0.1, 0.05, 0.2],
             'binary_type': ['SB2', 'Visual', 'Astrometric']
         })

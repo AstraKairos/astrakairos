@@ -331,8 +331,9 @@ def _apply_physical_validation(df: pd.DataFrame) -> None:
 
 def _parse_component_lines_vectorized(df_lines: pd.DataFrame) -> pd.DataFrame:
     """Parse component lines using vectorized operations with centralized column specs."""
-    # Reconstruct full lines for parsing
-    df_lines['full_line'] = df_lines['wdss_id'] + df_lines['component_pair'].str.ljust(3) + df_lines['data_rest']
+    # Reconstruct full lines for parsing - preserve original spacing
+    # Original WDSS format: wdss_id (14 chars) + 2 spaces + component + padding + data  
+    df_lines['full_line'] = df_lines['wdss_id'] + '  ' + df_lines['component_pair'].str.strip() + '      ' + df_lines['data_rest'].str.lstrip()
     
     # Use centralized column specifications
     cols = WDSS_COMPONENT_COLSPECS
@@ -341,7 +342,7 @@ def _parse_component_lines_vectorized(df_lines: pd.DataFrame) -> pd.DataFrame:
     df_components = pd.DataFrame({
         'wdss_id': df_lines['wdss_id'].str.strip(),
         'component': df_lines['component_clean'],
-        'date_first': df_lines['full_line'].str[cols['date_first'][0]:cols['date_first'][1]].apply(safe_int),
+        'date_first': df_lines['full_line'].str[cols['date_first'][0]:cols['date_first'][1]].apply(safe_float),
         'n_obs': df_lines['full_line'].str[cols['n_obs'][0]:cols['n_obs'][1]].apply(safe_int),
         'pa_first': df_lines['full_line'].str[cols['pa_first'][0]:cols['pa_first'][1]].apply(safe_float),
         'sep_first': df_lines['full_line'].str[cols['sep_first'][0]:cols['sep_first'][1]].apply(safe_float),
@@ -372,8 +373,9 @@ def _parse_component_lines_vectorized(df_lines: pd.DataFrame) -> pd.DataFrame:
 
 def _parse_measurement_lines_vectorized(df_lines: pd.DataFrame) -> pd.DataFrame:
     """Parse measurement lines using vectorized operations with centralized column specs."""
-    # Reconstruct full lines for parsing
-    df_lines['full_line'] = df_lines['wdss_id'] + df_lines['component_pair'].str.ljust(8) + df_lines['data_rest']
+    # Reconstruct full lines for parsing - preserve original spacing
+    # Original WDSS format: wdss_id (14 chars) + 2 spaces + component_pair + padding + data
+    df_lines['full_line'] = df_lines['wdss_id'] + '  ' + df_lines['component_pair'].str.strip() + '      ' + df_lines['data_rest'].str.lstrip()
     
     # Use centralized column specifications
     cols = WDSS_MEASUREMENT_COLSPECS
@@ -421,8 +423,8 @@ def _parse_measurement_lines_vectorized(df_lines: pd.DataFrame) -> pd.DataFrame:
 
 def _extract_correspondence_vectorized(df_lines: pd.DataFrame) -> pd.DataFrame:
     """Extract WDS correspondence data from component lines using vectorized operations."""
-    # Reconstruct full lines for parsing
-    df_lines['full_line'] = df_lines['wdss_id'] + df_lines['component_pair'].str.ljust(3) + df_lines['data_rest']
+    # Reconstruct full lines for parsing - preserve original spacing
+    df_lines['full_line'] = df_lines['wdss_id'] + '  ' + df_lines['component_pair'].str.strip() + '      ' + df_lines['data_rest'].str.lstrip()
     
     # Use centralized column specifications
     cols = WDSS_COMPONENT_COLSPECS

@@ -7,7 +7,7 @@ with proper indexing for efficient querying.
 
 import logging
 import sqlite3
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime
 
 from astropy.table import Table
@@ -164,6 +164,91 @@ class LocalDataSource(DataSource):
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit with proper cleanup."""
         self.close()
+
+    async def get_all_component_pairs(self, wds_id: str) -> List[WdsSummary]:
+        """Get WDS summary data for ALL component pairs of a system.
+        
+        For multi-pair systems, this returns a separate WdsSummary for each 
+        component pair (AB, AC, BD, CE, etc.) as independent systems.
+        
+        Args:
+            wds_id: WDS identifier
+            
+        Returns:
+            List of WdsSummary objects, one for each component pair
+            
+        Raises:
+            WdsIdNotFoundError: If the WDS identifier is not found
+            AstraKairosDataError: If database query fails
+        """
+        normalized_id = wds_id.strip()
+        
+        try:
+            # Check if we have component_pair column (new multi-pair architecture)
+            cursor = self.conn.execute(f"PRAGMA table_info({self.summary_table})")
+            columns = {row[1] for row in cursor.fetchall()}
+            has_component_pair = 'component_pair' in columns
+            
+            if has_component_pair:
+                # New multi-pair architecture: get all component pairs
+                cursor = self.conn.execute(
+                    f"""SELECT wds_id, discoverer_designation as discoverer, component_pair as components, 
+                              date_first, date_last, n_obs as n_observations, 
+                              pa_first, pa_last, sep_first, sep_last, 
+                              vmag as mag_pri, kmag as mag_sec, spectral_type as spec_type, ra_deg, dec_deg,
+                              wdss_id, discoverer_designation, system_pair_id,
+                              pa_first_error, pa_last_error,
+                              sep_first_error, sep_last_error
+                       FROM {self.summary_table} WHERE wds_id = ? ORDER BY component_pair""",
+                    (normalized_id,)
+                )
+            else:
+                # Old single-pair architecture: get single entry
+                cursor = self.conn.execute(
+                    f"""SELECT wds_id, discoverer_designation as discoverer, '' as components, 
+                              date_first, date_last, n_obs as n_observations, 
+                              pa_first, pa_last, sep_first, sep_last, 
+                              vmag as mag_pri, kmag as mag_sec, spectral_type as spec_type, ra_deg, dec_deg,
+                              wdss_id, discoverer_designation,
+                              pa_first_error, pa_last_error,
+                              sep_first_error, sep_last_error
+                       FROM {self.summary_table} WHERE wds_id = ?""",
+                    (normalized_id,)
+                )
+            
+            rows = cursor.fetchall()
+            if not rows:
+                raise WdsIdNotFoundError(f"WDS ID '{normalized_id}' not found in catalog")
+            
+            results = []
+            for row in rows:
+                # Convert row to dict and filter None values for required fields
+                data = dict(row)
+                
+                # Filter out None values only for non-error fields
+                filtered_data = {}
+                for k, v in data.items():
+                    if k.endswith('_error'):
+                        # Keep error fields even if None - this indicates missing uncertainty
+                        filtered_data[k] = v
+                    elif v is not None:
+                        # Filter None values for regular fields
+                        filtered_data[k] = v
+                
+                # Validate against WdsSummary schema
+                valid_fields = {k: v for k, v in filtered_data.items() 
+                               if k in WdsSummary.__annotations__}
+                
+                results.append(WdsSummary(**valid_fields))
+            
+            return results
+            
+        except sqlite3.Error as e:
+            log.error(f"Database error retrieving WDS summary for {normalized_id}: {e}")
+            raise AstraKairosDataError(f"Database query failed: {e}") from e
+        except TypeError as e:
+            log.error(f"Error creating WdsSummary for {normalized_id}: {e}")
+            raise AstraKairosDataError(f"Invalid data format: {e}") from e
 
     async def get_wds_summary(self, wds_id: str) -> WdsSummary:
         """Get WDS summary data for a system.
@@ -497,7 +582,7 @@ class LocalDataSource(DataSource):
                     log.debug(f"Applied RA filter (wraparound): RA >= {min_ra_deg:.1f}° OR RA <= {max_ra_deg:.1f}°")
 
             where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-            query = f"SELECT wds_id FROM {self.summary_table}{where_clause} ORDER BY wds_id"
+            query = f"SELECT DISTINCT wds_id FROM {self.summary_table}{where_clause} ORDER BY wds_id"
             
             if limit:
                 query += f" LIMIT {limit}"

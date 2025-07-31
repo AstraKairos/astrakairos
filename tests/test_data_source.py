@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 from abc import ABC
 from typing import List, Dict, Any, Optional
 
-from astrakairos.data.source import DataSource
+from astrakairos.data.source import DataSource, WdsSummary
 
 
 class TestDataSourceAbstractInterface:
@@ -48,6 +48,14 @@ class ConcreteDataSource(DataSource):
         self.measurements_data = []
         self.orbital_data = {}
         self.wds_summary_data = {}
+    
+    async def get_all_component_pairs(self, wds_id: str) -> List[WdsSummary]:
+        """Mock implementation returning test component pairs."""
+        # Return a single WdsSummary for simplicity
+        if self.wds_summary_data:
+            return [self.wds_summary_data]
+        else:
+            return []
     
     async def get_all_measurements(self, wds_id: str, **kwargs):
         """Mock implementation returning test measurements."""

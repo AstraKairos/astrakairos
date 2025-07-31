@@ -46,13 +46,18 @@ ORB6_FALLBACK_ERRORS = {
 # Conservative estimates based on measurement techniques and epoch
 WDS_FALLBACK_ERRORS = {
     'pa_error': 2.0,    # 2° conservative for position angle
-    'sep_error': 0.2    # 0.2" conservative for separation
+    'sep_error': 0.05   # 0.05" (50 mas) conservative for separation
 }
 
 # Monte Carlo Configuration
 DEFAULT_MC_SAMPLES = 1000           # Default number of Monte Carlo samples
 MC_CONFIDENCE_LEVEL = 68.27        # Confidence level for uncertainty (1-sigma equivalent)
 MC_RANDOM_SEED = 42                # For reproducible results
+
+# Minimum Uncertainty Thresholds (to prevent division by near-zero values)
+MIN_VELOCITY_UNCERTAINTY_ARCSEC_YR = 0.01    # Minimum velocity uncertainty (10 mas/yr)
+MIN_OPI_UNCERTAINTY = 1e-3                   # Minimum OPI uncertainty
+MAX_REASONABLE_SIGNIFICANCE = 50.0           # Maximum reasonable significance value (50σ)
 
 # Orbital Quality Grades (ORB6)
 MIN_ORBIT_GRADE = 1  # Best quality
@@ -195,12 +200,12 @@ ORB6_COLUMN_NAMES = [
 MIN_MEASUREMENTS_FOR_CHARACTERIZE = 5
 DEFAULT_MIN_OBS = 2
 DEFAULT_MAX_OBS = 10
-DEFAULT_CONCURRENT_REQUESTS = 20
+DEFAULT_CONCURRENT_REQUESTS = 200 # While testing, I couldn't see any major diferences between ~70, 100, 150 and 200, but leaving a higher value doesn't seem to cause any harm.
 DEFAULT_GAIA_P_VALUE = 0.01
 DEFAULT_GAIA_RADIUS_FACTOR = 1.2
 DEFAULT_GAIA_MIN_RADIUS = 2.0
 DEFAULT_GAIA_MAX_RADIUS = 15.0
-DEFAULT_SORT_BY = 'v_total'
+DEFAULT_SORT_BY = 'v_total_median'
 TOP_RESULTS_DISPLAY_COUNT = 10
 
 # Analysis modes
@@ -426,7 +431,7 @@ AVAILABLE_ANALYSIS_MODES = ['discovery', 'characterize', 'orbital']
 
 # Default sort keys for each analysis mode
 DEFAULT_SORT_KEYS = {
-    'discovery': 'v_total_significance',
+    'discovery': 'v_total_median',  # Changed from v_total_significance to v_total_median
     'characterize': 'v_total_significance',
     'orbital': 'opi_significance'
 }
@@ -680,7 +685,7 @@ ROBUST_REGRESSION_RANDOM_STATE = 42         # Random state for reproducible resu
 
 # Astrometric Motion Validation
 MAX_ASTROMETRIC_VELOCITY_ARCSEC_PER_YEAR = 10.0  # Maximum realistic proper motion
-MIN_TIME_BASELINE_YEARS = 1.0               # Minimum time baseline for meaningful analysis
+MIN_TIME_BASELINE_YEARS = 0.4               # Minimum time baseline for meaningful analysis
 
 # Curvature Analysis Configuration
 MAX_CURVATURE_INDEX_ARCSEC = 50.0            # Maximum expected curvature deviation
@@ -745,7 +750,7 @@ ROBUST_REGRESSION_RANDOM_STATE = 42  # Fixed seed for reproducible robust regres
 
 # Astrometric Motion Limits - Physical Constraints
 MAX_ASTROMETRIC_VELOCITY_ARCSEC_PER_YEAR = 10.0  # Maximum reasonable astrometric velocity
-MIN_TIME_BASELINE_YEARS = 1.0  # Minimum meaningful time baseline for motion analysis
+MIN_TIME_BASELINE_YEARS = 0.4  # Minimum meaningful time baseline for motion analysis
 MAX_CURVATURE_INDEX_ARCSEC = 50.0  # Maximum reasonable curvature index value
 
 # Prediction and Extrapolation Safety Limits
@@ -777,7 +782,7 @@ MILLIARCSEC_PER_ARCSEC = 1000.0  # Milliarcsecond to arcsecond conversion
 MIN_EPOCH_YEAR = 1800.0
 MAX_EPOCH_YEAR = 2100.0
 MIN_SEPARATION_ARCSEC = 0.1
-MAX_SEPARATION_ARCSEC = 300.0
+MAX_SEPARATION_ARCSEC = 1000.0
 MIN_POSITION_ANGLE_DEG = 0.0
 MAX_POSITION_ANGLE_DEG = 360.0
 
@@ -818,6 +823,7 @@ CLI_RESULT_KEYS = {
     'DATE_LAST': 'date_last',
     'N_OBSERVATIONS': 'n_observations',
     'DATE_FIRST': 'date_first',
+    'DATE_RANGE_YEARS': 'date_range_years',
     'PHYSICALITY_P_VALUE': 'physicality_p_value',
     'PHYSICALITY_LABEL': 'physicality_label',
     'PHYSICALITY_METHOD': 'physicality_method',
@@ -837,24 +843,24 @@ CLI_STATS_KEYS = {
 # CLI Default Values
 CLI_DEFAULT_PHYSICALITY_VALUES = {
     'ERROR': {
-        'physicality_p_value': None,
+        'physicality_p_value': CLI_VALUE_NOT_AVAILABLE,
         'physicality_label': 'Error',
-        'physicality_method': None,
-        'physicality_confidence': None
+        'physicality_method': CLI_VALUE_NOT_AVAILABLE,
+        'physicality_confidence': CLI_VALUE_NOT_AVAILABLE
     },
     'NOT_CHECKED': {
-        'physicality_p_value': None,
+        'physicality_p_value': CLI_VALUE_NOT_AVAILABLE,
         'physicality_label': 'Not checked',
-        'physicality_method': None,
-        'physicality_confidence': None
+        'physicality_method': CLI_VALUE_NOT_AVAILABLE,
+        'physicality_confidence': CLI_VALUE_NOT_AVAILABLE
     }
 }
 
 # Valid sort keys for each analysis mode
 CLI_VALID_SORT_KEYS = {
-    'discovery': ['v_total', 'v_total_significance', 'rmse', 'date_last', 'pa_v_deg', 'uncertainty_quality'],
-    'characterize': ['rmse', 'v_total', 'v_total_significance', 'n_measurements', 'time_baseline_years', 'bootstrap_success_rate'],
-    'orbital': ['opi_arcsec_yr', 'opi_significance', 'deviation_arcsec', 'prediction_divergence_arcsec', 'orbital_period', 'eccentricity', 'v_total', 'v_total_significance']
+    'discovery': ['v_total_median', 'rmse', 'date_last', 'pa_v_deg', 'quality_score'],  # Removed v_total_significance
+    'characterize': ['rmse', 'v_total_median', 'v_total_significance', 'n_measurements', 'time_baseline_years', 'bootstrap_success_rate'],
+    'orbital': ['opi_arcsec_yr', 'opi_significance', 'deviation_arcsec', 'prediction_divergence_arcsec', 'orbital_period', 'eccentricity', 'v_total_median', 'v_total_significance']
 }
 
 # Error handling configuration

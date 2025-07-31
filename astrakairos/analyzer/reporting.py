@@ -107,7 +107,7 @@ def display_results_summary(results: List[Dict[str, Any]], mode: str, sort_key: 
                 metric_str = f"Significance = N/A"
         elif mode == 'discovery':
             metric_value = format_metric_with_uncertainty(
-                result, 'v_total', 'v_total_uncertainty', 'uncertainty_quality'
+                result, 'v_total_median', 'v_total_uncertainty', 'quality_score'
             )
             metric_str = f"V = {metric_value} arcsec/yr"
         elif mode == 'characterize':

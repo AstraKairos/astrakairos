@@ -59,14 +59,39 @@ def load_csv_data(filepath: str) -> pd.DataFrame:
     for encoding in ENCODING_FALLBACK_ORDER:
         try:
             log.info(f"Attempting to read CSV with encoding: {encoding}")
-            df = pd.read_csv(filepath, sep=None, engine='python', encoding=encoding)
             
-            # Validate that required 'wds_id' column exists
-            if 'wds_id' not in df.columns:
-                raise DataLoadError(f"Required 'wds_id' column not found in {filepath}")
-            
-            log.info(f"CSV loaded successfully. Rows: {len(df)}, Encoding: {encoding}")
-            return df
+            # Try default CSV reading first (comma-separated)
+            try:
+                df = pd.read_csv(filepath, encoding=encoding)
+                
+                # Validate that required 'wds_id' column exists
+                if 'wds_id' not in df.columns:
+                    # Try semicolon delimiter fallback
+                    log.debug("wds_id column not found with comma delimiter, trying semicolon...")
+                    df = pd.read_csv(filepath, encoding=encoding, sep=';')
+                    
+                    if 'wds_id' not in df.columns:
+                        raise DataLoadError(f"Required 'wds_id' column not found in {filepath}")
+                
+                log.info(f"CSV loaded successfully. Rows: {len(df)}, Encoding: {encoding}")
+                return df
+                
+            except pd.errors.ParserError:
+                # If comma parsing fails, try semicolon
+                log.debug("CSV parsing failed with comma delimiter, trying semicolon...")
+                try:
+                    df = pd.read_csv(filepath, encoding=encoding, sep=';')
+                    
+                    # Validate that required 'wds_id' column exists
+                    if 'wds_id' not in df.columns:
+                        raise DataLoadError(f"Required 'wds_id' column not found in {filepath}")
+                    
+                    log.info(f"CSV loaded successfully with semicolon delimiter. Rows: {len(df)}, Encoding: {encoding}")
+                    return df
+                except pd.errors.ParserError:
+                    # Both comma and semicolon parsing failed - this is a real parser error
+                    log.error(f"Data parsing error: failed to parse CSV format with both delimiters")
+                    raise DataLoadError(f"Could not parse CSV format in file: {filepath}")
             
         except UnicodeDecodeError:
             log.debug(f"Encoding {encoding} failed, trying next...")
@@ -80,9 +105,6 @@ def load_csv_data(filepath: str) -> pd.DataFrame:
         except pd.errors.EmptyDataError as e:
             log.error(f"Empty data file: {e}")
             raise DataLoadError(f"File contains no data: {filepath}")
-        except pd.errors.ParserError as e:
-            log.error(f"Data parsing error: {e}")
-            raise DataLoadError(f"Could not parse CSV format in file: {filepath}")
         except DataLoadError:
             # Re-raise our own DataLoadError (like missing wds_id column)
             raise

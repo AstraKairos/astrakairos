@@ -324,21 +324,33 @@ async def _perform_gaia_validation(wds_id: str, wds_summary: WdsSummary,
     
     try:
         search_radius = _calculate_search_radius(wds_summary, analysis_config)
+        log.debug(f"Calculated search radius: {search_radius}")
         
-        physicality_assessment = await gaia_validator.validate_binary_physicality(
-            wds_summary, search_radius_arcsec=search_radius
+        # Create system_data dict as expected by HybridValidator
+        system_data = {
+            'wds_id': wds_id,
+            'component_pair': 'AB',  # Default component pair
+            **wds_summary  # Include all summary data
+        }
+        
+        log.debug(f"Calling validator.validate_physicality with system_data keys: {list(system_data.keys())}")
+        physicality_assessment = await gaia_validator.validate_physicality(
+            system_data, search_radius_arcsec=search_radius
         )
+        log.debug(f"Physicality assessment result: {physicality_assessment}")
         
         if physicality_assessment:
-            return {
-                'physicality_label': physicality_assessment.label.value,
-                'physicality_p_value': physicality_assessment.p_value,
-                'physicality_method': physicality_assessment.method.value,
-                'physicality_confidence': physicality_assessment.confidence
+            result = {
+                'physicality_label': physicality_assessment.get('label').value if hasattr(physicality_assessment.get('label'), 'value') else str(physicality_assessment.get('label')),
+                'physicality_p_value': physicality_assessment.get('p_value'),
+                'physicality_method': physicality_assessment.get('method').value if hasattr(physicality_assessment.get('method'), 'value') else str(physicality_assessment.get('method')),
+                'physicality_confidence': physicality_assessment.get('confidence')
             }
+            log.debug(f"Returning result: {result}")
+            return result
         else:
             # Return default values for failed validation
-            return CLI_DEFAULT_PHYSICALITY_VALUES.copy()
+            return CLI_DEFAULT_PHYSICALITY_VALUES['ERROR'].copy()
             
     except Exception as e:
         if isinstance(e, PhysicalityValidationError):

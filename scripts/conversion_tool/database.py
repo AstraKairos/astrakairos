@@ -27,6 +27,19 @@ def create_sqlite_database(df_wds: pd.DataFrame, df_orb6: pd.DataFrame,
     """
     log.info(f"Creating SQLite database: {output_path}")
     
+    # DEBUG: Check what columns we're actually saving
+    log.info(f"WDSS summary table columns: {list(df_wds.columns)[:10]}... (showing first 10)")
+    log.info(f"WDSS summary table shape: {df_wds.shape}")
+    
+    # CRITICAL CHECK: Verify multi-pair columns exist
+    critical_cols = ['component_pair', 'system_pair_id']
+    missing_cols = [col for col in critical_cols if col not in df_wds.columns]
+    if missing_cols:
+        log.error(f"CRITICAL: Missing multi-pair columns: {missing_cols}")
+        log.error("The revolutionary multi-pair architecture was not preserved!")
+    else:
+        log.info("✅ Multi-pair columns found in summary table")
+    
     conn = sqlite3.connect(output_path)
     
     try:
@@ -49,6 +62,20 @@ def create_sqlite_database(df_wds: pd.DataFrame, df_orb6: pd.DataFrame,
         if 'n_obs' in df_wds.columns:
             conn.execute('CREATE INDEX idx_wdss_summary_n_obs ON wdss_summary(n_obs)')
         
+        # MULTI-PAIR ARCHITECTURE: Critical indexes for new columns
+        if 'component_pair' in df_wds.columns:
+            conn.execute('CREATE INDEX idx_wdss_summary_component_pair ON wdss_summary(component_pair)')
+            log.info("✅ Created component_pair index")
+        
+        if 'system_pair_id' in df_wds.columns:
+            conn.execute('CREATE INDEX idx_wdss_summary_system_pair_id ON wdss_summary(system_pair_id)')
+            log.info("✅ Created system_pair_id index")
+        
+        # Combined index for efficient multi-pair queries
+        if 'wds_id' in df_wds.columns and 'component_pair' in df_wds.columns:
+            conn.execute('CREATE INDEX idx_wdss_summary_wds_pair ON wdss_summary(wds_id, component_pair)')
+            log.info("✅ Created combined wds_id+component_pair index")
+        
         log.info(f"Created wdss_summary table with {len(df_wds)} entries and performance indexes")
         
         # Debug ORB6 DataFrame
@@ -60,14 +87,27 @@ def create_sqlite_database(df_wds: pd.DataFrame, df_orb6: pd.DataFrame,
         
         # Create ORB6 table
         df_orb6.to_sql('orbital_elements', conn, if_exists='replace', index=False)
-        conn.execute('CREATE INDEX idx_orbital_elements_id ON orbital_elements(wds_id)')
-        log.info(f"Created orbital_elements table with {len(df_orb6)} entries")
+        
+        # Create index only if table has data and wds_id column exists
+        if len(df_orb6) > 0 and 'wds_id' in df_orb6.columns:
+            conn.execute('CREATE INDEX idx_orbital_elements_id ON orbital_elements(wds_id)')
+            log.info(f"Created orbital_elements table with {len(df_orb6)} entries and index")
+        else:
+            log.info(f"Created orbital_elements table with {len(df_orb6)} entries (no index - empty or missing wds_id)")
         
         # Create measurements table if available
-        if df_measurements is not None:
+        if df_measurements is not None and len(df_measurements) > 0:
             df_measurements.to_sql('measurements', conn, if_exists='replace', index=False)
-            conn.execute('CREATE INDEX idx_measurements_wdss_id ON measurements(wdss_id)')
-            conn.execute('CREATE INDEX idx_measurements_epoch ON measurements(epoch)')
+            
+            # Check if required columns exist before creating indexes
+            if 'wdss_id' in df_measurements.columns:
+                conn.execute('CREATE INDEX idx_measurements_wdss_id ON measurements(wdss_id)')
+                log.info(f"Created wdss_id index for measurements table")
+            
+            if 'epoch' in df_measurements.columns:
+                conn.execute('CREATE INDEX idx_measurements_epoch ON measurements(epoch)')
+                log.info(f"Created epoch index for measurements table")
+            
             log.info(f"Created measurements table with {len(df_measurements)} entries")
         
         # Vacuum database for optimal performance

@@ -18,6 +18,7 @@ from ..config import (
     DEFAULT_ANALYSIS_MODE, AVAILABLE_ANALYSIS_MODES, DEFAULT_SORT_KEYS,
     AMBIGUOUS_P_VALUE_RATIO, DEFAULT_MC_SAMPLES,
     CLI_TOP_RESULTS_DISPLAY_COUNT, CLI_DISPLAY_LINE_WIDTH,
+    MIN_VELOCITY_UNCERTAINTY_ARCSEC_YR, MIN_OPI_UNCERTAINTY, MAX_REASONABLE_SIGNIFICANCE,
     CLI_WDS_ID_COLUMN_WIDTH, CLI_METRIC_COLUMN_WIDTH,
     CLI_VALID_SORT_KEYS
 )
@@ -41,6 +42,7 @@ def _create_analysis_config(args: argparse.Namespace) -> Dict[str, Any]:
     return {
         'mode': args.mode,
         'validate_gaia': args.validate_gaia,
+        'validate_el_badry': args.validate_el_badry,
         'calculate_masses': getattr(args, 'calculate_masses', False),
         'parallax_source': getattr(args, 'parallax_source', 'auto'),
         'gaia_radius_factor': args.gaia_radius_factor,
@@ -70,10 +72,12 @@ def _create_dependencies(args: argparse.Namespace) -> Tuple[DataSource, Optional
     
     data_source = LocalDataSource(database_path=args.database_path)
     
-    # 2. Initialize the validator (HYBRID APPROACH) if requested
+    # 2. Initialize the validator based on validation flags
     gaia_validator = None
-    if args.validate_gaia:
-        log.info("Gaia validation enabled (using hybrid local/online approach).")
+    
+    if args.validate_gaia and args.validate_el_badry:
+        # Hybrid mode: El-Badry cache + Gaia fallback
+        log.info("Hybrid validation enabled: El-Badry cache + Gaia fallback (requires network for uncached systems).")
         
         # Create the online validator as a component
         from ..data.gaia_source import GaiaValidator
@@ -91,10 +95,45 @@ def _create_dependencies(args: argparse.Namespace) -> Tuple[DataSource, Optional
             if 'cached_systems' in cache_stats and cache_stats['cached_systems'] != 'unknown':
                 log.info(f"Validation cache: {cache_stats['cached_systems']} systems pre-computed from El-Badry catalog "
                         f"({cache_stats.get('cache_coverage_percent', 0):.1f}% coverage)")
+                log.info("Cached systems will use El-Badry data, uncached systems will query Gaia directly")
             else:
-                log.info("No El-Badry cache available - will use online-only validation")
+                log.info("No El-Badry cache available - will use Gaia-only validation")
         except Exception as e:
             log.warning(f"Could not retrieve cache statistics: {e}")
+    
+    elif args.validate_gaia:
+        # Gaia-only mode: Direct online queries without cache
+        log.info("Gaia-only validation enabled (direct online queries, no cache).")
+        
+        # Create only the online validator
+        from ..data.gaia_source import GaiaValidator
+        gaia_validator = GaiaValidator(
+            physical_p_value_threshold=args.gaia_p_value,
+            ambiguous_p_value_threshold=args.gaia_p_value / AMBIGUOUS_P_VALUE_RATIO
+        )
+        
+        log.info("All systems will be validated using direct Gaia queries")
+    
+    elif args.validate_el_badry:
+        # El-Badry-only mode: Local cache only
+        log.info("El-Badry-only validation enabled (local cache only, no network required).")
+        
+        # Create hybrid validator without online fallback (cache-only mode)
+        gaia_validator = HybridValidator(data_source, online_validator=None)
+        
+        # Log cache statistics for transparency
+        try:
+            cache_stats = gaia_validator.get_cache_statistics()
+            if 'cached_systems' in cache_stats and cache_stats['cached_systems'] != 'unknown':
+                log.info(f"Validation cache: {cache_stats['cached_systems']} systems pre-computed from El-Badry catalog "
+                        f"({cache_stats.get('cache_coverage_percent', 0):.1f}% coverage)")
+                log.info("Systems not in El-Badry cache will be marked as 'Insufficient Data'")
+            else:
+                log.warning("No El-Badry cache available - all systems will be marked as 'Insufficient Data'")
+        except Exception as e:
+            log.warning(f"Could not retrieve cache statistics: {e}")
+    
+    # If neither flag is specified, gaia_validator remains None (no validation)
     
     return data_source, gaia_validator
 
@@ -108,6 +147,8 @@ def create_argument_parser():
 Examples:
   %(prog)s stars.csv --database-path catalogs.db --limit 10
   %(prog)s --all --database-path catalogs.db --output results.csv --validate-gaia
+  %(prog)s --all --database-path catalogs.db --validate-el-badry --limit 1000
+  %(prog)s --all --database-path catalogs.db --validate-gaia --validate-el-badry --output hybrid.csv
         """
     )
     
@@ -159,7 +200,11 @@ Examples:
     
     gaia_group.add_argument('--validate-gaia',
                        action='store_true',
-                       help='Validate physicality using Gaia data (requires network).')
+                       help='Validate physicality using direct online Gaia queries (requires network).')
+    
+    gaia_group.add_argument('--validate-el-badry',
+                       action='store_true',
+                       help='Validate physicality using local El-Badry catalog cache (no network required).')
     
     gaia_group.add_argument('--gaia-p-value',
                        type=float,
@@ -237,6 +282,11 @@ async def main_async(args: argparse.Namespace):
     # Configure logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+    # Validate that at least one validation method is specified if any validation is requested
+    if not args.validate_gaia and not args.validate_el_badry:
+        # No validation specified - this is valid, will skip physicality validation
+        pass
+    
     # 1. Create dependencies using factory function
     data_source, gaia_validator = _create_dependencies(args)
 
@@ -349,12 +399,22 @@ async def main_async(args: argparse.Namespace):
             log.info("Calculating significance for results with uncertainties...")
             for result in results:
                 # Calculate velocity significance for discovery and characterize modes
-                if result.get('v_total_uncertainty') and result['v_total_uncertainty'] > 0:                
-                    result['v_total_significance'] = abs(result.get('v_total', 0)) / result['v_total_uncertainty']
+                v_total_unc = result.get('v_total_uncertainty')
+                if v_total_unc and v_total_unc > 0:
+                    # Apply minimum uncertainty threshold to prevent extreme significance values
+                    effective_uncertainty = max(v_total_unc, MIN_VELOCITY_UNCERTAINTY_ARCSEC_YR)
+                    significance = abs(result.get('v_total_median', 0)) / effective_uncertainty
+                    # Cap significance at reasonable maximum
+                    result['v_total_significance'] = min(significance, MAX_REASONABLE_SIGNIFICANCE)
 
                 # Calculate OPI significance for orbital mode
-                if result.get('opi_uncertainty') and result['opi_uncertainty'] > 0:
-                    result['opi_significance'] = abs(result.get('opi_arcsec_yr', 0)) / result['opi_uncertainty']
+                opi_unc = result.get('opi_uncertainty')
+                if opi_unc and opi_unc > 0:
+                    # Apply minimum uncertainty threshold
+                    effective_opi_uncertainty = max(opi_unc, MIN_OPI_UNCERTAINTY)
+                    opi_significance = abs(result.get('opi_arcsec_yr', 0)) / effective_opi_uncertainty
+                    # Cap OPI significance at reasonable maximum
+                    result['opi_significance'] = min(opi_significance, MAX_REASONABLE_SIGNIFICANCE)
         
         # 6. Sort and present the results
         if results:
@@ -393,7 +453,7 @@ async def main_async(args: argparse.Namespace):
                         metric_str = f"Significance = N/A"
                 elif args.mode == 'discovery':
                     metric_value = format_metric_with_uncertainty(
-                        result, 'v_total', 'v_total_uncertainty', 'uncertainty_quality'
+                        result, 'v_total_median', 'v_total_uncertainty', 'quality_score'
                     )
                     metric_str = f"V = {metric_value} arcsec/yr"
                 elif args.mode == 'characterize':

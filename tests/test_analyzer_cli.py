@@ -39,8 +39,9 @@ def test_parser_default_arguments():
     assert args.source == 'local'
     assert args.limit is None
     assert not args.validate_gaia
+    assert not args.validate_el_badry  # New flag should be False by default
     assert args.gaia_p_value == 0.01
-    assert args.concurrent == 20
+    assert args.concurrent == 200  # Updated to current default
 
 def test_parser_custom_arguments():
     """Test that custom arguments can be parsed correctly."""
@@ -96,12 +97,11 @@ MOCK_RESULT = {
 # El decorador 'patch' reemplaza objetos con 'Mocks' durante la prueba
 @patch('astrakairos.analyzer.cli.load_csv_data')
 @patch('astrakairos.analyzer.cli.LocalDataSource')
-@patch('astrakairos.analyzer.cli.GaiaValidator')
 @patch('astrakairos.analyzer.cli.HybridValidator')
 @patch('astrakairos.analyzer.cli.save_results_to_csv')
 @patch('astrakairos.analyzer.cli.analyze_stars')
 @patch('astrakairos.analyzer.cli.print_error_summary')
-async def test_main_async_local_source_flow(mock_print_error_summary, mock_analyze_stars, mock_save_csv, mock_hybrid_validator, mock_gaia_validator, mock_local_source, mock_load_csv):
+async def test_main_async_local_source_flow(mock_print_error_summary, mock_analyze_stars, mock_save_csv, mock_hybrid_validator, mock_local_source, mock_load_csv):
     """
     Prueba de integración para el flujo principal usando la fuente de datos local con validador híbrido.
     """
@@ -115,10 +115,6 @@ async def test_main_async_local_source_flow(mock_print_error_summary, mock_analy
     mock_local_instance.get_wds_summary = AsyncMock(return_value=MOCK_WDS_DATA)
     mock_local_instance.get_orbital_elements = AsyncMock(return_value=MOCK_ORBITAL_DATA)
     mock_local_instance.close = Mock()  # Mock for the close() method
-    
-    # Configura la instancia 'mockeada' de GaiaValidator (online component)
-    mock_gaia_instance = mock_gaia_validator.return_value
-    mock_gaia_instance.validate_physicality = AsyncMock(return_value=MOCK_GAIA_RESULT)
     
     # Configura la instancia 'mockeada' de HybridValidator
     mock_hybrid_instance = mock_hybrid_validator.return_value
@@ -134,7 +130,7 @@ async def test_main_async_local_source_flow(mock_print_error_summary, mock_analy
         'stars.csv',
         '--source', 'local',
         '--database-path', 'catalogs.db',
-        '--validate-gaia',
+        '--validate-el-badry',  # Changed to el-badry to test HybridValidator creation
         '--output', 'results.csv'
     ]
     args = parser.parse_args(args_list)

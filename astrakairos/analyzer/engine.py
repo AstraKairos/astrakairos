@@ -122,9 +122,9 @@ class AnalyzerRunner:
         }
     
     async def process_star(self, row: pd.Series, analysis_config: Dict[str, Any],
-                          semaphore: asyncio.Semaphore) -> Dict[str, Any]:
+                          semaphore: asyncio.Semaphore) -> List[Dict[str, Any]]:
         """
-        Process a single star with comprehensive error handling and statistics tracking.
+        Process a single star and return analysis results for ALL component pairs.
         
         This method contains the main analysis workflow for a single star,
         decomposed into logical steps for maintainability. It properly propagates
@@ -134,7 +134,8 @@ class AnalyzerRunner:
             row: DataFrame row containing star data with 'wds_id'
             analysis_config: Analysis configuration dictionary containing:
                 - mode: Analysis mode ('discovery', 'characterize', 'orbital')
-                - validate_gaia: Whether to perform Gaia validation
+                - validate_gaia: Whether to perform direct Gaia validation (online queries)
+                - validate_el_badry: Whether to perform El-Badry validation (local cache only)
                 - calculate_masses: Whether to calculate masses (orbital mode)
                 - parallax_source: Parallax source preference
                 - gaia_radius_factor: Factor for Gaia search radius
@@ -143,7 +144,7 @@ class AnalyzerRunner:
             semaphore: Concurrency control semaphore
             
         Returns:
-            Analysis result dictionary
+            List of analysis result dictionaries, one for each component pair
             
         Raises:
             ValidationError: When data validation fails
@@ -156,30 +157,49 @@ class AnalyzerRunner:
             self._stats[CLI_STATS_KEYS['PROCESSED']] += 1
             
             try:
-                # Step 1: Retrieve and validate WDS data
-                wds_summary = await self._get_and_validate_wds_data(wds_id)
+                # Step 1: Retrieve and validate WDS data for ALL component pairs
+                wds_summaries = await self._get_and_validate_wds_data(wds_id)
                 
-                # Step 2: Log processing information
-                n_obs = wds_summary.get(CLI_RESULT_KEYS['N_OBSERVATIONS'], CLI_VALUE_NOT_AVAILABLE)
-                log.info(f"Processing {wds_id} in {analysis_config['mode']} mode (obs: {n_obs})")
+                results = []
+                for wds_summary in wds_summaries:
+                    # Get component pair info for logging
+                    component_pair = wds_summary.get('components', 'AB')
+                    system_id = f"{wds_id}-{component_pair}" if component_pair else wds_id
+                    
+                    # Step 2: Log processing information
+                    n_obs = wds_summary.get('n_observations', CLI_VALUE_NOT_AVAILABLE)
+                    log.info(f"Processing {system_id} in {analysis_config['mode']} mode (obs: {n_obs})")
 
-                # Step 3: Initialize result with common fields
-                result = self._initialize_result_dict(wds_id, wds_summary, analysis_config)
+                    # Step 3: Initialize result with common fields
+                    result = self._initialize_result_dict(wds_id, wds_summary, analysis_config)
+                    
+                    # Add component pair info to result (use from wds_summary)
+                    if 'components' in wds_summary and wds_summary['components']:
+                        result['component_pair'] = wds_summary['components']
+                    
+                    if 'system_pair_id' in wds_summary and wds_summary['system_pair_id']:
+                        result['system_pair_id'] = wds_summary['system_pair_id']
 
-                # Step 4: Perform mode-specific analysis
-                analysis_result = await self._run_analysis_mode(wds_id, wds_summary, analysis_config)
-                if analysis_result is None:
-                    raise AnalysisError(f"Mode-specific analysis failed for {wds_id}")
-                result.update(analysis_result)
+                    # Step 4: Perform mode-specific analysis
+                    analysis_result = await self._run_analysis_mode(wds_id, wds_summary, analysis_config)
+                    if analysis_result is None:
+                        log.warning(f"Mode-specific analysis failed for {system_id}")
+                        continue
+                    result.update(analysis_result)
 
-                # Step 5: Optional Gaia validation
-                gaia_result = await self._perform_optional_gaia_validation(
-                    wds_id, wds_summary, analysis_config
-                )
-                result.update(gaia_result)
+                    # Step 5: Optional Gaia validation
+                    gaia_result = await self._perform_optional_gaia_validation(
+                        wds_id, wds_summary, analysis_config
+                    )
+                    result.update(gaia_result)
+                    
+                    results.append(result)
 
-                self._stats[CLI_STATS_KEYS['SUCCESSFUL']] += 1
-                return result
+                if not results:
+                    raise AnalysisError(f"No valid component pairs could be analyzed for {wds_id}")
+
+                self._stats[CLI_STATS_KEYS['SUCCESSFUL']] += len(results)
+                return results
                 
             except (ValidationError, AnalysisError, DataSourceError, PhysicalityValidationError):
                 # These are expected domain-specific exceptions that should be categorized
@@ -190,18 +210,25 @@ class AnalyzerRunner:
                 self._stats[CLI_STATS_KEYS['FAILED']] += 1
                 raise StarProcessingError(f"Critical error processing {wds_id}") from e
     
-    async def _get_and_validate_wds_data(self, wds_id: str) -> Dict[str, Any]:
-        """Retrieve and validate WDS data for a given star."""
+    async def _get_and_validate_wds_data(self, wds_id: str) -> List[Dict[str, Any]]:
+        """Retrieve and validate WDS data for all component pairs of a given star."""
         try:
-            wds_summary = await self.data_source.get_wds_summary(wds_id)
-            if not wds_summary:
+            wds_summaries = await self.data_source.get_all_component_pairs(wds_id)
+            if not wds_summaries:
                 raise ValidationError(f"No WDS data found for {wds_id}")
             
-            # Validate the WDS summary data
-            if not _validate_wds_summary_for_analysis(wds_summary):
-                raise ValidationError(f"WDS data validation failed for {wds_id}")
+            validated_summaries = []
+            for wds_summary in wds_summaries:
+                # Validate each component pair's WDS summary data
+                if not _validate_wds_summary_for_analysis(wds_summary):
+                    log.warning(f"WDS data validation failed for {wds_id} component pair {getattr(wds_summary, 'components', 'unknown')}")
+                    continue
+                validated_summaries.append(wds_summary)
+            
+            if not validated_summaries:
+                raise ValidationError(f"No valid component pairs found for {wds_id}")
                 
-            return wds_summary
+            return validated_summaries
         except WdsIdNotFoundError as e:
             raise ValidationError(f"WDS ID not found: {wds_id}") from e
         except Exception as e:
@@ -212,24 +239,38 @@ class AnalyzerRunner:
         """Initialize the result dictionary with common fields."""
         from ..config import CLI_DEFAULT_PHYSICALITY_VALUES
         
+        # Calculate date range in years if we have the dates
+        date_range_years = CLI_VALUE_NOT_AVAILABLE
+        if 'date_first' in wds_summary and 'date_last' in wds_summary:
+            date_first = wds_summary['date_first']
+            date_last = wds_summary['date_last']
+            if date_first is not None and date_last is not None:
+                date_range_years = date_last - date_first
+        
         result = {
             CLI_RESULT_KEYS['WDS_ID']: wds_id,
-            CLI_RESULT_KEYS['ANALYSIS_MODE']: analysis_config['mode'],
-            CLI_RESULT_KEYS['N_OBSERVATIONS']: wds_summary.get('n_obs', CLI_VALUE_NOT_AVAILABLE),
-            CLI_RESULT_KEYS['DATE_RANGE_YEARS']: wds_summary.get('date_range_years', CLI_VALUE_NOT_AVAILABLE)
+            CLI_RESULT_KEYS['MODE']: analysis_config['mode'],
+            CLI_RESULT_KEYS['N_OBSERVATIONS']: wds_summary.get('n_observations', CLI_VALUE_NOT_AVAILABLE),
+            CLI_RESULT_KEYS['DATE_RANGE_YEARS']: date_range_years
         }
         
-        # Initialize physicality fields with defaults
-        result.update(CLI_DEFAULT_PHYSICALITY_VALUES)
+        # Initialize physicality fields with defaults (not checked by default)
+        result.update(CLI_DEFAULT_PHYSICALITY_VALUES['NOT_CHECKED'])
         
         return result
     
     async def _perform_optional_gaia_validation(self, wds_id: str, wds_summary: Dict[str, Any], 
                                               analysis_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Perform optional Gaia validation if enabled."""
+        """Perform optional physicality validation if enabled (Gaia hybrid or El-Badry only)."""
         gaia_result = {}
         
-        if analysis_config.get('validate_gaia', False) and self.gaia_validator:
+        # Check if any form of validation is enabled
+        validation_enabled = (
+            analysis_config.get('validate_gaia', False) or 
+            analysis_config.get('validate_el_badry', False)
+        )
+        
+        if validation_enabled and self.gaia_validator:
             try:
                 from .workflows import _perform_gaia_validation
                 gaia_result = await _perform_gaia_validation(
@@ -239,7 +280,7 @@ class AnalyzerRunner:
                 log.warning(f"Gaia validation failed for {wds_id}: {e}")
                 # Use default values for failed validation
                 from ..config import CLI_DEFAULT_PHYSICALITY_VALUES
-                gaia_result = CLI_DEFAULT_PHYSICALITY_VALUES.copy()
+                gaia_result = CLI_DEFAULT_PHYSICALITY_VALUES['ERROR'].copy()
         
         return gaia_result
     
@@ -285,6 +326,8 @@ async def analyze_stars(runner: AnalyzerRunner,
     """
     Analyzes multiple stars concurrently using AnalyzerRunner.
     
+    Each star may produce multiple results (one per component pair in multi-pair systems).
+    
     Args:
         runner: Configured AnalyzerRunner instance
         df: DataFrame with star data
@@ -293,7 +336,8 @@ async def analyze_stars(runner: AnalyzerRunner,
         
     Returns:
         Tuple of (successful_results, error_summary)
-        where error_summary is a dict mapping error types to lists of affected star IDs
+        where successful_results includes all component pairs from all stars,
+        and error_summary is a dict mapping error types to lists of affected star IDs
     """
     semaphore = asyncio.Semaphore(max_concurrent)
     tasks = []
@@ -323,6 +367,11 @@ async def analyze_stars(runner: AnalyzerRunner,
             log.error(f"Failed to process {wds_id}: {error_type}: {result}")
             
         elif result is not None:
-            successful_results.append(result)
+            # Result is now a list of component pairs - flatten them
+            if isinstance(result, list):
+                successful_results.extend(result)
+            else:
+                # Backward compatibility for single results
+                successful_results.append(result)
     
     return successful_results, error_summary

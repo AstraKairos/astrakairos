@@ -247,7 +247,7 @@ class TestCLIConfiguration:
     def test_display_configuration(self):
         """Test display configuration."""
         assert config.TOP_RESULTS_DISPLAY_COUNT > 0
-        assert config.DEFAULT_SORT_BY in ['v_total', 'opi', 'rmse']
+        assert config.DEFAULT_SORT_BY in ['v_total', 'opi', 'rmse', 'v_total_median']
 
 
 class TestGUIConfiguration:
