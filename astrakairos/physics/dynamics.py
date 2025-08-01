@@ -50,6 +50,59 @@ from ..config import (
 # Configure logging
 logger = logging.getLogger(__name__)
 
+
+def _handle_single_epoch_system(wds_summary: WdsSummary) -> Optional[Dict[str, Any]]:
+    """
+    Handle single-epoch systems by returning basic position information
+    without velocity calculations.
+    
+    Args:
+        wds_summary: WDS summary data containing first observation only
+        
+    Returns:
+        Dictionary with basic position information or None if insufficient data
+    """
+    if not wds_summary:
+        return None
+    
+    # Only need first epoch data for single-epoch systems
+    required_fields = ['date_first', 'pa_first', 'sep_first']
+    if not all(field in wds_summary and wds_summary[field] is not None for field in required_fields):
+        return None
+    
+    try:
+        # Extract available data
+        t1 = wds_summary['date_first']
+        theta1_deg = wds_summary['pa_first']
+        rho1 = wds_summary['sep_first']
+        
+        # Convert to Cartesian coordinates for consistency
+        theta1_rad = np.radians(theta1_deg)
+        x1 = rho1 * np.sin(theta1_rad)
+        y1 = rho1 * np.cos(theta1_rad)
+        
+        return {
+            'vx_arcsec_per_year': None,  # No velocity available
+            'vy_arcsec_per_year': None,  # No velocity available
+            'v_total_estimate': None,    # No velocity available
+            'pa_v_estimate': None,       # No velocity available
+            'time_baseline_years': 0.0,  # Single epoch
+            'n_points_fit': 1,           # Only one measurement
+            'method': 'single_epoch_position',
+            'position_x_arcsec': x1,     # Current position in Cartesian
+            'position_y_arcsec': y1,     # Current position in Cartesian
+            'epoch_first': t1,           # Reference epoch
+            'pa_first_deg': theta1_deg,  # Position angle
+            'sep_first_arcsec': rho1     # Separation
+        }
+        
+    except Exception as e:
+        logger.error(f"Single-epoch position calculation failed: {e}")
+        return None
+
+
+# --- Velocity Estimation Functions ---
+
 def calculate_observation_priority_index(
     orbital_elements: OrbitalElements,
     wds_summary: WdsSummary,
@@ -471,6 +524,9 @@ def estimate_velocity_from_endpoints(
     for robust analysis. It provides a simple two-point velocity estimate
     with proper validation using framework configuration.
     
+    For single-epoch systems (no date_last), returns basic position information
+    without velocity calculations.
+    
     Args:
         wds_summary: WDS summary data containing first and last observations.
         
@@ -481,6 +537,10 @@ def estimate_velocity_from_endpoints(
     
     if not wds_summary:
         return None
+    
+    # Check for single-epoch system first
+    if not wds_summary.get('date_last'):
+        return _handle_single_epoch_system(wds_summary)
         
     required_fields = ['date_first', 'date_last', 'pa_first', 'pa_last', 'sep_first', 'sep_last']
     if not all(field in wds_summary and wds_summary[field] is not None for field in required_fields):

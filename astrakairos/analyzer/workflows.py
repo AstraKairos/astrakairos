@@ -108,10 +108,15 @@ async def _perform_discovery_analysis(wds_id: str, wds_summary: WdsSummary, data
         else:
             # Single-epoch analysis (limited information)
             velocity_result = estimate_velocity_from_endpoints(wds_summary)
-            velocity_result.update({
-                'v_total_uncertainty': None,
-                'uncertainty_quality': 0.0
-            })
+            # For single-epoch systems, add uncertainty placeholders
+            if velocity_result:
+                velocity_result.update({
+                    'v_total_uncertainty': None,
+                    'uncertainty_quality': 0.0,
+                    'analysis_type': 'single_epoch'
+                })
+            else:
+                raise AnalysisError(f"Failed to process single-epoch system: {wds_id}")
         
         log.debug(f"Discovery analysis successful for {wds_id}")
         return velocity_result
@@ -324,7 +329,7 @@ async def _perform_gaia_validation(wds_id: str, wds_summary: WdsSummary,
     
     try:
         search_radius = _calculate_search_radius(wds_summary, analysis_config)
-        log.debug(f"Calculated search radius: {search_radius}")
+        log.debug(f"Calculated search radius: {search_radius:.1f}\" for {wds_id}")
         
         # Create system_data dict as expected by HybridValidator
         system_data = {
@@ -333,11 +338,11 @@ async def _perform_gaia_validation(wds_id: str, wds_summary: WdsSummary,
             **wds_summary  # Include all summary data
         }
         
-        log.debug(f"Calling validator.validate_physicality with system_data keys: {list(system_data.keys())}")
+        log.debug(f"Calling validator.validate_physicality for {wds_id} with coordinates ({wds_summary.get('ra_deg', 'N/A'):.4f}, {wds_summary.get('dec_deg', 'N/A'):.4f})")
         physicality_assessment = await gaia_validator.validate_physicality(
             system_data, search_radius_arcsec=search_radius
         )
-        log.debug(f"Physicality assessment result: {physicality_assessment}")
+        log.debug(f"Physicality assessment result for {wds_id}: {physicality_assessment}")
         
         if physicality_assessment:
             result = {
@@ -346,14 +351,17 @@ async def _perform_gaia_validation(wds_id: str, wds_summary: WdsSummary,
                 'physicality_method': physicality_assessment.get('method').value if hasattr(physicality_assessment.get('method'), 'value') else str(physicality_assessment.get('method')),
                 'physicality_confidence': physicality_assessment.get('confidence')
             }
-            log.debug(f"Returning result: {result}")
+            log.info(f"Gaia validation successful for {wds_id}: {result['physicality_label']} (p={result['physicality_p_value']})")
             return result
         else:
             # Return default values for failed validation
+            log.warning(f"Gaia validation returned empty result for {wds_id}")
             return CLI_DEFAULT_PHYSICALITY_VALUES['ERROR'].copy()
             
     except Exception as e:
+        error_type = type(e).__name__
+        log.error(f"Gaia validation failed for {wds_id}: {error_type}: {e}")
         if isinstance(e, PhysicalityValidationError):
             raise
         else:
-            raise PhysicalityValidationError(f"Gaia validation failed for {wds_id}") from e
+            raise PhysicalityValidationError(f"Gaia validation failed for {wds_id}: {error_type}") from e

@@ -21,7 +21,11 @@ from ..config import (
     QUALITY_SCORE_MAGNITUDE_WEIGHT, GAIA_PARALLAX_MIN_SIGNIFICANCE,
     GAIA_PARALLAX_NORMALIZATION_FACTOR, GAIA_MAGNITUDE_NORMALIZATION_LIMIT,
     QUALITY_SCORE_RUWE_THRESHOLD, QUALITY_SCORE_SIGNIFICANCE_NORMALIZATION,
-    QUALITY_SCORE_MAG_REFERENCE
+    QUALITY_SCORE_MAG_REFERENCE,
+    GAIA_SEARCH_RADIUS_MULTIPLIER_SECOND, GAIA_SEARCH_RADIUS_MULTIPLIER_THIRD,
+    GAIA_RUWE_PERMISSIVE_MULTIPLIER, GAIA_RUWE_QUERY_MULTIPLIER,
+    GAIA_PARALLAX_SIGNIFICANCE_DIVISOR, GAIA_MIN_SOURCES_REQUIRED,
+    GAIA_MAG_LIMIT_BUFFER
 )
 
 # Import source types and enums
@@ -57,25 +61,24 @@ class GaiaValidator(PhysicalityValidator):
         Initializes the Gaia validator with configuration parameters.
 
         Args:
-            gaia_table: The Gaia data release table to query (configurable for future releases)
+            gaia_table: The Gaia data release table to query
             default_search_radius_arcsec: Default search radius for Gaia queries
             physical_p_value_threshold: The p-value above which a pair is considered
-                                        'Likely Physical'. Standard: 0.05 (5%)
+                                        'Likely Physical'. Default: 0.01 (1%)
             ambiguous_p_value_threshold: The p-value above which a pair is 'Ambiguous'.
-                                         Below this: 'Likely Optical'. Standard: 0.001 (0.1%)
-            mag_limit: G-band magnitude limit for Gaia queries (avoids faint noise)
-            max_sources: Maximum number of sources to retrieve (prevents memory issues)
+                                         Below this: 'Likely Optical'. Default: 0.001 (0.1%)
+            mag_limit: G-band magnitude limit for Gaia queries
+            max_sources: Maximum number of sources to retrieve
             gaia_client: Optional Gaia client for dependency injection (testing)
             
         Raises:
             ValueError: If thresholds are not in valid order
         """
-        # Store configuration instance-specific
         self.gaia_table = gaia_table
         self.default_search_radius_arcsec = default_search_radius_arcsec
         self.mag_limit = mag_limit
         self.max_sources = max_sources
-        self.gaia = gaia_client or Gaia  # Dependency injection for testability
+        self.gaia = gaia_client or Gaia
 
         self.physical_threshold = physical_p_value_threshold
         self.ambiguous_threshold = ambiguous_p_value_threshold
@@ -131,26 +134,38 @@ class GaiaValidator(PhysicalityValidator):
         final_radius = search_radius_arcsec if search_radius_arcsec is not None else self.default_search_radius_arcsec
         wds_magnitudes = (mag_pri, mag_sec)
         
-        # Query Gaia async for I/O operations 
-        gaia_results = await self._query_gaia_for_pair_async(ra_deg, dec_deg, final_radius)
-        if gaia_results is None or len(gaia_results) < 2:
-            raise InsufficientAstrometricDataError(
-                f"Insufficient Gaia sources found: {len(gaia_results) if gaia_results else 0} (need ≥2)"
-            )
+        # Try with different search strategies if first attempt fails
+        for attempt, radius in enumerate([final_radius, 
+                                        final_radius * GAIA_SEARCH_RADIUS_MULTIPLIER_SECOND, 
+                                        final_radius * GAIA_SEARCH_RADIUS_MULTIPLIER_THIRD]):
+            try:
+                gaia_results = await self._query_gaia_for_pair_async(ra_deg, dec_deg, radius)
+                
+                if gaia_results is not None and len(gaia_results) >= GAIA_MIN_SOURCES_REQUIRED:
+                    result = self._validate_physicality_sync(gaia_results, wds_magnitudes)
+                    return self._create_final_assessment(result, gaia_results, wds_magnitudes, radius)
+                
+                if attempt == 0:
+                    log.debug(f"First attempt failed with {len(gaia_results) if gaia_results else 0} sources, trying larger radius")
+                    
+            except Exception as e:
+                if attempt == 2:  # Last attempt
+                    raise PhysicalityValidationError(f"Gaia validation failed after multiple attempts: {e}") from e
+                else:
+                    log.debug(f"Gaia query attempt {attempt + 1} failed: {e}, trying larger radius")
+                    continue
         
-        # CPU work: run directly without executor (GIL prevents threading benefits)
-        result = self._validate_physicality_sync(gaia_results, wds_magnitudes)
-        
-        # Convert result to PhysicalityAssessment
-        return self._create_final_assessment(result, gaia_results, wds_magnitudes, search_radius_arcsec)
+        # If all attempts failed
+        raise InsufficientAstrometricDataError(
+            f"Insufficient Gaia sources found after trying radii: {final_radius:.1f}\", "
+            f"{final_radius*GAIA_SEARCH_RADIUS_MULTIPLIER_SECOND:.1f}\", "
+            f"{final_radius*GAIA_SEARCH_RADIUS_MULTIPLIER_THIRD:.1f}\" (need ≥{GAIA_MIN_SOURCES_REQUIRED})"
+        )
     
     def _create_assessment(self, label: PhysicalityLabel, search_radius_arcsec: Optional[float] = None, 
                           p_value: Optional[float] = None, method: ValidationMethod = None,
                           gaia_primary: Optional[str] = None, gaia_secondary: Optional[str] = None) -> PhysicalityAssessment:
         """Create a PhysicalityAssessment object."""
-        if method is None:
-            method = None
-            
         return {
             'label': label,
             'confidence': 1.0 - p_value if p_value else 0.0,
@@ -172,15 +187,14 @@ class GaiaValidator(PhysicalityValidator):
     def _create_final_assessment(self, result: Dict[str, Any], gaia_results, wds_magnitudes, 
                               search_radius_arcsec: Optional[float]) -> PhysicalityAssessment:
         """Convert validation result to final PhysicalityAssessment."""
-        # Get Gaia source IDs if available
         primary_gaia, secondary_gaia = self._identify_components_by_mag(gaia_results, wds_magnitudes)
         gaia_primary_id = primary_gaia.get('source_id') if primary_gaia else None
         gaia_secondary_id = secondary_gaia.get('source_id') if secondary_gaia else None
         
         return self._create_assessment(
-            label=result['label'],  # Already an enum
+            label=result['label'],
             p_value=result['p_value'],
-            method=result['method'],  # Already an enum
+            method=result['method'],
             gaia_primary=gaia_primary_id,
             gaia_secondary=gaia_secondary_id,
             search_radius_arcsec=search_radius_arcsec
@@ -200,16 +214,15 @@ class GaiaValidator(PhysicalityValidator):
         # Filter by astrometric quality first
         quality_filtered = [star for star in gaia_results if self._validate_astrometric_quality(star)]
         
-        if len(quality_filtered) < 2:
+        if len(quality_filtered) < GAIA_MIN_SOURCES_REQUIRED:
             log.warning(f"Only {len(quality_filtered)} quality sources after filtering from {len(gaia_results)} total")
             raise InsufficientAstrometricDataError(f"Only {len(quality_filtered)} quality sources available")
         
         primary_gaia, secondary_gaia = self._identify_components_by_mag(quality_filtered, wds_mags)
         if primary_gaia is None or secondary_gaia is None:
-            if len(quality_filtered) < 2:
+            if len(quality_filtered) < GAIA_MIN_SOURCES_REQUIRED:
                 raise InsufficientAstrometricDataError("Insufficient quality sources for component identification")
             else:
-                # Cannot identify components despite having sources - ambiguous case
                 raise InsufficientAstrometricDataError("Cannot identify binary components from available sources")
         
         chi2_result = self._calculate_chi2_3d(primary_gaia, secondary_gaia)
@@ -228,7 +241,13 @@ class GaiaValidator(PhysicalityValidator):
             raise InsufficientAstrometricDataError("No valid astrometric measurements available for physicality test")
 
         chi_squared_val, dof = chi2_result
-        p_value = 1.0 - chi2.cdf(chi_squared_val, df=dof)
+        
+        # Calculate p-value: 
+        # For physical systems, astrometric measurements should be CONSISTENT (low chi-squared)
+        # p-value represents probability that measurements are THIS consistent by chance
+        # High p-value → measurements are consistent → likely physical
+        # Low p-value → measurements are inconsistent → likely optical
+        p_value = chi2.sf(chi_squared_val, df=dof)
         
         if p_value > self.physical_threshold:
             label = PhysicalityLabel.LIKELY_PHYSICAL
@@ -252,7 +271,7 @@ class GaiaValidator(PhysicalityValidator):
         return True
 
     def _calculate_chi2_3d(self, star1: Dict, star2: Dict) -> Optional[Tuple[float, int]]:
-        """Calculates 3D chi-squared (plx, pmra, pmdec) using unified covariance builder."""
+        """Calculates 3D chi-squared (plx, pmra, pmdec) using covariance builder."""
         required_keys = ['parallax', 'pmra', 'pmdec']
         if not (self._get_params_and_check_validity(star1, required_keys) and 
                 self._get_params_and_check_validity(star2, required_keys)):
@@ -262,7 +281,6 @@ class GaiaValidator(PhysicalityValidator):
             params1 = np.array([star1['parallax'], star1['pmra'], star1['pmdec']])
             params2 = np.array([star2['parallax'], star2['pmra'], star2['pmdec']])
             
-            # Use unified covariance matrix builder
             C1 = self._build_covariance_matrix(star1, dimensions=3)
             C2 = self._build_covariance_matrix(star2, dimensions=3)
             
@@ -277,7 +295,7 @@ class GaiaValidator(PhysicalityValidator):
             return None
 
     def _calculate_chi2_2d_pm(self, star1: Dict, star2: Dict) -> Optional[Tuple[float, int]]:
-        """Calculates 2D chi-squared for proper motion using unified covariance builder."""
+        """Calculates 2D chi-squared for proper motion using covariance builder."""
         required_keys = ['pmra', 'pmdec']
         if not (self._get_params_and_check_validity(star1, required_keys) and 
                 self._get_params_and_check_validity(star2, required_keys)):
@@ -287,7 +305,6 @@ class GaiaValidator(PhysicalityValidator):
             params1 = np.array([star1['pmra'], star1['pmdec']])
             params2 = np.array([star2['pmra'], star2['pmdec']])
             
-            # Use unified covariance matrix builder
             C1 = self._build_covariance_matrix(star1, dimensions=2)
             C2 = self._build_covariance_matrix(star2, dimensions=2)
             
@@ -302,14 +319,14 @@ class GaiaValidator(PhysicalityValidator):
             return None
 
     def _calculate_chi2_1d_plx(self, star1: Dict, star2: Dict) -> Optional[Tuple[float, int]]:
-        """Calculates 1D chi-squared for parallax using unified approach."""
+        """Calculates 1D chi-squared for parallax."""
         required_keys = ['parallax']
         if not (self._get_params_and_check_validity(star1, required_keys) and 
                 self._get_params_and_check_validity(star2, required_keys)):
             return None
         
         try:
-            # Use unified covariance matrix builder for consistency
+            # Use covariance matrix builder for consistency
             C1 = self._build_covariance_matrix(star1, dimensions=1)
             C2 = self._build_covariance_matrix(star2, dimensions=1)
             
@@ -330,12 +347,11 @@ class GaiaValidator(PhysicalityValidator):
     def _identify_components_by_mag(self, gaia_results, wds_mags: Tuple[Optional[float], Optional[float]]):
         """
         Identifies the primary and secondary components from a list of Gaia results
-        using improved algorithm that considers both magnitude and spatial proximity.
+        using algorithm that considers both magnitude and spatial proximity.
         
         Returns:
             Tuple of (primary_gaia, secondary_gaia) or (None, None) if insufficient sources
         """
-        # Check if we have enough sources
         if len(gaia_results) < 2:
             log.warning(f"Only {len(gaia_results)} Gaia source(s) found - need at least 2")
             return None, None
@@ -347,8 +363,7 @@ class GaiaValidator(PhysicalityValidator):
             # (they are already sorted by brightness from the query)
             return self._select_closest_pair(gaia_results)
 
-        # Use improved matching algorithm
-        return self._match_components_improved(gaia_results, mag_pri_wds, mag_sec_wds)
+        return self._match_components(gaia_results, mag_pri_wds, mag_sec_wds)
     
     def _select_closest_pair(self, gaia_results):
         """Select the two spatially closest sources from Gaia results."""
@@ -382,9 +397,8 @@ class GaiaValidator(PhysicalityValidator):
         else:
             return best_pair[1], best_pair[0]
     
-    def _match_components_improved(self, gaia_results, mag_pri_wds, mag_sec_wds):
-        """Improved component matching using magnitude + spatial proximity."""
-        # First pass: Find candidates within reasonable magnitude tolerance
+    def _match_components(self, gaia_results, mag_pri_wds, mag_sec_wds):
+        """Component matching using magnitude + spatial proximity."""
         mag_tolerance = GAIA_MATCHING_MAG_TOLERANCE  # magnitudes
         
         pri_candidates = []
@@ -431,7 +445,7 @@ class GaiaValidator(PhysicalityValidator):
                 # Combined score: magnitude difference + spatial penalty
                 # Prefer closer pairs with good magnitude matches
                 mag_score = pri_mag_diff + sec_mag_diff
-                spatial_penalty = min(sep_arcsec / GAIA_MATCHING_SPATIAL_PENALTY_FACTOR, GAIA_MATCHING_MAX_SPATIAL_PENALTY)  # Cap at 5 for very wide pairs
+                spatial_penalty = min(sep_arcsec / GAIA_MATCHING_SPATIAL_PENALTY_FACTOR, GAIA_MATCHING_MAX_SPATIAL_PENALTY)
                 combined_score = mag_score + spatial_penalty
                 
                 if combined_score < best_score:
@@ -483,7 +497,7 @@ class GaiaValidator(PhysicalityValidator):
                     self._query_cache[cache_key] = result
                     return result
                     
-                # If no results and more attempts remain, wait before retry
+                # If no results and attempts remain, wait before retry
                 if attempt < GAIA_MAX_RETRY_ATTEMPTS - 1:
                     await asyncio.sleep(GAIA_RETRY_DELAY_SECONDS)
                 
@@ -500,9 +514,9 @@ class GaiaValidator(PhysicalityValidator):
         """
         Synchronous Gaia query - called from async executor.
         Uses instance configuration to avoid modifying global state.
+        Permissive query to capture binary systems.
         """
         try:
-            # Query using instance configuration to avoid modifying global state
             query = f"""
             SELECT
                 source_id, ra, dec, parallax, parallax_error,
@@ -514,35 +528,37 @@ class GaiaValidator(PhysicalityValidator):
             WHERE 1=CONTAINS(
                 POINT('ICRS', ra, dec),
                 CIRCLE('ICRS', {ra_deg}, {dec_deg}, {radius_arcsec / 3600.0})
-            ) AND phot_g_mean_mag < {self.mag_limit}
+            ) AND phot_g_mean_mag < {self.mag_limit + GAIA_MAG_LIMIT_BUFFER}
               AND astrometric_chi2_al IS NOT NULL
-              AND ruwe < {GAIA_MAX_RUWE}
+              AND (ruwe < {GAIA_MAX_RUWE * GAIA_RUWE_QUERY_MULTIPLIER} OR ruwe IS NULL)
             ORDER BY phot_g_mean_mag ASC
             """
             
             log.debug(f"Querying Gaia at ({ra_deg:.4f}, {dec_deg:.4f}) "
-                     f"radius {radius_arcsec:.1f}\" (attempt {attempt})")
+                     f"radius {radius_arcsec:.1f}\" (attempt {attempt}) with relaxed filters")
             
-            # Use instance-specific limits to avoid global state modification
             job = Gaia.launch_job(query)
             results = job.get_results()
             
             if len(results) == 0:
+                log.debug(f"No Gaia sources found in {radius_arcsec:.1f}\" radius")
                 return None
             elif len(results) < 2:
-                log.warning(f"Only {len(results)} Gaia source found - need at least 2")
+                log.debug(f"Only {len(results)} Gaia source found - need at least 2")
                 return None
             else:
-                return results[:self.max_sources]  # Limit to configured maximum
+                log.debug(f"Found {len(results)} Gaia sources, returning top {min(len(results), self.max_sources)}")
+                return results[:self.max_sources]
                 
         except Exception as e:
-            # Don't handle retries here - let the async wrapper handle them
+            log.debug(f"Gaia query failed: {e}")
             raise e
 
     def _validate_astrometric_quality(self, star: Dict) -> bool:
         """
         Validates basic astrometric quality criteria for Gaia sources.
         Filters out sources with poor astrometric solutions.
+        Permissive approach to avoid rejecting wide binaries.
         
         Args:
             star: Gaia source data dictionary
@@ -551,21 +567,32 @@ class GaiaValidator(PhysicalityValidator):
             True if the source meets minimum quality criteria for analysis
         """
         try:
-            # Check RUWE (Renormalised Unit Weight Error) - primary filter
+            # Relaxed RUWE threshold for wide binaries
             ruwe = star.get('ruwe')
-            if ruwe is not None and ruwe > GAIA_MAX_RUWE:
+            if ruwe is not None and ruwe > GAIA_MAX_RUWE * GAIA_RUWE_PERMISSIVE_MULTIPLIER:
+                log.debug(f"Source {star.get('source_id', 'unknown')} rejected: RUWE {ruwe:.2f} > {GAIA_MAX_RUWE * GAIA_RUWE_PERMISSIVE_MULTIPLIER:.1f}")
                 return False
             
-            # Check for extremely poor parallax measurements (filter only extreme cases)
+            # Only reject extremely poor parallax measurements to avoid rejecting distant binaries
             if 'parallax' in star.colnames and 'parallax_error' in star.colnames:
                 parallax = star['parallax']
                 parallax_error = star['parallax_error']
                 if (parallax is not None and parallax_error is not None and 
-                    parallax_error > 0 and abs(parallax / parallax_error) < MIN_PARALLAX_SIGNIFICANCE / 2):
-                    # Only reject very poor parallax measurements to avoid rejecting distant binaries
+                    parallax_error > 0 and abs(parallax / parallax_error) < MIN_PARALLAX_SIGNIFICANCE / GAIA_PARALLAX_SIGNIFICANCE_DIVISOR):
+                    log.debug(f"Source {star.get('source_id', 'unknown')} rejected: Poor parallax SNR {abs(parallax / parallax_error):.1f}")
                     return False
             
-            # Accept all other cases - proper motion filtering too aggressive for wide binaries
+            # Check for completely missing essential data
+            has_parallax = (star.get('parallax') is not None and star.get('parallax_error') is not None and 
+                           star.get('parallax_error', 0) > 0)
+            has_pm = (star.get('pmra') is not None and star.get('pmdec') is not None and
+                     star.get('pmra_error') is not None and star.get('pmdec_error') is not None and
+                     star.get('pmra_error', 0) > 0 and star.get('pmdec_error', 0) > 0)
+            
+            if not has_parallax and not has_pm:
+                log.debug(f"Source {star.get('source_id', 'unknown')} rejected: No usable astrometric data")
+                return False
+            
             return True
             
         except Exception as e:
@@ -803,11 +830,11 @@ class GaiaValidator(PhysicalityValidator):
         # Sort by quality criteria:
         # 1. Good RUWE first (< 1.4)
         # 2. Higher parallax significance
-        # 3. Brighter magnitude (more reliable)
+        # 3. Brighter magnitude (reliable)
         def quality_score(source):
             ruwe_score = 1.0 if source['ruwe'] <= QUALITY_SCORE_RUWE_THRESHOLD else 0.5
             sig_score = min(source['significance'] / QUALITY_SCORE_SIGNIFICANCE_NORMALIZATION, 1.0)  # Normalize to [0,1]
-            mag_score = max(0.0, (QUALITY_SCORE_MAG_REFERENCE - source['phot_g_mean_mag']) / QUALITY_SCORE_MAG_REFERENCE)  # Brighter is better
+            mag_score = max(0.0, (QUALITY_SCORE_MAG_REFERENCE - source['phot_g_mean_mag']) / QUALITY_SCORE_MAG_REFERENCE)  # Brighter stars preferred
             
             return ruwe_score * QUALITY_SCORE_RUWE_WEIGHT + sig_score * QUALITY_SCORE_SIGNIFICANCE_WEIGHT + mag_score * QUALITY_SCORE_MAGNITUDE_WEIGHT
         

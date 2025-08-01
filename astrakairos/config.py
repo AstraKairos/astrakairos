@@ -202,9 +202,9 @@ DEFAULT_MIN_OBS = 2
 DEFAULT_MAX_OBS = 10
 DEFAULT_CONCURRENT_REQUESTS = 200 # While testing, I couldn't see any major diferences between ~70, 100, 150 and 200, but leaving a higher value doesn't seem to cause any harm.
 DEFAULT_GAIA_P_VALUE = 0.01
-DEFAULT_GAIA_RADIUS_FACTOR = 1.2
-DEFAULT_GAIA_MIN_RADIUS = 2.0
-DEFAULT_GAIA_MAX_RADIUS = 15.0
+DEFAULT_GAIA_RADIUS_FACTOR = 1.5   # More generous radius factor for wide binaries
+DEFAULT_GAIA_MIN_RADIUS = 3.0      # Larger minimum radius
+DEFAULT_GAIA_MAX_RADIUS = 25.0     # Larger maximum radius for wide binaries
 DEFAULT_SORT_BY = 'v_total_median'
 TOP_RESULTS_DISPLAY_COUNT = 10
 
@@ -639,11 +639,20 @@ DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD = 0.001 # Threshold for ambiguous classifica
 GAIA_MAX_RETRY_ATTEMPTS = 3                 # Maximum retry attempts for failed queries
 GAIA_RETRY_DELAY_SECONDS = 2.0              # Delay between retry attempts
 
-# Gaia Data Quality Thresholds
-MIN_PARALLAX_SIGNIFICANCE = 3.0             # Minimum parallax/error ratio for reliability
-MIN_PM_SIGNIFICANCE = 3.0                   # Minimum proper motion significance
+# Gaia Data Quality Thresholds (More permissive for binary detection)
+MIN_PARALLAX_SIGNIFICANCE = 1.0             # Relaxed parallax significance for distant systems
+MIN_PM_SIGNIFICANCE = 1.0                   # Relaxed proper motion significance
 GAIA_MAX_RUWE = 1.4                         # Maximum RUWE for good astrometric solution (Lindegren et al. 2018)
 GAIA_DEFAULT_CORRELATION_MISSING = 0.0      # Default correlation coefficient when missing
+
+# Gaia Search Strategy Configuration
+GAIA_SEARCH_RADIUS_MULTIPLIER_SECOND = 1.5  # Second attempt radius multiplier
+GAIA_SEARCH_RADIUS_MULTIPLIER_THIRD = 2.0   # Third attempt radius multiplier
+GAIA_RUWE_PERMISSIVE_MULTIPLIER = 1.5       # Multiplier for more permissive RUWE threshold
+GAIA_RUWE_QUERY_MULTIPLIER = 2.0            # Multiplier for Gaia query RUWE filter
+GAIA_PARALLAX_SIGNIFICANCE_DIVISOR = 3.0    # Divisor for very relaxed parallax significance
+GAIA_MIN_SOURCES_REQUIRED = 2               # Minimum number of sources needed for validation
+GAIA_MAG_LIMIT_BUFFER = 1.0                 # Buffer added to magnitude limit in queries
 
 # === PHYSICS Configuration - Kepler Solver ===
 

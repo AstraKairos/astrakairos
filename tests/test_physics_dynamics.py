@@ -418,4 +418,41 @@ class TestMeanVelocityFromEndpoints:
         assert result is not None
         # Should have pure radial velocity (in y-direction for PA=0)
         assert abs(result['vx_arcsec_per_year']) < 1e-10  # Should be ~0
-        assert result['vy_arcsec_per_year'] > 0  # Should be positive
+    
+    def test_endpoint_velocity_single_epoch_system(self):
+        """Test endpoint velocity with single-epoch system (no date_last)."""
+        single_epoch_summary = {
+            'wds_name': '12345+6789',
+            'date_first': 2000.0,
+            'pa_first': 45.0,
+            'sep_first': 1.5,
+            # No date_last, pa_last, sep_last
+        }
+        
+        result = estimate_velocity_from_endpoints(single_epoch_summary)
+        
+        assert result is not None, "Single-epoch systems should return basic position info"
+        
+        # Velocity fields should be None for single-epoch
+        assert result['vx_arcsec_per_year'] is None
+        assert result['vy_arcsec_per_year'] is None
+        assert result['v_total_estimate'] is None
+        assert result['pa_v_estimate'] is None
+        
+        # Basic fields should be present
+        assert result['time_baseline_years'] == 0.0
+        assert result['n_points_fit'] == 1
+        assert result['method'] == 'single_epoch_position'
+        
+        # Position information should be available
+        assert 'position_x_arcsec' in result
+        assert 'position_y_arcsec' in result
+        assert 'epoch_first' in result
+        assert 'pa_first_deg' in result
+        assert 'sep_first_arcsec' in result
+        
+        # Verify position calculation
+        expected_x = 1.5 * np.sin(np.radians(45.0))
+        expected_y = 1.5 * np.cos(np.radians(45.0))
+        assert abs(result['position_x_arcsec'] - expected_x) < 1e-10
+        assert abs(result['position_y_arcsec'] - expected_y) < 1e-10

@@ -269,10 +269,19 @@ class AnalyzerRunner:
                     wds_id, wds_summary, self.gaia_validator, analysis_config
                 )
             except PhysicalityValidationError as e:
-                log.warning(f"Gaia validation failed for {wds_id}: {e}")
+                log.warning(f"Gaia validation failed for {wds_id}: {type(e).__name__}: {e}")
                 # Use default values for failed validation
                 from ..config import CLI_DEFAULT_PHYSICALITY_VALUES
                 gaia_result = CLI_DEFAULT_PHYSICALITY_VALUES['ERROR'].copy()
+                # Track error type for detailed reporting
+                self._stats[CLI_STATS_KEYS['VALIDATION_ERRORS']] += 1
+            except Exception as e:
+                log.error(f"Unexpected error in Gaia validation for {wds_id}: {type(e).__name__}: {e}")
+                # Use default values for failed validation
+                from ..config import CLI_DEFAULT_PHYSICALITY_VALUES
+                gaia_result = CLI_DEFAULT_PHYSICALITY_VALUES['ERROR'].copy()
+                # Track error type for detailed reporting
+                self._stats[CLI_STATS_KEYS['VALIDATION_ERRORS']] += 1
         
         return gaia_result
     
