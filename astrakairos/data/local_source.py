@@ -5,6 +5,7 @@ This implementation provides access to WDS catalogs using a local SQLite databas
 with proper indexing for efficient querying.
 """
 
+import json
 import logging
 import sqlite3
 from typing import Optional, Dict, Any, Tuple, List
@@ -145,10 +146,12 @@ class LocalDataSource(DataSource):
             cursor.execute(f"PRAGMA table_info({self.summary_table})")
             columns = {row[1] for row in cursor.fetchall()}
             self.has_el_badry_data = 'in_el_badry_catalog' in columns
+            self.has_gaia_source_ids = 'gaia_source_ids' in columns
         
         log.info(f"Database verified. Using {self.summary_table}. "
                 f"Has measurements: {self.has_measurements}. "
-                f"Has El-Badry data: {self.has_el_badry_data}")
+                f"Has El-Badry data: {self.has_el_badry_data}. "
+                f"Has Gaia source IDs: {self.has_gaia_source_ids}")
 
     def close(self) -> None:
         """Close database connection."""
@@ -189,6 +192,9 @@ class LocalDataSource(DataSource):
             columns = {row[1] for row in cursor.fetchall()}
             has_component_pair = 'component_pair' in columns
             
+            # Determine which columns to select (gaia_source_ids may not exist)
+            gaia_column = "gaia_source_ids" if self.has_gaia_source_ids else "NULL as gaia_source_ids"
+            
             if has_component_pair:
                 # New multi-pair architecture: get all component pairs
                 cursor = self.conn.execute(
@@ -198,7 +204,7 @@ class LocalDataSource(DataSource):
                               vmag as mag_pri, kmag as mag_sec, spectral_type as spec_type, ra_deg, dec_deg,
                               wdss_id, discoverer_designation, system_pair_id,
                               pa_first_error, pa_last_error,
-                              sep_first_error, sep_last_error
+                              sep_first_error, sep_last_error, {gaia_column}
                        FROM {self.summary_table} WHERE wds_id = ? ORDER BY component_pair""",
                     (normalized_id,)
                 )
@@ -211,7 +217,7 @@ class LocalDataSource(DataSource):
                               vmag as mag_pri, kmag as mag_sec, spectral_type as spec_type, ra_deg, dec_deg,
                               wdss_id, discoverer_designation,
                               pa_first_error, pa_last_error,
-                              sep_first_error, sep_last_error
+                              sep_first_error, sep_last_error, {gaia_column}
                        FROM {self.summary_table} WHERE wds_id = ?""",
                     (normalized_id,)
                 )
@@ -224,6 +230,9 @@ class LocalDataSource(DataSource):
             for row in rows:
                 # Convert row to dict and filter None values for required fields
                 data = dict(row)
+                
+                # Keep gaia_source_ids from database if available
+                # (Remove hardcoded None assignment to allow real Gaia IDs)
                 
                 # Filter out None values only for non-error fields
                 filtered_data = {}
@@ -266,6 +275,9 @@ class LocalDataSource(DataSource):
         normalized_id = wds_id.strip()
         
         try:
+            # Determine which columns to select (gaia_source_ids may not exist)
+            gaia_column = "gaia_source_ids" if self.has_gaia_source_ids else "NULL as gaia_source_ids"
+            
             cursor = self.conn.execute(
                 f"""SELECT wds_id, discoverer_designation as discoverer, '' as components, 
                           date_first, date_last, n_obs as n_observations, 
@@ -273,7 +285,7 @@ class LocalDataSource(DataSource):
                           vmag as mag_pri, kmag as mag_sec, spectral_type as spec_type, ra_deg, dec_deg,
                           wdss_id, discoverer_designation,
                           pa_first_error, pa_last_error,
-                          sep_first_error, sep_last_error
+                          sep_first_error, sep_last_error, {gaia_column}
                    FROM {self.summary_table} WHERE wds_id = ?""",
                 (normalized_id,)
             )
@@ -284,6 +296,9 @@ class LocalDataSource(DataSource):
             
             # Convert row to dict and filter None values for required fields
             data = dict(row)
+            
+            # Keep gaia_source_ids from database if available
+            # (Remove hardcoded None assignment to allow real Gaia IDs)
             
             # Filter out None values only for non-error fields
             filtered_data = {}
@@ -640,29 +655,33 @@ class LocalDataSource(DataSource):
                 r_chance = row['R_chance_align']
                 binary_type = row['binary_type']
                 
-                # Determine physicality label based on R_chance_align using config constants
-                label = PhysicalityLabel.AMBIGUOUS
-                confidence = 0.5
-                
                 if r_chance is not None:
-                    if r_chance < EL_BADRY_PHYSICAL_THRESHOLD:
+                    # Clamp r_chance to [0, 1] to avoid invalid values
+                    r_chance_clamped = max(0.0, min(1.0, r_chance))
+                    
+                    # Use conservative thresholds based on R_chance_align (chance alignment probability)
+                    if r_chance_clamped < 0.01:  # < 1% chance alignment = Likely Physical (>99% confidence)
                         label = PhysicalityLabel.LIKELY_PHYSICAL
-                        confidence = 1.0 - r_chance
-                    elif r_chance > EL_BADRY_OPTICAL_THRESHOLD:
-                        label = PhysicalityLabel.LIKELY_OPTICAL  
-                        confidence = r_chance
-                    else:
-                        # Ambiguous range
-                        confidence = 0.5
+                        confidence = 1.0 - r_chance_clamped  # High confidence
+                        p_value = confidence
+                    elif r_chance_clamped > 0.99:  # > 99% chance alignment = Likely Optical
+                        label = PhysicalityLabel.LIKELY_OPTICAL
+                        confidence = r_chance_clamped  # High confidence it's optical
+                        p_value = 1.0 - confidence  # Low p-value for physical binding
+                    else:  # 0.01 <= r_chance <= 0.99 = Ambiguous
+                        label = PhysicalityLabel.AMBIGUOUS
+                        confidence = 0.5  # Neutral confidence
+                        p_value = 0.5   # Neutral p-value
                 else:
-                    # If in catalog but no R_chance, consider likely physical
+                    # If in catalog but no R_chance, use default moderate confidence
                     label = PhysicalityLabel.LIKELY_PHYSICAL
                     confidence = EL_BADRY_DEFAULT_CONFIDENCE
+                    p_value = confidence
                 
                 return PhysicalityAssessment(
                     label=label,
                     confidence=confidence,
-                    p_value=(1.0 - r_chance) if r_chance is not None else 0.9,
+                    p_value=p_value,
                     method=ValidationMethod.STATISTICAL_ANALYSIS,
                     parallax_consistency=None,
                     proper_motion_consistency=None,
@@ -675,7 +694,7 @@ class LocalDataSource(DataSource):
                         'r_chance_optical': EL_BADRY_OPTICAL_THRESHOLD
                     },
                     retry_attempts=0,
-                    notes=f"El-Badry catalog match. Binary type: {binary_type or 'unknown'}"
+                    notes=f"El-Badry catalog system (physical by definition). Binary type: {binary_type or 'unknown'}, R_chance_align: {r_chance}"
                 )
                 
             return None

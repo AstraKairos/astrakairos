@@ -125,6 +125,11 @@ class WdsSummary(TypedDict, total=True):
     wdss_id: Optional[str]
     discoverer_designation: Optional[str]
     
+    # Gaia source IDs for enhanced validation - scalable for multi-component systems
+    # Note: While AstraKairos analyzes binary pairs, stellar systems can have many components (A-Z and beyond)
+    # We store Gaia IDs as a flexible mapping to handle any component letter combination
+    gaia_source_ids: Optional[Dict[str, str]]  # Component letter -> Gaia DR3 source_id mapping
+    
     # Multi-pair architecture fields - optional  
     system_pair_id: Optional[str]
 

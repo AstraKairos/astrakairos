@@ -5,6 +5,7 @@ This module handles the aggregation and pivoting of component
 and measurement data to create optimized summary tables.
 """
 
+import json
 import logging
 import pandas as pd
 import numpy as np
@@ -120,14 +121,12 @@ def _pivot_components(df_components: pd.DataFrame, df_measurements: pd.DataFrame
     unique_pairs = df_measurements[['wdss_id', 'pair']].drop_duplicates()
     unique_pairs['system_pair_id'] = unique_pairs['wdss_id'] + '-' + unique_pairs['pair']
     
-    primary_components = (df_components
-                         .sort_values(['wdss_id', 'component'])
-                         .groupby('wdss_id')
-                         .first()
-                         .reset_index())
+    # Instead of taking only the first component, consolidate all components per system
+    # This preserves Gaia IDs from all components (A, B, C, etc.)
+    consolidated_components = _consolidate_all_components(df_components)
     
     df_pair_components = unique_pairs.merge(
-        primary_components, 
+        consolidated_components, 
         on='wdss_id', 
         how='left'
     )
@@ -148,12 +147,107 @@ def _pivot_components(df_components: pd.DataFrame, df_measurements: pd.DataFrame
         'name': 'name'
     }
     
+    # Dynamically include all Gaia ID columns
+    gaia_columns = [col for col in df_pair_components.columns if col.startswith('gaia_id_')]
+    for col in gaia_columns:
+        component_columns[col] = col
+    
     # Keep only required columns and rename
     available_cols = {k: v for k, v in component_columns.items() if k in df_pair_components.columns}
     df_pair_components = df_pair_components[list(available_cols.keys())].rename(columns=available_cols)
     
+    # For each component pair, extract the appropriate Gaia IDs based on the pair letters
+    # e.g., for pair "AB", we want gaia_id_A and gaia_id_B
+    gaia_id_columns = [col for col in df_pair_components.columns if col.startswith('gaia_id_')]
+    if gaia_id_columns:
+        df_pair_components['gaia_id_primary'] = None
+        df_pair_components['gaia_id_secondary'] = None
+        
+        for idx, row in df_pair_components.iterrows():
+            pair = row.get('component_pair', '')
+            if len(pair) >= 2:
+                primary_component = pair[0]  # e.g., 'A' from 'AB'
+                secondary_component = pair[1]  # e.g., 'B' from 'AB'
+                
+                # Map component letters to Gaia IDs
+                gaia_id_primary = row.get(f'gaia_id_{primary_component}')
+                gaia_id_secondary = row.get(f'gaia_id_{secondary_component}')
+                
+                df_pair_components.loc[idx, 'gaia_id_primary'] = gaia_id_primary
+                df_pair_components.loc[idx, 'gaia_id_secondary'] = gaia_id_secondary
+    
     # Set index and return
     return df_pair_components.set_index('system_pair_id')
+
+
+def _consolidate_all_components(df_components: pd.DataFrame) -> pd.DataFrame:
+    """
+    Consolidate all components per system into a single row.
+    
+    This function merges all individual components (A, B, C, etc.) of each system
+    into a single row, preserving all Gaia IDs and taking representative values
+    for other fields (from the primary component, typically A).
+    
+    Args:
+        df_components: DataFrame with individual component data
+        
+    Returns:
+        DataFrame with one row per system containing consolidated data
+    """
+    if df_components.empty:
+        return pd.DataFrame(columns=['wdss_id'])
+    
+    consolidated_rows = []
+    
+    for wdss_id, group in df_components.groupby('wdss_id'):
+        # Use the first component (usually A) as the base for most fields
+        base_row = group.sort_values('component').iloc[0].copy()
+        
+        # Consolidate all Gaia IDs from all components
+        gaia_id_columns = [col for col in group.columns if col.startswith('gaia_id_')]
+        
+        # For each gaia_id_X column, take the first non-null value across all components
+        for gaia_col in gaia_id_columns:
+            values = group[gaia_col].dropna()
+            if not values.empty:
+                base_row[gaia_col] = values.iloc[0]
+            else:
+                base_row[gaia_col] = None
+        
+        # For the 'name' field, try to consolidate Gaia IDs from all components
+        all_names = group['name'].dropna().tolist()
+        if all_names:
+            # Extract Gaia IDs from all name fields and combine them
+            from .parsers import extract_gaia_ids_from_name_field
+            combined_gaia_ids = {}
+            
+            for i, name_field in enumerate(all_names):
+                component_letter = group.iloc[i]['component']
+                extracted_ids = extract_gaia_ids_from_name_field(str(name_field))
+                
+                # If extraction found IDs, map them to the actual component letter
+                if extracted_ids:
+                    # If the extraction didn't include component letter, assign it
+                    if 'A' in extracted_ids and len(extracted_ids) == 1:
+                        # Single ID extracted as 'A', reassign to actual component
+                        gaia_id = extracted_ids['A']
+                        combined_gaia_ids[component_letter] = gaia_id
+                        # Update the corresponding gaia_id_X column
+                        base_row[f'gaia_id_{component_letter}'] = gaia_id
+                    else:
+                        # Multiple IDs or correctly assigned, merge them
+                        for comp, gaia_id in extracted_ids.items():
+                            combined_gaia_ids[comp] = gaia_id
+                            base_row[f'gaia_id_{comp}'] = gaia_id
+            
+            # Keep the first name field as representative
+            base_row['name'] = all_names[0]
+        
+        consolidated_rows.append(base_row)
+    
+    return pd.DataFrame(consolidated_rows)
+
+
 def _merge_data_sources(agg_measurements: pd.DataFrame, wide_components: pd.DataFrame, 
                        df_correspondence: pd.DataFrame) -> pd.DataFrame:
     """
@@ -266,6 +360,9 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame with finalized column structure including component_pair
     """
+    # Import here to avoid circular imports
+    from .parsers import extract_gaia_ids_from_name_field
+    
     if df_summary.index.name == 'system_pair_id':
         df_summary.reset_index(inplace=True)
 
@@ -289,6 +386,45 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
             log.error(f"Neither wds_id_original nor wdss_id found. Available columns: {list(df_summary.columns)}")
             raise KeyError("Missing required wdss_id or wds_id_original columns")
     
+    # Extract Gaia source IDs from the 'name' field
+    log.info("Extracting Gaia source IDs from 'name' field...")
+    df_summary['gaia_source_ids'] = None
+    
+    # First try to consolidate existing individual Gaia ID columns (if they exist)
+    gaia_id_columns = [col for col in df_summary.columns if col.startswith('gaia_id_') and col not in ['gaia_id_primary', 'gaia_id_secondary']]
+    
+    gaia_extraction_count = 0
+    for idx, row in df_summary.iterrows():
+        gaia_dict = {}
+        
+        # Method 1: Use existing gaia_id_ columns if available
+        if gaia_id_columns:
+            for col in gaia_id_columns:
+                component = col.replace('gaia_id_', '')
+                gaia_id = row[col]
+                if pd.notna(gaia_id) and gaia_id is not None and str(gaia_id).strip():
+                    gaia_dict[component] = str(gaia_id).strip()
+        
+        # Method 2: Extract from name field if no existing columns or if they're empty
+        if not gaia_dict and 'name' in df_summary.columns:
+            name_field = row.get('name')
+            if pd.notna(name_field) and name_field is not None:
+                extracted_ids = extract_gaia_ids_from_name_field(str(name_field))
+                if extracted_ids:
+                    gaia_dict.update(extracted_ids)
+                    gaia_extraction_count += 1
+        
+        if gaia_dict:
+            # Convert to JSON string for storage in SQLite
+            df_summary.loc[idx, 'gaia_source_ids'] = json.dumps(gaia_dict)
+    
+    if gaia_extraction_count > 0:
+        log.info(f"Successfully extracted Gaia source IDs from 'name' field for {gaia_extraction_count} systems")
+    elif gaia_id_columns:
+        log.info(f"Using pre-existing Gaia ID columns: {gaia_id_columns}")
+    else:
+        log.warning("No Gaia source IDs found in either individual columns or 'name' field")
+    
     # Select final columns including the CRITICAL component_pair field
     final_cols = [
         'system_pair_id', 'wds_id', 'wdss_id', 'component_pair',  # ← KEY ADDITIONS
@@ -296,7 +432,8 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
         'pa_first', 'pa_last', 'sep_first', 'sep_last', 
         'pa_first_error', 'pa_last_error', 'sep_first_error', 'sep_last_error',
         'vmag', 'kmag', 'ra_deg', 'dec_deg', 'spectral_type', 'parallax', 'pm_ra', 'pm_dec', 'name',
-        'in_el_badry_catalog', 'R_chance_align', 'binary_type'
+        'in_el_badry_catalog', 'R_chance_align', 'binary_type',
+        'gaia_source_ids'  # Add the consolidated Gaia source IDs
     ]
     
     # Add missing columns with NaN if they don't exist

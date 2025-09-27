@@ -10,8 +10,9 @@ This module contains specialized functions for parsing:
 import logging
 import pandas as pd
 import numpy as np
+import re
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, List
 from astropy.table import Table
 
 from astrakairos.config import (
@@ -32,6 +33,93 @@ from astrakairos.utils.io import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def extract_gaia_ids_from_name_field(name_field: str) -> Dict[str, str]:
+    """
+    Extract Gaia DR3 source IDs from the WDSS 'name' field.
+    
+    The name field may contain Gaia IDs in various formats, often associated
+    with component letters. This function attempts to parse and match them.
+    Supports any component letter from A-Z and beyond.
+    
+    Args:
+        name_field: Content of the WDSS 'name' field
+        
+    Returns:
+        Dictionary mapping component letters to Gaia source IDs
+        Example: {'A': '5853498713190525568', 'B': '5853498713190678912'}
+        
+    Examples:
+        "Gaia DR3 5853498713190525568 A, Gaia DR3 5853498713190678912 B"
+        "5853498713190525568 A 5853498713190678912 B"
+        "A:5853498713190525568 B:5853498713190678912"
+        "6.65 DR2 3925443088835673600"  # Single ID without component -> assumed 'A'
+        "D:1234567890123456789 E:9876543210987654321"  # For higher-order systems
+    """
+    if not name_field or pd.isna(name_field):
+        return {}
+    
+    # Find all Gaia IDs (18-20 digit numbers)
+    gaia_ids = re.findall(GAIA_ID_PATTERN, str(name_field))
+    
+    # Initialize result dictionary
+    result = {}
+    
+    if not gaia_ids:
+        return result
+    
+    name_upper = str(name_field).upper()
+    
+    # Strategy 1: Find all component-ID pairs using more specific patterns
+    # Look for patterns like "A:123", "123 A", "Gaia DR3 123 A", etc.
+    
+    # Pattern for colon-separated format: A:123456...
+    colon_matches = re.findall(r'\b([A-Z]):(\d{18,20})\b', name_upper)
+    for component, gaia_id in colon_matches:
+        result[component] = gaia_id
+    
+    # Pattern for Gaia DR3 format: Gaia DR3 123456... A
+    gaia_dr3_matches = re.findall(r'GAIA\s+DR3\s+(\d{18,20})\s+([A-Z])\b', name_upper)
+    for gaia_id, component in gaia_dr3_matches:
+        if component not in result:  # Don't overwrite colon matches
+            result[component] = gaia_id
+    
+    # Pattern for number-space-letter: 123456... A (but not if already matched)
+    # We need to be careful to match the closest number to each letter
+    remaining_components = set(re.findall(r'\b([A-Z])\b', name_upper)) - set(result.keys())
+    
+    for component in remaining_components:
+        # Look for number immediately before this component letter
+        pattern = rf'(\d{{18,20}})\s+{component}\b'
+        match = re.search(pattern, name_upper)
+        if match:
+            # Check if this ID is already assigned
+            candidate_id = match.group(1)
+            if candidate_id not in result.values():
+                result[component] = candidate_id
+    
+    # Strategy 2: Handle cases with Gaia IDs but no explicit component letters
+    # If we found Gaia IDs but no component assignments, assign them to A, B, C, etc.
+    assigned_ids = set(result.values())
+    unassigned_ids = [gaia_id for gaia_id in gaia_ids if gaia_id not in assigned_ids]
+    
+    if unassigned_ids:
+        # Find the first available component letters starting from 'A'
+        used_components = set(result.keys())
+        available_components = [chr(ord('A') + i) for i in range(26) if chr(ord('A') + i) not in used_components]
+        
+        for i, gaia_id in enumerate(unassigned_ids):
+            if i < len(available_components):
+                component = available_components[i]
+                result[component] = gaia_id
+                log.debug(f"Assigned unassigned Gaia ID {gaia_id} to component {component}")
+    
+    # Log successful extractions
+    if result:
+        log.debug(f"Extracted Gaia IDs from '{name_field[:50]}...': {result}")
+    
+    return result
 
 
 def parse_el_badry_catalog(filepath: str) -> pd.DataFrame:
@@ -367,6 +455,39 @@ def _parse_component_lines_vectorized(df_lines: pd.DataFrame) -> pd.DataFrame:
         wdss_coords = df_components.loc[missing_coords, 'wdss_id'].apply(parse_wdss_coordinates)
         df_components.loc[missing_coords, 'ra_deg'] = wdss_coords.apply(lambda x: x[0] if x else None)
         df_components.loc[missing_coords, 'dec_deg'] = wdss_coords.apply(lambda x: x[1] if x else None)
+    
+    # Extract Gaia IDs from the name field for each component
+    gaia_extractions = df_components['name'].apply(extract_gaia_ids_from_name_field)
+    
+    # Create dynamic columns for all found Gaia IDs
+    all_components = set()
+    for extraction in gaia_extractions:
+        all_components.update(extraction.keys())
+    
+    # Initialize all possible Gaia ID columns
+    for component in sorted(all_components):
+        df_components[f'gaia_id_{component}'] = gaia_extractions.apply(lambda x: x.get(component))
+    
+    # For backward compatibility, ensure A, B, C columns exist
+    for component in ['A', 'B', 'C']:
+        if f'gaia_id_{component}' not in df_components.columns:
+            df_components[f'gaia_id_{component}'] = None
+    
+    # For individual components, try to match the Gaia ID to the component letter
+    df_components['gaia_id_component'] = None
+    for idx, row in df_components.iterrows():
+        component = row['component']
+        extraction = gaia_extractions.iloc[idx] if idx < len(gaia_extractions) else {}
+        
+        # First priority: exact match with component letter
+        if component in extraction:
+            df_components.loc[idx, 'gaia_id_component'] = extraction[component]
+        elif f'gaia_id_{component}' in df_components.columns and row[f'gaia_id_{component}']:
+            df_components.loc[idx, 'gaia_id_component'] = row[f'gaia_id_{component}']
+        else:
+            # Fallback: use any available Gaia ID from the extraction
+            if extraction:
+                df_components.loc[idx, 'gaia_id_component'] = next(iter(extraction.values()))
     
     return df_components.dropna(subset=['wdss_id', 'component'])
 
