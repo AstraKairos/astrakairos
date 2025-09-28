@@ -152,7 +152,7 @@ def test_parse_wds_designation_invalid(invalid_wds_id):
     with pytest.raises(io.InvalidWdsFormatError):
         io.parse_wds_designation(invalid_wds_id)
 
-# Test enhanced coordinate validation
+# Test coordinate validation
 def test_parse_wds_designation_coordinate_validation():
     """Test that parse_wds_designation validates astronomical coordinate ranges."""
     # Test RA out of range (> 360°)

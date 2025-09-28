@@ -8,6 +8,7 @@ from enum import Enum
 
 # Importamos las funciones y clases que vamos a probar y 'mockear'
 from astrakairos.analyzer.cli import create_argument_parser, main_async
+from astrakairos.config import DEFAULT_GAIA_P_VALUE
 from astrakairos.analyzer.engine import AnalyzerRunner
 
 # Mock enum classes to simulate the actual enum behavior
@@ -40,7 +41,7 @@ def test_parser_default_arguments():
     assert args.limit is None
     assert not args.validate_gaia
     assert not args.validate_el_badry  # New flag should be False by default
-    assert args.gaia_p_value == 0.01
+    assert args.gaia_p_value == DEFAULT_GAIA_P_VALUE
     assert args.concurrent == 200  # Updated to current default
 
 def test_parser_custom_arguments():

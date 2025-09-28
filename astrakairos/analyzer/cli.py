@@ -41,8 +41,8 @@ def _create_analysis_config(args: argparse.Namespace) -> Dict[str, Any]:
     """
     return {
         'mode': args.mode,
-        'validate_gaia': args.validate_gaia,
-        'validate_el_badry': args.validate_el_badry,
+    'validate_gaia': args.validate_gaia,
+    'validate_el_badry': args.validate_el_badry,
         'calculate_masses': getattr(args, 'calculate_masses', False),
         'parallax_source': getattr(args, 'parallax_source', 'auto'),
         'gaia_radius_factor': args.gaia_radius_factor,
@@ -79,7 +79,7 @@ def _create_dependencies(args: argparse.Namespace) -> Tuple[DataSource, Optional
         # Hybrid mode: El-Badry cache + Gaia fallback
         log.info("Hybrid validation enabled: El-Badry cache + Gaia fallback (requires network for uncached systems).")
         
-        # Create the online validator as a component
+        # Create the online validator as a component with Expert Hierarchical Validator
         from ..data.gaia_source import GaiaValidator
         online_validator = GaiaValidator(
             physical_p_value_threshold=args.gaia_p_value,
@@ -95,9 +95,9 @@ def _create_dependencies(args: argparse.Namespace) -> Tuple[DataSource, Optional
             if 'cached_systems' in cache_stats and cache_stats['cached_systems'] != 'unknown':
                 log.info(f"Validation cache: {cache_stats['cached_systems']} systems pre-computed from El-Badry catalog "
                         f"({cache_stats.get('cache_coverage_percent', 0):.1f}% coverage)")
-                log.info("Cached systems will use El-Badry data, uncached systems will query Gaia directly")
+                log.info("Cached systems will use El-Badry data, uncached systems will query Gaia with Expert Hierarchical Validator")
             else:
-                log.info("No El-Badry cache available - will use Gaia-only validation")
+                log.info("No El-Badry cache available - will use Gaia-only validation with Expert Hierarchical Validator")
         except Exception as e:
             log.warning(f"Could not retrieve cache statistics: {e}")
     
@@ -105,14 +105,14 @@ def _create_dependencies(args: argparse.Namespace) -> Tuple[DataSource, Optional
         # Gaia-only mode: Direct online queries without cache
         log.info("Gaia-only validation enabled (direct online queries, no cache).")
         
-        # Create only the online validator
+        # Create only the online validator with Expert Hierarchical Validator
         from ..data.gaia_source import GaiaValidator
         gaia_validator = GaiaValidator(
             physical_p_value_threshold=args.gaia_p_value,
             ambiguous_p_value_threshold=args.gaia_p_value / AMBIGUOUS_P_VALUE_RATIO
         )
         
-        log.info("All systems will be validated using direct Gaia queries")
+        log.info("All systems will be validated using direct Gaia queries with Expert Hierarchical Validator")
     
     elif args.validate_el_badry:
         # El-Badry-only mode: Local cache only
@@ -265,6 +265,11 @@ Examples:
         help='Filter by Declination range in degrees (format: "min,max", e.g., "-30.0,15.5"). '
              'Values must be between -90.0 and +90.0 degrees. No spaces in the string.'
     )
+    
+    # Debug options
+    parser.add_argument('--debug', 
+                       action='store_true',
+                       help='Enable debug mode (allows generation of mock Gaia IDs for testing).')
 
     return parser
 

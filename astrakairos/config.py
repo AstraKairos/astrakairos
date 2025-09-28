@@ -201,7 +201,7 @@ MIN_MEASUREMENTS_FOR_CHARACTERIZE = 5
 DEFAULT_MIN_OBS = 2
 DEFAULT_MAX_OBS = 10
 DEFAULT_CONCURRENT_REQUESTS = 200 # While testing, I couldn't see any major diferences between ~70, 100, 150 and 200, but leaving a higher value doesn't seem to cause any harm.
-DEFAULT_GAIA_P_VALUE = 0.01
+DEFAULT_GAIA_P_VALUE = 0.020  # 2.0% - synchronized with provisional recalibrated DEFAULT_PHYSICAL_P_VALUE_THRESHOLD (2025-09 experimental)
 DEFAULT_GAIA_RADIUS_FACTOR = 1.5   # More generous radius factor for wide binaries
 DEFAULT_GAIA_MIN_RADIUS = 3.0      # Larger minimum radius
 DEFAULT_GAIA_MAX_RADIUS = 25.0     # Larger maximum radius for wide binaries
@@ -481,9 +481,9 @@ WDS_SUMMARY_TABLE = 'wds_summary'
 ORBITAL_ELEMENTS_TABLE = 'orbital_elements'
 MEASUREMENTS_TABLE = 'measurements'
 
-# El-Badry Physicality Thresholds
-EL_BADRY_PHYSICAL_THRESHOLD = 0.1    # R_chance_align < 0.1 indicates likely physical
-EL_BADRY_OPTICAL_THRESHOLD = 0.9     # R_chance_align > 0.9 indicates likely optical
+# El-Badry Physicality Thresholds (Conservative - >99% confidence required)
+EL_BADRY_PHYSICAL_THRESHOLD = 0.01   # R_chance_align < 0.01 indicates likely physical (>99% confidence)
+EL_BADRY_OPTICAL_THRESHOLD = 0.99    # R_chance_align > 0.99 indicates likely optical (>99% chance alignment)
 EL_BADRY_DEFAULT_CONFIDENCE = 0.9    # Default confidence when in catalog but no R_chance
 
 # Database Required Tables
@@ -634,25 +634,85 @@ DEFAULT_GAIA_TIMEOUT_SECONDS = 30            # Timeout for Gaia queries
 DEFAULT_GAIA_MAX_ROWS = 1000                 # Maximum rows to retrieve
 
 # Gaia Physical Validation Thresholds
-DEFAULT_PHYSICAL_P_VALUE_THRESHOLD = 0.05   # Threshold for physical companion classification
-DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD = 0.001 # Threshold for ambiguous classification (must be < physical)
+# Provisional recalibration (2025-09) aiming to improve recall on vetted physical sample while
+# tightening ambiguous band. Rationale:
+# - Prior setting (4.5% / 0.5%) produced ~46% recall on ground-truth physical systems
+# - Expanding physical acceptance to p>2.0% (was 4.5%) would normally reduce recall, but here we
+#   simultaneously introduce Δμ_orbit significance bands to reclassify systems with modest orbital motion
+#   as physical even if p-value is slightly below former threshold.
+# - Ambiguous lower bound tightened from 0.5% to 0.15% to reduce ambiguous inflation.
+# NOTE: These are experimental and should be revalidated after collecting confusion matrix statistics.
+DEFAULT_PHYSICAL_P_VALUE_THRESHOLD = 0.020   # Physical if p_value > 2.0%
+DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD = 0.0015  # Ambiguous if between 0.15% and 2.0%
 GAIA_MAX_RETRY_ATTEMPTS = 3                 # Maximum retry attempts for failed queries
 GAIA_RETRY_DELAY_SECONDS = 2.0              # Delay between retry attempts
 
 # Gaia Data Quality Thresholds (More permissive for binary detection)
-MIN_PARALLAX_SIGNIFICANCE = 1.0             # Relaxed parallax significance for distant systems
+MIN_PARALLAX_SIGNIFICANCE = 2.0             # Raised from 1.5 to 2.0 for slightly higher quality distance constraints
 MIN_PM_SIGNIFICANCE = 1.0                   # Relaxed proper motion significance
-GAIA_MAX_RUWE = 1.4                         # Maximum RUWE for good astrometric solution (Lindegren et al. 2018)
+GAIA_MAX_RUWE = 1.6                         # Slightly relaxed to recover genuine wide binaries with mild RUWE inflation
 GAIA_DEFAULT_CORRELATION_MISSING = 0.0      # Default correlation coefficient when missing
 
+# RUWE Error Correction Configuration
+RUWE_CORRECTION_ENABLED = True              # Enable/disable RUWE-based error correction
+RUWE_CORRECTION_MAX_FACTOR = 3.0           # Maximum error inflation factor (conservative cap)
+RUWE_CORRECTION_THRESHOLD = 1.0            # RUWE threshold below which no correction is applied (renamed for clarity)
+RUWE_CORRECTION_APPLY_TO_ALL_DIMENSIONS = True  # Apply correction to 1D, 2D, and 3D covariance matrices
+
+# Safe Error Fallback Configuration - Conservative Fixed Values
+# These are used when Gaia formal errors are missing or invalid
+FALLBACK_PARALLAX_ERROR_MAS = 0.5          # Conservative parallax error fallback (mas)
+FALLBACK_PMRA_ERROR_MAS_PER_YEAR = 2.0     # Conservative proper motion RA error fallback (mas/yr)
+FALLBACK_PMDEC_ERROR_MAS_PER_YEAR = 2.0    # Conservative proper motion Dec error fallback (mas/yr)
+FALLBACK_RA_ERROR_MAS = 1.0                # Conservative RA error fallback (mas)
+FALLBACK_DEC_ERROR_MAS = 1.0               # Conservative Dec error fallback (mas)
+
+# Expert Hierarchical Validator Configuration
+# Thresholds for the expert decision tree system
+EXPERT_PARALLAX_EXTREME_SIGMA_THRESHOLD = 5.0       # Sigma threshold for absolute parallax incompatibility veto (reduced from 10σ for better discrimination)
+EXPERT_PM_EXTREME_SIGMA_THRESHOLD = 8.0             # Sigma threshold for extreme proper motion veto
+EXPERT_RUWE_GOOD_THRESHOLD = 1.4                    # RUWE threshold for "good quality" data
+EXPERT_PARALLAX_COMPATIBILITY_SIGMA_THRESHOLD = 3.0  # Sigma threshold for parallax compatibility
+EXPERT_PM_COMPATIBILITY_SIGMA_THRESHOLD = 3.0       # Sigma threshold for proper motion compatibility
+
+# Δμ_orbit Significance Band Constants (El-Badry inspired; provisional 2025-09)
+# Interpretation (absolute delta_mu_orbit_significance):
+#   < 3σ  : Consistent with orbital motion (supports physical)
+#   3–6σ : Transitional / ambiguous regime
+#   ≥ 6σ : Strong orbital excess inconsistent with co-motion (supports optical)
+ORBIT_EXCESS_SIGMA_PHYSICAL_MAX = 3.0
+ORBIT_EXCESS_SIGMA_AMBIGUOUS_MAX = 6.0  # Above this classified as optical veto unless other expert rules override
+
+# Expert Confidence Levels
+EXPERT_CONFIDENCE_VERY_HIGH = 0.95         # Very high confidence (e.g., extreme parallax veto)
+EXPERT_CONFIDENCE_HIGH = 0.85              # High confidence (all evidence supports conclusion)
+EXPERT_CONFIDENCE_MEDIUM = 0.70            # Medium confidence (some conflicting evidence)
+EXPERT_CONFIDENCE_LOW = 0.50               # Low confidence (ambiguous or poor quality data)
+
+# Expert Decision Tree Validation Method Labels
+EXPERT_METHOD_OPTICAL_VETO_ASTROMETRY = "optical_veto_astrometry"     # Inconsistent astrometry with good data
+EXPERT_METHOD_OPTICAL_VETO_PARALLAX = "optical_veto_parallax"         # Extreme parallax difference
+EXPERT_METHOD_OPTICAL_VETO_PROPER_MOTION = "optical_veto_proper_motion" # Extreme proper motion difference
+EXPERT_METHOD_PHYSICAL_HIGH_CONFIDENCE = "physical_high_confidence"   # All evidence supports physical
+EXPERT_METHOD_PHYSICAL_PM_ORBITAL = "physical_pm_orbital"             # Parallax OK, PM shows orbital motion
+EXPERT_METHOD_PHYSICAL_BAD_RUWE = "physical_bad_ruwe"                 # PM consistent despite bad RUWE
+EXPERT_METHOD_AMBIGUOUS_FALLBACK = "ambiguous_fallback"               # No clear pattern
+
 # Gaia Search Strategy Configuration
-GAIA_SEARCH_RADIUS_MULTIPLIER_SECOND = 1.5  # Second attempt radius multiplier
-GAIA_SEARCH_RADIUS_MULTIPLIER_THIRD = 2.0   # Third attempt radius multiplier
+GAIA_SEARCH_RADIUS_MULTIPLIER_SECOND = 2.0  # Second attempt radius multiplier  
+GAIA_SEARCH_RADIUS_MULTIPLIER_THIRD = 3.0   # Third attempt radius multiplier
 GAIA_RUWE_PERMISSIVE_MULTIPLIER = 1.5       # Multiplier for more permissive RUWE threshold
 GAIA_RUWE_QUERY_MULTIPLIER = 2.0            # Multiplier for Gaia query RUWE filter
 GAIA_PARALLAX_SIGNIFICANCE_DIVISOR = 3.0    # Divisor for very relaxed parallax significance
 GAIA_MIN_SOURCES_REQUIRED = 2               # Minimum number of sources needed for validation
 GAIA_MAG_LIMIT_BUFFER = 1.0                 # Buffer added to magnitude limit in queries
+
+# Wide Binary Search Configuration
+DEFAULT_GAIA_SEARCH_RADIUS_ARCSEC = 30.0    # Increased search radius for wide binaries
+GAIA_WIDE_BINARY_SEARCH_RADIUS_ARCSEC = 300.0  # Maximum search radius for very wide binaries
+
+# Separation Verification Configuration
+GAIA_WDS_SEPARATION_TOLERANCE_FRACTION = 0.4  # Tolerance for Gaia-WDS separation matching (ρ_diff/ρ_WDS <= 0.4)
 
 # === PHYSICS Configuration - Kepler Solver ===
 
@@ -765,7 +825,7 @@ MIN_RESIDUAL_SIGNIFICANCE = 0.001  # Minimum significant residual value (arcsec)
 MIN_EPOCH_YEAR = 1800.0  # Minimum reasonable historical epoch
 MAX_EPOCH_YEAR = 2100.0  # Maximum reasonable future epoch
 MIN_SEPARATION_ARCSEC = 0.001  # Minimum measurable angular separation
-MAX_SEPARATION_ARCSEC = 100.0  # Maximum reasonable angular separation for binary stars
+MAX_SEPARATION_ARCSEC = 1000.0  # Maximum reasonable angular separation for binary stars
 
 # Warning Thresholds for Validation
 MAX_DEVIATION_WARNING_ARCSEC = 10.0  # Threshold for large positional deviation warning

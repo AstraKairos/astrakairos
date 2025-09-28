@@ -546,7 +546,7 @@ The development of AstraKairos is phased to deliver a valuable tool at each stag
 
 ---
 
-### v2.0 & Beyond: The Time-Domain Astrophysics Framework 🔮
+### Future Development: The Time-Domain Astrophysics Framework 🔮
 *Expand AstraKairos into a general-purpose platform for time-domain astrophysics.*
 
 **Variable Stars Module:**

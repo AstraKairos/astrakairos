@@ -2,10 +2,13 @@ from astroquery.gaia import Gaia
 import numpy as np
 from scipy.stats import chi2
 from typing import Tuple, Optional, Dict, Any
+from enum import Enum
 import asyncio
 import logging
 import functools
 from datetime import datetime
+from astropy import units as u
+from astropy.coordinates import SkyCoord
 
 # Import configuration constants
 from ..config import (
@@ -18,15 +21,29 @@ from ..config import (
     GAIA_MATCHING_MAG_TOLERANCE, GAIA_MATCHING_SPATIAL_PENALTY_FACTOR,
     GAIA_MATCHING_MAX_SPATIAL_PENALTY, GAIA_MATCHING_MIN_PARALLAX_SIGNIFICANCE,
     QUALITY_SCORE_RUWE_WEIGHT, QUALITY_SCORE_SIGNIFICANCE_WEIGHT,
-    QUALITY_SCORE_MAGNITUDE_WEIGHT, GAIA_PARALLAX_MIN_SIGNIFICANCE,
-    GAIA_PARALLAX_NORMALIZATION_FACTOR, GAIA_MAGNITUDE_NORMALIZATION_LIMIT,
-    QUALITY_SCORE_RUWE_THRESHOLD, QUALITY_SCORE_SIGNIFICANCE_NORMALIZATION,
-    QUALITY_SCORE_MAG_REFERENCE,
+    QUALITY_SCORE_MAGNITUDE_WEIGHT, QUALITY_SCORE_RUWE_THRESHOLD,
+    QUALITY_SCORE_SIGNIFICANCE_NORMALIZATION, QUALITY_SCORE_MAG_REFERENCE,
     GAIA_SEARCH_RADIUS_MULTIPLIER_SECOND, GAIA_SEARCH_RADIUS_MULTIPLIER_THIRD,
-    GAIA_RUWE_PERMISSIVE_MULTIPLIER, GAIA_RUWE_QUERY_MULTIPLIER,
-    GAIA_PARALLAX_SIGNIFICANCE_DIVISOR, GAIA_MIN_SOURCES_REQUIRED,
-    GAIA_MAG_LIMIT_BUFFER
+    GAIA_WIDE_BINARY_SEARCH_RADIUS_ARCSEC, GAIA_MIN_SOURCES_REQUIRED,
+    GAIA_PARALLAX_MIN_SIGNIFICANCE, GAIA_PARALLAX_NORMALIZATION_FACTOR,
+    GAIA_MAGNITUDE_NORMALIZATION_LIMIT, GAIA_RUWE_PERMISSIVE_MULTIPLIER,
+    GAIA_RUWE_QUERY_MULTIPLIER, GAIA_PARALLAX_SIGNIFICANCE_DIVISOR,
+    GAIA_MAG_LIMIT_BUFFER, GAIA_WDS_SEPARATION_TOLERANCE_FRACTION,
+    # RUWE correction configuration
+    RUWE_CORRECTION_ENABLED, RUWE_CORRECTION_APPLY_TO_ALL_DIMENSIONS
 )
+
+# Import RUWE error correction function from gaia_utils
+from ..data.gaia_utils import (
+    build_covariance_matrix,
+    get_gaia_parallax_error_safe,
+    get_gaia_pmra_error_safe,
+    get_gaia_pmdec_error_safe,
+    assess_gaia_data_quality
+)
+
+# Import decision tree for advanced validation
+from ..analyzer.decision_tree import ExpertHierarchicalValidator
 
 # Import source types and enums
 from ..data.source import PhysicalityValidator, PhysicalityLabel, ValidationMethod, PhysicalityAssessment
@@ -64,13 +81,13 @@ class GaiaValidator(PhysicalityValidator):
             gaia_table: The Gaia data release table to query
             default_search_radius_arcsec: Default search radius for Gaia queries
             physical_p_value_threshold: The p-value above which a pair is considered
-                                        'Likely Physical'. Default: 0.01 (1%)
+                                        'Likely Physical'. Default: 0.045 (4.5%)
             ambiguous_p_value_threshold: The p-value above which a pair is 'Ambiguous'.
-                                         Below this: 'Likely Optical'. Default: 0.001 (0.1%)
+                                         Below this: 'Likely Optical'. Default: 0.005 (0.5%)
             mag_limit: G-band magnitude limit for Gaia queries
             max_sources: Maximum number of sources to retrieve
             gaia_client: Optional Gaia client for dependency injection (testing)
-            
+
         Raises:
             ValueError: If thresholds are not in valid order
         """
@@ -82,6 +99,13 @@ class GaiaValidator(PhysicalityValidator):
 
         self.physical_threshold = physical_p_value_threshold
         self.ambiguous_threshold = ambiguous_p_value_threshold
+        
+        # Always initialize Expert Hierarchical Validator
+        self.decision_tree = ExpertHierarchicalValidator(
+            physical_threshold=physical_p_value_threshold,
+            ambiguous_threshold=ambiguous_p_value_threshold,
+            enable_ruwe_correction=True
+        )
         
         # Validate thresholds
         if self.physical_threshold <= self.ambiguous_threshold:
@@ -109,9 +133,10 @@ class GaiaValidator(PhysicalityValidator):
                                  search_radius_arcsec: Optional[float] = None) -> PhysicalityAssessment:
         """
         Validates if a binary system is physically bound using Gaia data.
+        Now intelligently uses Gaia source IDs when available to bypass coordinate search.
         
         Args:
-            wds_summary: WDS summary data containing coordinates and magnitudes
+            wds_summary: WDS summary data containing coordinates, magnitudes, and optionally Gaia IDs
             search_radius_arcsec: Optional override for search radius
             
         Returns:
@@ -122,6 +147,110 @@ class GaiaValidator(PhysicalityValidator):
             InsufficientAstrometricDataError: When insufficient data is available
             GaiaQueryError: When Gaia queries fail
         """
+        # Check if we have Gaia source IDs available - much more reliable!
+        gaia_source_ids = self._extract_gaia_source_ids(wds_summary)
+        
+        if gaia_source_ids and len(gaia_source_ids) >= 2:
+            log.debug("Using direct Gaia source IDs: %s", list(gaia_source_ids.values()))
+            try:
+                gaia_results = await self._query_gaia_by_source_ids_async(gaia_source_ids)
+                if gaia_results and len(gaia_results) >= GAIA_MIN_SOURCES_REQUIRED:
+                    wds_magnitudes = (wds_summary.get('mag_pri'), wds_summary.get('mag_sec'))
+                    result = self._validate_physicality_sync(gaia_results, wds_magnitudes, wds_summary)
+                    return self._create_final_assessment(result, gaia_results, wds_magnitudes, None, 
+                                                       direct_source_query=True)
+            except Exception as e:
+                log.warning(f"Direct Gaia source ID query failed: {e}. Falling back to coordinate search.")
+        
+        # Fallback to coordinate-based search
+        return await self._validate_by_coordinates(wds_summary, search_radius_arcsec)
+    
+    def _extract_gaia_source_ids(self, wds_summary: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """Extract Gaia source IDs from WDS summary if available."""
+        log.debug("Extracting Gaia source IDs from WDS metadata")
+        log.debug("WDS summary keys: %s", list(wds_summary.keys()))
+        
+        gaia_ids = {}
+        
+        # Check for direct Gaia source IDs in the summary
+        gaia_source_ids_field = wds_summary.get('gaia_source_ids')
+        log.debug("Raw gaia_source_ids field: %s (type=%s)", gaia_source_ids_field, type(gaia_source_ids_field))
+        
+        if gaia_source_ids_field:
+            import json
+            try:
+                if isinstance(gaia_source_ids_field, str):
+                    parsed_ids = json.loads(gaia_source_ids_field)
+                else:
+                    parsed_ids = gaia_source_ids_field
+                    
+                log.debug("Parsed gaia_source_ids payload: %s", parsed_ids)
+                
+                if isinstance(parsed_ids, dict):
+                    # Extract component A and B (ignore 'component' field which seems to be a different star)
+                    if 'A' in parsed_ids and 'B' in parsed_ids:
+                        gaia_ids['A'] = str(parsed_ids['A'])
+                        gaia_ids['B'] = str(parsed_ids['B'])
+                        log.debug("Extracted Gaia IDs: %s", gaia_ids)
+                        return gaia_ids
+                    else:
+                        log.debug("Missing component A or B in gaia_source_ids payload")
+                else:
+                    log.debug("gaia_source_ids payload is not a dictionary; ignoring")
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                log.debug("Failed to parse gaia_source_ids: %s", e)
+        else:
+            log.debug("No gaia_source_ids field present")
+        
+        # Check for Gaia IDs in component names
+        name_primary = wds_summary.get('name_primary', '')
+        name_secondary = wds_summary.get('name_secondary', '')
+        
+        if name_primary and 'Gaia DR3' in name_primary:
+            gaia_id = name_primary.split()[-1]
+            if gaia_id.isdigit() and len(gaia_id) >= 18:
+                gaia_ids['A'] = gaia_id
+        
+        if name_secondary and 'Gaia DR3' in name_secondary:
+            gaia_id = name_secondary.split()[-1]
+            if gaia_id.isdigit() and len(gaia_id) >= 18:
+                gaia_ids['B'] = gaia_id
+        
+        return gaia_ids if len(gaia_ids) >= 2 else None
+    
+    async def _query_gaia_by_source_ids_async(self, gaia_source_ids: Dict[str, str]):
+        """Query Gaia directly by source IDs - much more reliable than coordinate search."""
+        from astroquery.gaia import Gaia
+        
+        source_ids = list(gaia_source_ids.values())
+        source_ids_str = ','.join(source_ids)
+        
+        query = f"""
+        SELECT source_id, ra, dec, parallax, parallax_error,
+               pmra, pmra_error, pmdec, pmdec_error,
+               ra_error, dec_error, 
+               ra_dec_corr, ra_parallax_corr, ra_pmra_corr, ra_pmdec_corr,
+               dec_parallax_corr, dec_pmra_corr, dec_pmdec_corr,
+               parallax_pmra_corr, parallax_pmdec_corr, pmra_pmdec_corr,
+               phot_g_mean_mag, bp_rp, ruwe
+        FROM {self.gaia_table} 
+        WHERE source_id IN ({source_ids_str})
+        ORDER BY source_id
+        """
+        
+        log.debug(f"Querying Gaia by source IDs: {source_ids}")
+        job = Gaia.launch_job_async(query)
+        results = job.get_results()
+        
+        if len(results) < 2:
+            raise InsufficientAstrometricDataError(f"Only found {len(results)} of {len(source_ids)} requested Gaia sources")
+        
+        log.info(f"Successfully retrieved {len(results)} Gaia sources by ID")
+        return results
+    
+    async def _validate_by_coordinates(self, wds_summary: Dict[str, Any], 
+                                     search_radius_arcsec: Optional[float]) -> PhysicalityAssessment:
+        """Fallback validation using coordinate-based search with improved wide binary support."""
         # Extract coordinates and magnitudes from WDS summary
         ra_deg = wds_summary.get('ra_deg')
         dec_deg = wds_summary.get('dec_deg')
@@ -134,42 +263,67 @@ class GaiaValidator(PhysicalityValidator):
         final_radius = search_radius_arcsec if search_radius_arcsec is not None else self.default_search_radius_arcsec
         wds_magnitudes = (mag_pri, mag_sec)
         
-        # Try with different search strategies if first attempt fails
-        for attempt, radius in enumerate([final_radius, 
-                                        final_radius * GAIA_SEARCH_RADIUS_MULTIPLIER_SECOND, 
-                                        final_radius * GAIA_SEARCH_RADIUS_MULTIPLIER_THIRD]):
+        # Improved search strategy for wide binaries - use much larger radii
+        search_radii = [
+            final_radius, 
+            final_radius * GAIA_SEARCH_RADIUS_MULTIPLIER_SECOND,
+            final_radius * GAIA_SEARCH_RADIUS_MULTIPLIER_THIRD,
+            GAIA_WIDE_BINARY_SEARCH_RADIUS_ARCSEC  # Try very wide search as last resort
+        ]
+        
+        for attempt, radius in enumerate(search_radii):
             try:
                 gaia_results = await self._query_gaia_for_pair_async(ra_deg, dec_deg, radius)
                 
                 if gaia_results is not None and len(gaia_results) >= GAIA_MIN_SOURCES_REQUIRED:
-                    result = self._validate_physicality_sync(gaia_results, wds_magnitudes)
-                    return self._create_final_assessment(result, gaia_results, wds_magnitudes, radius)
+                    result = self._validate_physicality_sync(gaia_results, wds_magnitudes, wds_summary)
+                    return self._create_final_assessment(result, gaia_results, wds_magnitudes, radius, 
+                                                       direct_source_query=False)
                 
-                if attempt == 0:
-                    log.debug(f"First attempt failed with {len(gaia_results) if gaia_results else 0} sources, trying larger radius")
+                if attempt < len(search_radii) - 1:
+                    log.debug(f"Search attempt {attempt + 1} with radius {radius:.1f}\" found {len(gaia_results) if gaia_results else 0} sources, trying larger radius")
                     
             except Exception as e:
-                if attempt == 2:  # Last attempt
+                if attempt == len(search_radii) - 1:  # Last attempt
                     raise PhysicalityValidationError(f"Gaia validation failed after multiple attempts: {e}") from e
                 else:
                     log.debug(f"Gaia query attempt {attempt + 1} failed: {e}, trying larger radius")
                     continue
         
         # If all attempts failed
+        radii_str = ", ".join([f"{r:.1f}\"" for r in search_radii])
         raise InsufficientAstrometricDataError(
-            f"Insufficient Gaia sources found after trying radii: {final_radius:.1f}\", "
-            f"{final_radius*GAIA_SEARCH_RADIUS_MULTIPLIER_SECOND:.1f}\", "
-            f"{final_radius*GAIA_SEARCH_RADIUS_MULTIPLIER_THIRD:.1f}\" (need ≥{GAIA_MIN_SOURCES_REQUIRED})"
+            f"Insufficient Gaia sources found after trying radii: {radii_str} (need ≥{GAIA_MIN_SOURCES_REQUIRED})"
         )
     
     def _create_assessment(self, label: PhysicalityLabel, search_radius_arcsec: Optional[float] = None, 
                           p_value: Optional[float] = None, method: ValidationMethod = None,
-                          gaia_primary: Optional[str] = None, gaia_secondary: Optional[str] = None) -> PhysicalityAssessment:
-        """Create a PhysicalityAssessment object."""
+                          gaia_primary: Optional[str] = None, gaia_secondary: Optional[str] = None,
+                          decision_confidence: Optional[float] = None) -> PhysicalityAssessment:
+        """
+        Create a PhysicalityAssessment object with correct confidence interpretation.
+        
+        Args:
+            decision_confidence: Direct confidence in the classification (0-1), independent of p_value
+        """
+        # Calculate decision confidence based on the type of evidence
+        if decision_confidence is None:
+            if p_value is not None:
+                # For chi-squared tests, higher p-value indicates stronger evidence for physical pair
+                if label == PhysicalityLabel.LIKELY_PHYSICAL:
+                    decision_confidence = min(p_value / self.physical_threshold, 1.0)
+                elif label == PhysicalityLabel.LIKELY_OPTICAL:
+                    decision_confidence = min((self.ambiguous_threshold - p_value) / self.ambiguous_threshold, 1.0) if p_value < self.ambiguous_threshold else 0.5
+                else:  # AMBIGUOUS
+                    decision_confidence = 0.5
+            else:
+                # For rule-based decisions, use moderate confidence
+                decision_confidence = 0.7 if label != PhysicalityLabel.AMBIGUOUS else 0.3
+
         return {
             'label': label,
-            'confidence': 1.0 - p_value if p_value else 0.0,
-            'p_value': p_value,
+            'confidence': decision_confidence,  # Now correctly represents confidence in the classification
+            'p_value': p_value,  # Statistical p-value from chi-squared test (may be None for rule-based decisions)
             'method': method,
             'parallax_consistency': None,
             'proper_motion_consistency': None,
@@ -185,27 +339,117 @@ class GaiaValidator(PhysicalityValidator):
         }
     
     def _create_final_assessment(self, result: Dict[str, Any], gaia_results, wds_magnitudes, 
-                              search_radius_arcsec: Optional[float]) -> PhysicalityAssessment:
+                              search_radius_arcsec: Optional[float], direct_source_query: bool = False) -> PhysicalityAssessment:
         """Convert validation result to final PhysicalityAssessment."""
         primary_gaia, secondary_gaia = self._identify_components_by_mag(gaia_results, wds_magnitudes)
         gaia_primary_id = primary_gaia.get('source_id') if primary_gaia else None
         gaia_secondary_id = secondary_gaia.get('source_id') if secondary_gaia else None
         
-        return self._create_assessment(
+        # --- Provisional Calibration Logic (2025-09) ---
+        # If Δμ_orbit significance is available, adjust label according to new orbit excess sigma bands
+        # before constructing assessment. This provides an orthogonal decision axis to the p-value.
+        delta_mu_sig = result.get('delta_mu_orbit_significance')
+        if delta_mu_sig is not None and isinstance(delta_mu_sig, (int, float)) and np.isfinite(delta_mu_sig):
+            try:
+                from astrakairos.config import (
+                    ORBIT_EXCESS_SIGMA_PHYSICAL_MAX, ORBIT_EXCESS_SIGMA_AMBIGUOUS_MAX
+                )
+                # Only override if original method not an explicit optical veto to avoid undoing strong expert decisions
+                if result.get('label') != PhysicalityLabel.LIKELY_OPTICAL:
+                    if delta_mu_sig < ORBIT_EXCESS_SIGMA_PHYSICAL_MAX and result.get('label') != PhysicalityLabel.LIKELY_OPTICAL:
+                        result['label'] = PhysicalityLabel.LIKELY_PHYSICAL
+                        result.setdefault('expert_method', 'expert_delta_mu_consistent')
+                    elif delta_mu_sig >= ORBIT_EXCESS_SIGMA_AMBIGUOUS_MAX and result.get('label') == PhysicalityLabel.LIKELY_PHYSICAL:
+                        # High orbital excess can indicate mismatched co-motion -> downgrade to ambiguous/optical
+                        result['label'] = PhysicalityLabel.LIKELY_OPTICAL
+                        result.setdefault('expert_method', 'expert_delta_mu_excess')
+                    elif ORBIT_EXCESS_SIGMA_PHYSICAL_MAX <= delta_mu_sig < ORBIT_EXCESS_SIGMA_AMBIGUOUS_MAX and result.get('label') == PhysicalityLabel.LIKELY_PHYSICAL:
+                        # Transitional: if initially physical only by marginal p-value, degrade to ambiguous
+                        if result.get('p_value') is not None and result['p_value'] <= self.physical_threshold:
+                            result['label'] = PhysicalityLabel.AMBIGUOUS
+                            result.setdefault('expert_method', 'expert_delta_mu_transitional')
+            except Exception:
+                # Fail quietly if constants not found (should not happen)
+                pass
+
+        assessment = self._create_assessment(
             label=result['label'],
             p_value=result['p_value'],
             method=result['method'],
             gaia_primary=gaia_primary_id,
             gaia_secondary=gaia_secondary_id,
-            search_radius_arcsec=search_radius_arcsec
+            search_radius_arcsec=search_radius_arcsec,
+            decision_confidence=result.get('expert_confidence')  # Use expert confidence if available
         )
+        
+        # Add information about query method
+        if direct_source_query:
+            assessment['query_method'] = 'direct_source_id'
+            assessment['note'] = 'Used direct Gaia source IDs for high precision validation'
+        else:
+            assessment['query_method'] = 'coordinate_search'
+        
+        # Add method type classification with enum-safe handling
+        def _normalize_method_identifier(value: Any) -> str:
+            if isinstance(value, ValidationMethod):
+                return value.value
+            if isinstance(value, Enum):
+                enum_val = getattr(value, 'value', None)
+                return enum_val if isinstance(enum_val, str) else str(value)
+            return '' if value is None else str(value)
+
+        method_raw = result.get('method')
+        expert_method_raw = result.get('expert_method')
+
+        method_str = _normalize_method_identifier(method_raw)
+        expert_method_str = _normalize_method_identifier(expert_method_raw)
+
+        if expert_method_str:
+            assessment['method_type'] = 'expert_rule'
+            assessment['expert_method'] = expert_method_str
+        elif isinstance(method_raw, ValidationMethod) and method_raw in {
+            ValidationMethod.GAIA_3D_PARALLAX_PM,
+            ValidationMethod.PROPER_MOTION_ONLY,
+            ValidationMethod.GAIA_PARALLAX_ONLY,
+        }:
+            assessment['method_type'] = 'chi2_statistical'
+        elif isinstance(method_raw, ValidationMethod) and method_raw == ValidationMethod.EXPERT_EL_BADRY:
+            assessment['method_type'] = 'expert_rule'
+        elif isinstance(method_raw, ValidationMethod) and method_raw == ValidationMethod.STATISTICAL_ANALYSIS:
+            assessment['method_type'] = 'statistical_analysis'
+        elif method_str.lower().startswith('expert_'):
+            assessment['method_type'] = 'expert_rule'
+        elif 'chi2' in method_str.lower():
+            assessment['method_type'] = 'chi2_statistical'
+        elif method_str:
+            assessment['method_type'] = 'statistical'
+        else:
+            assessment['method_type'] = 'unknown'
+
+        for key in (
+            'delta_mu_orbit',
+            'delta_mu_orbit_error',
+            'delta_mu_orbit_significance',
+            'separation_arcsec',
+            'position_angle_deg',
+            'proper_motion_difference'
+        ):
+            if key in result:
+                assessment[key] = result[key]
+        
+        return assessment
     
     def _validate_physicality_sync(self,
                                   gaia_results,
-                                  wds_mags: Tuple[Optional[float], Optional[float]]) -> Dict[str, Any]:
+                                  wds_mags: Tuple[Optional[float], Optional[float]],
+                                  wds_summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Orchestrates the adaptive physicality validation logic and returns a
-        structured dictionary with the results.
+        Simplified physicality validation that delegates to the appropriate validator.
+        
+        This function is now a clean orchestrator that:
+        1. Identifies the correct binary components 
+        2. Chooses between traditional p-value method and Expert Hierarchical Validator
+        3. Returns structured results
         
         Args:
             gaia_results: Pre-fetched Gaia query results
@@ -218,6 +462,7 @@ class GaiaValidator(PhysicalityValidator):
             log.warning(f"Only {len(quality_filtered)} quality sources after filtering from {len(gaia_results)} total")
             raise InsufficientAstrometricDataError(f"Only {len(quality_filtered)} quality sources available")
         
+        # Identify components
         primary_gaia, secondary_gaia = self._identify_components_by_mag(quality_filtered, wds_mags)
         if primary_gaia is None or secondary_gaia is None:
             if len(quality_filtered) < GAIA_MIN_SOURCES_REQUIRED:
@@ -225,38 +470,414 @@ class GaiaValidator(PhysicalityValidator):
             else:
                 raise InsufficientAstrometricDataError("Cannot identify binary components from available sources")
         
-        chi2_result = self._calculate_chi2_3d(primary_gaia, secondary_gaia)
-        if chi2_result:
-            test_type = ValidationMethod.GAIA_3D_PARALLAX_PM
-        else:
-            chi2_result = self._calculate_chi2_2d_pm(primary_gaia, secondary_gaia)
-            if chi2_result:
-                test_type = ValidationMethod.PROPER_MOTION_ONLY
+        # Verify separation consistency with catalog expectations when available
+        if wds_summary and not self._verify_separation_consistency(primary_gaia, secondary_gaia, wds_summary):
+            log.warning("Selected Gaia pair has inconsistent separation with WDS catalog; rejecting match")
+            raise InsufficientAstrometricDataError("Gaia pair separation inconsistent with WDS catalog")
+
+        # Primary assessment via expert hierarchical reasoning
+        expert_result = self._validate_with_expert_tree(primary_gaia, secondary_gaia)
+
+        # Secondary statistical assessment using classical chi-squared tests
+        statistical_result = self._calculate_statistical_consistency(primary_gaia, secondary_gaia)
+
+        # Compute El-Badry Δμ_orbit metrics for reporting
+        el_badry_metrics = self._calculate_el_badry_metrics(primary_gaia, secondary_gaia)
+        if el_badry_metrics:
+            expert_result.update(el_badry_metrics)
+            if statistical_result:
+                statistical_result.update(el_badry_metrics)
+
+        # If expert reasoning failed or remained ambiguous, fall back to statistical evidence
+        expert_failed = expert_result.get('expert_method') == "fallback_error"
+        expert_ambiguous = expert_result['label'] == PhysicalityLabel.AMBIGUOUS
+
+        if statistical_result and (expert_failed or expert_ambiguous):
+            statistical_result['expert_confidence'] = expert_result.get('expert_confidence', 0.0)
+            statistical_result['expert_reasoning'] = expert_result.get('expert_reasoning')
+            statistical_result['expert_method'] = expert_result.get('expert_method')
+            return statistical_result
+
+        # Otherwise, enrich expert result with statistical context when available
+        if statistical_result:
+            if expert_result.get('p_value') is None:
+                expert_result['p_value'] = statistical_result['p_value']
+            expert_result['statistical_method'] = statistical_result['method']
+            expert_result['statistical_p_value'] = statistical_result['p_value']
+            expert_result['statistical_label'] = statistical_result['label']
+
+        return expert_result
+
+    def _validate_with_expert_tree(self, primary_gaia: Dict, secondary_gaia: Dict) -> Dict[str, Any]:
+        """
+        Use Expert Hierarchical Validator for physicality assessment.
+        
+        This is the new, sophisticated approach that uses expert reasoning.
+        """
+        try:
+            # Prepare data for expert validator
+            log.debug("🔬 Preparing data for Expert Hierarchical Validator...")
+            primary_data = self._prepare_expert_data(primary_gaia)
+            secondary_data = self._prepare_expert_data(secondary_gaia)
+            
+            # Run expert validation
+            log.debug("🔬 Running expert validation...")
+            expert_result = self.decision_tree.validate_pair(primary_data, secondary_data)
+            
+            # Log expert decision
+            log.info(f"Expert Hierarchical Validator: {expert_result.label.value} "
+                    f"(evidence_strength: {expert_result.evidence_strength:.2f}, method: {expert_result.method})")
+            log.info(f"Expert reasoning: {expert_result.reasoning}")
+            
+            # Return expert decision
+            return {
+                'label': expert_result.label,
+                'p_value': expert_result.p_value,  # May be None if unreliable
+                'method': ValidationMethod.EXPERT_EL_BADRY,
+                'expert_method': expert_result.method,
+                'expert_confidence': expert_result.evidence_strength,
+                'expert_reasoning': expert_result.reasoning
+            }
+        except Exception as e:
+            log.error(f"Expert Hierarchical Validator failed: {e}")
+            # Return AMBIGUOUS instead of falling back to traditional method
+            return {
+                'label': PhysicalityLabel.AMBIGUOUS,
+                'p_value': None,
+                'method': ValidationMethod.EXPERT_EL_BADRY,
+                'expert_method': "fallback_error",
+                'expert_confidence': 0.0,
+                'expert_reasoning': f"Expert validator failed: {e}"
+            }
+
+    def _prepare_expert_data(self, gaia_star: Dict) -> Dict[str, Any]:
+        """
+        Prepare Gaia star data for Expert Hierarchical Validator.
+        
+        Args:
+            gaia_star: Gaia query result for one star
+            
+        Returns:
+            Dictionary formatted for expert validator
+        """
+        # Safely extract values and convert to float
+        def safe_float(value, default=0.0):
+            try:
+                if value is None:
+                    return default
+                if hasattr(value, 'mask') and np.ma.is_masked(value):
+                    return default
+                return float(value)
+            except (ValueError, TypeError):
+                return default
+        
+        # Get base values
+        parallax = safe_float(gaia_star.get('parallax', 0.0))
+        pmra = safe_float(gaia_star.get('pmra', 0.0))
+        pmdec = safe_float(gaia_star.get('pmdec', 0.0))
+        ruwe = safe_float(gaia_star.get('ruwe', 1.0), 1.0)
+        
+        # Get errors using safe functions (these already apply RUWE correction internally)
+        parallax_error_raw = safe_float(gaia_star.get('parallax_error', None))
+        pmra_error_raw = safe_float(gaia_star.get('pmra_error', None))
+        pmdec_error_raw = safe_float(gaia_star.get('pmdec_error', None))
+        
+        # Use safe error functions that handle RUWE correction internally
+        # No additional RUWE correction needed here to avoid double inflation
+        parallax_error = get_gaia_parallax_error_safe(parallax_error_raw, ruwe)
+        pmra_error = get_gaia_pmra_error_safe(pmra_error_raw, ruwe)
+        pmdec_error = get_gaia_pmdec_error_safe(pmdec_error_raw, ruwe)
+        
+        return {
+            'parallax': parallax,
+            'parallax_error': parallax_error,
+            'pmra': pmra,
+            'pmra_error': pmra_error,
+            'pmdec': pmdec,
+            'pmdec_error': pmdec_error,
+            'ruwe': ruwe,
+            'source_id': str(gaia_star.get('source_id', 'unknown'))
+        }
+
+    def _calculate_el_badry_metrics(self, primary_gaia: Dict, secondary_gaia: Dict) -> Dict[str, float]:
+        """Compute Δμ_orbit metrics following El-Badry & Rix (2018)."""
+        def get_value(star: Dict, key: str, default=None):
+            value = star.get(key, default) if hasattr(star, 'get') else getattr(star, key, default)
+            if value is None:
+                return default
+            if hasattr(value, 'mask') and np.ma.is_masked(value):
+                return default
+            return value
+
+        try:
+            ra_a = float(get_value(primary_gaia, 'ra'))
+            dec_a = float(get_value(primary_gaia, 'dec'))
+            ra_b = float(get_value(secondary_gaia, 'ra'))
+            dec_b = float(get_value(secondary_gaia, 'dec'))
+
+            pmra_a = float(get_value(primary_gaia, 'pmra', 0.0))
+            pmdec_a = float(get_value(primary_gaia, 'pmdec', 0.0))
+            pmra_b = float(get_value(secondary_gaia, 'pmra', 0.0))
+            pmdec_b = float(get_value(secondary_gaia, 'pmdec', 0.0))
+
+            ruwe_a = float(get_value(primary_gaia, 'ruwe', 1.0) or 1.0)
+            ruwe_b = float(get_value(secondary_gaia, 'ruwe', 1.0) or 1.0)
+
+            pmra_err_a_raw = get_value(primary_gaia, 'pmra_error')
+            pmdec_err_a_raw = get_value(primary_gaia, 'pmdec_error')
+            pmra_err_b_raw = get_value(secondary_gaia, 'pmra_error')
+            pmdec_err_b_raw = get_value(secondary_gaia, 'pmdec_error')
+
+            pmra_err_a = get_gaia_pmra_error_safe(pmra_err_a_raw, ruwe_a)
+            pmdec_err_a = get_gaia_pmdec_error_safe(pmdec_err_a_raw, ruwe_a)
+            pmra_err_b = get_gaia_pmra_error_safe(pmra_err_b_raw, ruwe_b)
+            pmdec_err_b = get_gaia_pmdec_error_safe(pmdec_err_b_raw, ruwe_b)
+
+            corr_a = float(get_value(primary_gaia, 'pmra_pmdec_corr', 0.0) or 0.0)
+            corr_b = float(get_value(secondary_gaia, 'pmra_pmdec_corr', 0.0) or 0.0)
+
+            coord_a = SkyCoord(ra=ra_a * u.deg, dec=dec_a * u.deg)
+            coord_b = SkyCoord(ra=ra_b * u.deg, dec=dec_b * u.deg)
+
+            separation = coord_a.separation(coord_b)
+            position_angle = coord_a.position_angle(coord_b)
+
+            sep_arcsec = separation.to(u.arcsec).value
+            if sep_arcsec == 0:
+                return {}
+
+            pa_rad = position_angle.to(u.radian).value
+            delta_ra = sep_arcsec * np.sin(pa_rad)
+            delta_dec = sep_arcsec * np.cos(pa_rad)
+            r_norm = np.hypot(delta_ra, delta_dec)
+            if r_norm == 0:
+                return {}
+
+            e_r_ra = delta_ra / r_norm
+            e_r_dec = delta_dec / r_norm
+            e_t_ra = -e_r_dec
+            e_t_dec = e_r_ra
+
+            delta_pmra = pmra_b - pmra_a
+            delta_pmdec = pmdec_b - pmdec_a
+            proper_motion_difference = float(np.hypot(delta_pmra, delta_pmdec))
+
+            delta_mu_orbit = float(delta_pmra * e_t_ra + delta_pmdec * e_t_dec)
+
+            cov_a = np.array([
+                [pmra_err_a ** 2, pmra_err_a * pmdec_err_a * corr_a],
+                [pmra_err_a * pmdec_err_a * corr_a, pmdec_err_a ** 2]
+            ])
+            cov_b = np.array([
+                [pmra_err_b ** 2, pmra_err_b * pmdec_err_b * corr_b],
+                [pmra_err_b * pmdec_err_b * corr_b, pmdec_err_b ** 2]
+            ])
+
+            cov_delta = cov_a + cov_b
+            e_t = np.array([e_t_ra, e_t_dec])
+            variance = float(e_t.T @ cov_delta @ e_t)
+            variance = max(variance, 0.0)
+            delta_mu_error = float(np.sqrt(variance)) if variance > 0 else float('inf')
+
+            if not np.isfinite(delta_mu_error) or delta_mu_error == 0:
+                delta_mu_significance = float('inf') if delta_mu_orbit != 0 else 0.0
             else:
-                chi2_result = self._calculate_chi2_1d_plx(primary_gaia, secondary_gaia)
-                if chi2_result:
-                    test_type = ValidationMethod.GAIA_PARALLAX_ONLY
+                delta_mu_significance = abs(delta_mu_orbit) / delta_mu_error
 
-        if not chi2_result:
-            raise InsufficientAstrometricDataError("No valid astrometric measurements available for physicality test")
+            return {
+                'delta_mu_orbit': delta_mu_orbit,
+                'delta_mu_orbit_error': delta_mu_error,
+                'delta_mu_orbit_significance': delta_mu_significance,
+                'separation_arcsec': sep_arcsec,
+                'position_angle_deg': position_angle.to(u.deg).value,
+                'proper_motion_difference': proper_motion_difference
+            }
+        except Exception as exc:
+            log.warning(f"Failed to compute El-Badry Δμ_orbit metrics: {exc}")
+            return {}
 
-        chi_squared_val, dof = chi2_result
-        
-        # Calculate p-value: 
-        # For physical systems, astrometric measurements should be CONSISTENT (low chi-squared)
-        # p-value represents probability that measurements are THIS consistent by chance
-        # High p-value → measurements are consistent → likely physical
-        # Low p-value → measurements are inconsistent → likely optical
-        p_value = chi2.sf(chi_squared_val, df=dof)
-        
-        if p_value > self.physical_threshold:
-            label = PhysicalityLabel.LIKELY_PHYSICAL
-        elif p_value > self.ambiguous_threshold:
-            label = PhysicalityLabel.AMBIGUOUS
-        else:
-            label = PhysicalityLabel.LIKELY_OPTICAL
-        
-        return {'label': label, 'p_value': p_value, 'method': test_type}
+    def _calculate_statistical_consistency(self, primary_gaia: Dict, secondary_gaia: Dict) -> Optional[Dict[str, Any]]:
+        """Run classical chi-squared consistency tests as statistical backup evidence."""
+        test_sequence = [
+            (self._calculate_chi2_3d, ValidationMethod.GAIA_3D_PARALLAX_PM, 3),
+            (self._calculate_chi2_2d, ValidationMethod.PROPER_MOTION_ONLY, 2),
+            (self._calculate_chi2_1d, ValidationMethod.GAIA_PARALLAX_ONLY, 1),
+        ]
+
+        for calculator, method_enum, dof in test_sequence:
+            chi2_result = calculator(primary_gaia, secondary_gaia)
+            if chi2_result is None:
+                continue
+
+            chi2_val = chi2_result
+            p_value = chi2.sf(chi2_val, df=dof)
+
+            if p_value > self.physical_threshold:
+                label = PhysicalityLabel.LIKELY_PHYSICAL
+            elif p_value > self.ambiguous_threshold:
+                label = PhysicalityLabel.AMBIGUOUS
+            else:
+                label = PhysicalityLabel.LIKELY_OPTICAL
+
+            return {
+                'label': label,
+                'p_value': p_value,
+                'method': method_enum,
+                'chi2': chi2_val,
+                'degrees_of_freedom': dof,
+                'expert_confidence': None,
+            }
+
+        return None
+
+    def _calculate_chi2_3d(self, star1: Dict, star2: Dict) -> Optional[float]:
+        """3D chi-squared using full covariance (parallax + proper motion)."""
+        required = ['parallax', 'pmra', 'pmdec']
+        if any(star1.get(k) is None or star2.get(k) is None for k in required):
+            return None
+
+        params1 = np.array([float(star1['parallax']), float(star1['pmra']), float(star1['pmdec'])])
+        params2 = np.array([float(star2['parallax']), float(star2['pmra']), float(star2['pmdec'])])
+
+        C1 = build_covariance_matrix(star1, dimensions=3)
+        C2 = build_covariance_matrix(star2, dimensions=3)
+        if C1 is None or C2 is None:
+            return self._calculate_chi2_3d_diagonal(star1, star2)
+
+        C_total = C1 + C2
+        try:
+            C_inv = np.linalg.inv(C_total)
+        except np.linalg.LinAlgError:
+            return self._calculate_chi2_3d_diagonal(star1, star2)
+
+        delta = params1 - params2
+        chi2_val = float(delta.T @ C_inv @ delta)
+        return chi2_val
+
+    def _calculate_chi2_3d_diagonal(self, star1: Dict, star2: Dict) -> Optional[float]:
+        """Diagonal fallback when full covariance cannot be constructed."""
+        try:
+            errors1 = np.array([
+                get_gaia_parallax_error_safe(star1.get('parallax_error'), star1.get('ruwe')),
+                get_gaia_pmra_error_safe(star1.get('pmra_error'), star1.get('ruwe')),
+                get_gaia_pmdec_error_safe(star1.get('pmdec_error'), star1.get('ruwe')),
+            ])
+            errors2 = np.array([
+                get_gaia_parallax_error_safe(star2.get('parallax_error'), star2.get('ruwe')),
+                get_gaia_pmra_error_safe(star2.get('pmra_error'), star2.get('ruwe')),
+                get_gaia_pmdec_error_safe(star2.get('pmdec_error'), star2.get('ruwe')),
+            ])
+
+            if np.any(errors1 <= 0) or np.any(errors2 <= 0):
+                return None
+
+            params1 = np.array([float(star1['parallax']), float(star1['pmra']), float(star1['pmdec'])])
+            params2 = np.array([float(star2['parallax']), float(star2['pmra']), float(star2['pmdec'])])
+
+            combined_errors = np.sqrt(errors1**2 + errors2**2)
+            delta = params1 - params2
+            chi2_components = (delta / combined_errors) ** 2
+            return float(np.sum(chi2_components))
+        except Exception:
+            return None
+
+    def _calculate_chi2_2d(self, star1: Dict, star2: Dict) -> Optional[float]:
+        """2D chi-squared for proper motion alignment."""
+        required = ['pmra', 'pmdec']
+        if any(star1.get(k) is None or star2.get(k) is None for k in required):
+            return None
+
+        params1 = np.array([float(star1['pmra']), float(star1['pmdec'])])
+        params2 = np.array([float(star2['pmra']), float(star2['pmdec'])])
+
+        C1 = build_covariance_matrix(star1, dimensions=2)
+        C2 = build_covariance_matrix(star2, dimensions=2)
+        if C1 is None or C2 is None:
+            return self._calculate_chi2_2d_diagonal(star1, star2)
+
+        C_total = C1 + C2
+        try:
+            C_inv = np.linalg.inv(C_total)
+        except np.linalg.LinAlgError:
+            return self._calculate_chi2_2d_diagonal(star1, star2)
+
+        delta = params1 - params2
+        return float(delta.T @ C_inv @ delta)
+
+    def _calculate_chi2_2d_diagonal(self, star1: Dict, star2: Dict) -> Optional[float]:
+        try:
+            err1_ra = get_gaia_pmra_error_safe(star1.get('pmra_error'), star1.get('ruwe'))
+            err1_dec = get_gaia_pmdec_error_safe(star1.get('pmdec_error'), star1.get('ruwe'))
+            err2_ra = get_gaia_pmra_error_safe(star2.get('pmra_error'), star2.get('ruwe'))
+            err2_dec = get_gaia_pmdec_error_safe(star2.get('pmdec_error'), star2.get('ruwe'))
+
+            if min(err1_ra, err1_dec, err2_ra, err2_dec) <= 0:
+                return None
+
+            delta_ra = float(star1['pmra']) - float(star2['pmra'])
+            delta_dec = float(star1['pmdec']) - float(star2['pmdec'])
+
+            combined_ra_err = np.sqrt(err1_ra**2 + err2_ra**2)
+            combined_dec_err = np.sqrt(err1_dec**2 + err2_dec**2)
+
+            chi2_ra = (delta_ra / combined_ra_err) ** 2
+            chi2_dec = (delta_dec / combined_dec_err) ** 2
+            return float(chi2_ra + chi2_dec)
+        except Exception:
+            return None
+
+    def _calculate_chi2_1d(self, star1: Dict, star2: Dict) -> Optional[float]:
+        """1D chi-squared for parallax consistency."""
+        if star1.get('parallax') is None or star2.get('parallax') is None:
+            return None
+
+        err1 = get_gaia_parallax_error_safe(star1.get('parallax_error'), star1.get('ruwe'))
+        err2 = get_gaia_parallax_error_safe(star2.get('parallax_error'), star2.get('ruwe'))
+        if err1 <= 0 or err2 <= 0:
+            return None
+
+        delta = float(star1['parallax']) - float(star2['parallax'])
+        combined_err = np.sqrt(err1**2 + err2**2)
+        if combined_err <= 0:
+            return None
+
+        return float((delta / combined_err) ** 2)
+    
+    def _verify_separation_consistency(self, primary_gaia: Dict, secondary_gaia: Dict, wds_summary: Dict[str, Any]) -> bool:
+        """Ensure the Gaia-selected pair matches the catalog separation."""
+        try:
+            wds_sep = wds_summary.get('sep_last')
+            if wds_sep is None or wds_sep <= 0:
+                log.debug("No WDS separation available for verification; skipping check")
+                return True
+
+            gaia_sep = self._calculate_angular_separation(primary_gaia, secondary_gaia)
+            sep_diff_fraction = abs(gaia_sep - wds_sep) / wds_sep
+            is_consistent = sep_diff_fraction <= GAIA_WDS_SEPARATION_TOLERANCE_FRACTION
+
+            log.debug(
+                "Separation verification: Gaia=%.2f\", WDS=%.2f\", fractional diff=%.2f (%s)",
+                gaia_sep,
+                wds_sep,
+                sep_diff_fraction,
+                "OK" if is_consistent else "FAIL"
+            )
+
+            return is_consistent
+        except Exception as exc:
+            log.warning("Error verifying separation consistency: %s", exc)
+            return True
+
+    def _calculate_angular_separation(self, star1: Dict, star2: Dict) -> float:
+        """Calculate angular separation between two Gaia detections in arcseconds."""
+        ra1, dec1 = float(star1['ra']), float(star1['dec'])
+        ra2, dec2 = float(star2['ra']), float(star2['dec'])
+
+        dra = (ra1 - ra2) * np.cos(np.radians((dec1 + dec2) / 2.0))
+        ddec = dec1 - dec2
+        separation_deg = np.sqrt(dra**2 + ddec**2)
+
+        return separation_deg * 3600.0
 
     def _get_params_and_check_validity(self, star: Dict, keys: list) -> bool:
         """Helper to check if all necessary keys exist and are valid for a star."""
@@ -269,80 +890,6 @@ class GaiaValidator(PhysicalityValidator):
             if hasattr(value, 'mask') and np.ma.is_masked(value):
                 return False
         return True
-
-    def _calculate_chi2_3d(self, star1: Dict, star2: Dict) -> Optional[Tuple[float, int]]:
-        """Calculates 3D chi-squared (plx, pmra, pmdec) using covariance builder."""
-        required_keys = ['parallax', 'pmra', 'pmdec']
-        if not (self._get_params_and_check_validity(star1, required_keys) and 
-                self._get_params_and_check_validity(star2, required_keys)):
-            return None
-        
-        try:
-            params1 = np.array([star1['parallax'], star1['pmra'], star1['pmdec']])
-            params2 = np.array([star2['parallax'], star2['pmra'], star2['pmdec']])
-            
-            C1 = self._build_covariance_matrix(star1, dimensions=3)
-            C2 = self._build_covariance_matrix(star2, dimensions=3)
-            
-            if C1 is None or C2 is None:
-                return None
-            
-            C_total_inv = np.linalg.inv(C1 + C2)
-            delta_params = params1 - params2
-            chi_squared = delta_params.T @ C_total_inv @ delta_params
-            return chi_squared, 3
-        except (np.linalg.LinAlgError, ValueError, ZeroDivisionError):
-            return None
-
-    def _calculate_chi2_2d_pm(self, star1: Dict, star2: Dict) -> Optional[Tuple[float, int]]:
-        """Calculates 2D chi-squared for proper motion using covariance builder."""
-        required_keys = ['pmra', 'pmdec']
-        if not (self._get_params_and_check_validity(star1, required_keys) and 
-                self._get_params_and_check_validity(star2, required_keys)):
-            return None
-
-        try:
-            params1 = np.array([star1['pmra'], star1['pmdec']])
-            params2 = np.array([star2['pmra'], star2['pmdec']])
-            
-            C1 = self._build_covariance_matrix(star1, dimensions=2)
-            C2 = self._build_covariance_matrix(star2, dimensions=2)
-            
-            if C1 is None or C2 is None:
-                return None
-
-            C_total_inv = np.linalg.inv(C1 + C2)
-            delta_params = params1 - params2
-            chi_squared = delta_params.T @ C_total_inv @ delta_params
-            return chi_squared, 2
-        except (np.linalg.LinAlgError, ValueError, ZeroDivisionError):
-            return None
-
-    def _calculate_chi2_1d_plx(self, star1: Dict, star2: Dict) -> Optional[Tuple[float, int]]:
-        """Calculates 1D chi-squared for parallax."""
-        required_keys = ['parallax']
-        if not (self._get_params_and_check_validity(star1, required_keys) and 
-                self._get_params_and_check_validity(star2, required_keys)):
-            return None
-        
-        try:
-            # Use covariance matrix builder for consistency
-            C1 = self._build_covariance_matrix(star1, dimensions=1)
-            C2 = self._build_covariance_matrix(star2, dimensions=1)
-            
-            if C1 is None or C2 is None:
-                return None
-                
-            plx1, plx2 = star1['parallax'], star2['parallax']
-            combined_variance = C1[0, 0] + C2[0, 0]  # Sum of variances
-            
-            if combined_variance <= 0:
-                return None
-            
-            chi_squared = ((plx1 - plx2)**2) / combined_variance
-            return chi_squared, 1
-        except (ValueError, ZeroDivisionError, IndexError):
-            return None
 
     def _identify_components_by_mag(self, gaia_results, wds_mags: Tuple[Optional[float], Optional[float]]):
         """
@@ -558,7 +1105,7 @@ class GaiaValidator(PhysicalityValidator):
         """
         Validates basic astrometric quality criteria for Gaia sources.
         Filters out sources with poor astrometric solutions.
-        Permissive approach to avoid rejecting wide binaries.
+        Updated with more stringent parallax requirements for better discrimination.
         
         Args:
             star: Gaia source data dictionary
@@ -573,13 +1120,13 @@ class GaiaValidator(PhysicalityValidator):
                 log.debug(f"Source {star.get('source_id', 'unknown')} rejected: RUWE {ruwe:.2f} > {GAIA_MAX_RUWE * GAIA_RUWE_PERMISSIVE_MULTIPLIER:.1f}")
                 return False
             
-            # Only reject extremely poor parallax measurements to avoid rejecting distant binaries
+            # More stringent parallax significance requirement (increased from 0.33σ to 1.5σ minimum)
             if 'parallax' in star.colnames and 'parallax_error' in star.colnames:
                 parallax = star['parallax']
                 parallax_error = star['parallax_error']
                 if (parallax is not None and parallax_error is not None and 
-                    parallax_error > 0 and abs(parallax / parallax_error) < MIN_PARALLAX_SIGNIFICANCE / GAIA_PARALLAX_SIGNIFICANCE_DIVISOR):
-                    log.debug(f"Source {star.get('source_id', 'unknown')} rejected: Poor parallax SNR {abs(parallax / parallax_error):.1f}")
+                    parallax_error > 0 and abs(parallax / parallax_error) < MIN_PARALLAX_SIGNIFICANCE):
+                    log.debug(f"Source {star.get('source_id', 'unknown')} rejected: Poor parallax SNR {abs(parallax / parallax_error):.1f} < {MIN_PARALLAX_SIGNIFICANCE}")
                     return False
             
             # Check for completely missing essential data
@@ -598,106 +1145,6 @@ class GaiaValidator(PhysicalityValidator):
         except Exception as e:
             log.warning(f"Error validating astrometric quality: {e}")
             return True  # Conservative approach - don't reject on validation errors
-
-    def _build_covariance_matrix(self, star: Dict, dimensions: int = 3) -> Optional[np.ndarray]:
-        """
-        Builds covariance matrix for astrometric parameters with proper error handling.
-        
-        Args:
-            star: Gaia source data
-            dimensions: 1 (parallax), 2 (proper motion), or 3 (parallax + proper motion)
-            
-        Returns:
-            Covariance matrix or None if data is insufficient
-        """
-        def get_correlation_safe(star: Dict, key: str) -> float:
-            """
-            Safe correlation retrieval with fallback default.
-            
-            Args:
-                star: Gaia source data
-                key: Correlation coefficient key
-                
-            Returns:
-                Correlation coefficient or configured default
-            """
-            if hasattr(star, 'get'):
-                corr = star.get(key)
-            else:
-                corr = star[key] if key in star.colnames else None
-                
-            if corr is None:
-                log.debug(f"Missing correlation {key} for source {star.get('source_id', 'unknown')}, "
-                         f"using default {GAIA_DEFAULT_CORRELATION_MISSING}")
-                return GAIA_DEFAULT_CORRELATION_MISSING
-            
-            return float(corr)
-        
-        try:
-            if dimensions == 1:
-                # 1D: parallax only
-                if 'parallax_error' not in star.colnames:
-                    return None
-                err = star['parallax_error']
-                if err is None or err <= 0:
-                    return None
-                return np.array([[err**2]])
-                
-            elif dimensions == 2:
-                # 2D: proper motion only
-                required_keys = ['pmra_error', 'pmdec_error']
-                if not all(key in star.colnames for key in required_keys):
-                    return None
-                    
-                pmra_err = star['pmra_error']
-                pmdec_err = star['pmdec_error']
-                
-                if pmra_err is None or pmdec_err is None or pmra_err <= 0 or pmdec_err <= 0:
-                    return None
-                    
-                # Use safe correlation retrieval
-                pmra_pmdec_corr = get_correlation_safe(star, 'pmra_pmdec_corr')
-                
-                C = np.zeros((2, 2))
-                C[0, 0] = pmra_err**2
-                C[1, 1] = pmdec_err**2
-                C[0, 1] = C[1, 0] = pmra_err * pmdec_err * pmra_pmdec_corr
-                return C
-                
-            elif dimensions == 3:
-                # 3D: parallax + proper motion
-                required_keys = ['parallax_error', 'pmra_error', 'pmdec_error']
-                if not all(key in star.colnames for key in required_keys):
-                    return None
-                    
-                plx_err = star['parallax_error']
-                pmra_err = star['pmra_error'] 
-                pmdec_err = star['pmdec_error']
-                
-                if (plx_err is None or pmra_err is None or pmdec_err is None or
-                    plx_err <= 0 or pmra_err <= 0 or pmdec_err <= 0):
-                    return None
-                
-                # Use safe correlation retrieval
-                plx_pmra_corr = get_correlation_safe(star, 'parallax_pmra_corr')
-                plx_pmdec_corr = get_correlation_safe(star, 'parallax_pmdec_corr')
-                pmra_pmdec_corr = get_correlation_safe(star, 'pmra_pmdec_corr')
-                
-                C = np.zeros((3, 3))
-                C[0, 0] = plx_err**2
-                C[1, 1] = pmra_err**2
-                C[2, 2] = pmdec_err**2
-                C[0, 1] = C[1, 0] = plx_err * pmra_err * plx_pmra_corr
-                C[0, 2] = C[2, 0] = plx_err * pmdec_err * plx_pmdec_corr
-                C[1, 2] = C[2, 1] = pmra_err * pmdec_err * pmra_pmdec_corr
-                return C
-                
-            else:
-                raise ValueError(f"Unsupported dimensions: {dimensions}")
-                
-        except Exception as e:
-            log.debug(f"Error building {dimensions}D covariance matrix: {e}")
-            return None
 
     async def get_parallax_data(
         self,

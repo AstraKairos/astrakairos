@@ -69,6 +69,7 @@ class ValidationMethod(Enum):
     GAIA_PARALLAX_ONLY = "Gaia Parallax"
     PROPER_MOTION_ONLY = "Proper Motion"
     STATISTICAL_ANALYSIS = "Statistical Analysis"
+    EXPERT_EL_BADRY = "Expert (El-Badry Δμ_orbit)"
 
 class WdsSummary(TypedDict, total=True):
     """Data structure for a single-line entry from the WDS summary catalog.
@@ -125,7 +126,7 @@ class WdsSummary(TypedDict, total=True):
     wdss_id: Optional[str]
     discoverer_designation: Optional[str]
     
-    # Gaia source IDs for enhanced validation - scalable for multi-component systems
+    # Gaia source IDs for physicality validation - scalable for multi-component systems
     # Note: While AstraKairos analyzes binary pairs, stellar systems can have many components (A-Z and beyond)
     # We store Gaia IDs as a flexible mapping to handle any component letter combination
     gaia_source_ids: Optional[Dict[str, str]]  # Component letter -> Gaia DR3 source_id mapping
@@ -216,6 +217,14 @@ class PhysicalityAssessment(BasePhysicalityAssessment, total=False):
     proper_motion_consistency: Optional[float]
     gaia_source_id_primary: Optional[str]
     gaia_source_id_secondary: Optional[str]
+    delta_mu_orbit: Optional[float]
+    delta_mu_orbit_error: Optional[float]
+    delta_mu_orbit_significance: Optional[float]
+    separation_arcsec: Optional[float]
+    position_angle_deg: Optional[float]
+    proper_motion_difference: Optional[float]
+    expert_method: Optional[str]
+    method_type: Optional[str]
     
     # Gaia-specific metadata
     search_radius_arcsec: float

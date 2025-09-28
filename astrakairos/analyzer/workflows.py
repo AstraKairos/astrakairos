@@ -351,6 +351,24 @@ async def _perform_gaia_validation(wds_id: str, wds_summary: WdsSummary,
                 'physicality_method': physicality_assessment.get('method').value if hasattr(physicality_assessment.get('method'), 'value') else str(physicality_assessment.get('method')),
                 'physicality_confidence': physicality_assessment.get('confidence')
             }
+
+            if 'method_type' in physicality_assessment:
+                result['physicality_method_type'] = physicality_assessment.get('method_type')
+            if 'expert_method' in physicality_assessment:
+                result['physicality_expert_method'] = physicality_assessment.get('expert_method')
+            if 'delta_mu_orbit' in physicality_assessment:
+                result['gaia_delta_mu_orbit'] = physicality_assessment.get('delta_mu_orbit')
+            if 'delta_mu_orbit_error' in physicality_assessment:
+                result['gaia_delta_mu_orbit_error'] = physicality_assessment.get('delta_mu_orbit_error')
+            if 'delta_mu_orbit_significance' in physicality_assessment:
+                result['gaia_delta_mu_sigma'] = physicality_assessment.get('delta_mu_orbit_significance')
+            if 'separation_arcsec' in physicality_assessment:
+                result['gaia_validated_separation_arcsec'] = physicality_assessment.get('separation_arcsec')
+            if 'position_angle_deg' in physicality_assessment:
+                result['gaia_validated_position_angle_deg'] = physicality_assessment.get('position_angle_deg')
+            if 'proper_motion_difference' in physicality_assessment:
+                result['gaia_proper_motion_difference'] = physicality_assessment.get('proper_motion_difference')
+
             log.info(f"Gaia validation successful for {wds_id}: {result['physicality_label']} (p={result['physicality_p_value']})")
             return result
         else:
