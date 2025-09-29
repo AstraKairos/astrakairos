@@ -7,6 +7,7 @@ import asyncio
 import logging
 import functools
 import re
+import json
 from datetime import datetime
 from astropy import units as u
 from astropy.coordinates import SkyCoord
@@ -176,6 +177,19 @@ class GaiaValidator(PhysicalityValidator):
         }
         wds_pattern = re.compile(r"^\d{6,7}[+-]\d{6}$")
 
+        def _normalize_identifier(raw: Any) -> Optional[str]:
+            if raw is None:
+                return None
+            candidate = str(raw).strip()
+            if not candidate:
+                return None
+
+            digits_only = ''.join(ch for ch in candidate if ch.isdigit())
+            if digits_only:
+                return digits_only
+
+            return candidate if candidate.isdigit() else None
+
         def _extract_id_from_tokens(tokens: list[str]) -> Optional[str]:
             for index, token in enumerate(tokens):
                 normalized = token.strip()
@@ -212,6 +226,15 @@ class GaiaValidator(PhysicalityValidator):
 
         gaia_ids: Dict[str, str] = {}
 
+        pair_source = (wds_summary.get('component_pair') or
+                       wds_summary.get('components') or '')
+        ordered_letters: list[str] = []
+        for char in str(pair_source):
+            if char.isalpha():
+                upper = char.upper()
+                if upper not in ordered_letters:
+                    ordered_letters.append(upper)
+
         # First, scan all textual fields for the supported WDS record formats
         for value in wds_summary.values():
             if not isinstance(value, str):
@@ -221,23 +244,102 @@ class GaiaValidator(PhysicalityValidator):
                 continue
             component, identifier = parsed
             gaia_ids.setdefault(component, identifier)
-
-        # Determine component ordering from explicit pair metadata when available
-        pair_source = wds_summary.get('component_pair') or wds_summary.get('components') or ''
-        ordered_letters: list[str] = []
-        for char in pair_source:
-            if char.isalpha():
-                upper = char.upper()
-                if upper not in ordered_letters:
-                    ordered_letters.append(upper)
+            if component not in ordered_letters:
+                ordered_letters.append(component)
 
         if not ordered_letters:
-            ordered_letters = list(gaia_ids.keys())
+            ordered_letters = ['A', 'B']
 
-        # Map dedicated primary/secondary fields using the inferred order
-        ordered_letters = ordered_letters or ['A', 'B']
         primary_letter = ordered_letters[0]
         secondary_letter = ordered_letters[1] if len(ordered_letters) > 1 else None
+
+        def _record_structured_id(component_hint: Optional[str], raw_identifier: Any) -> None:
+            identifier = _normalize_identifier(raw_identifier)
+            if not identifier:
+                return
+
+            if component_hint:
+                normalized_hint = component_hint.strip().upper()
+                if len(normalized_hint) == 1 and normalized_hint.isalpha():
+                    gaia_ids.setdefault(normalized_hint, identifier)
+                    if normalized_hint not in ordered_letters:
+                        ordered_letters.append(normalized_hint)
+                    return
+
+                if normalized_hint in {'PRIMARY', 'SECONDARY'}:
+                    target_letter = primary_letter if normalized_hint == 'PRIMARY' else secondary_letter
+                    if target_letter:
+                        gaia_ids.setdefault(target_letter.upper(), identifier)
+                        if target_letter not in ordered_letters:
+                            ordered_letters.append(target_letter.upper())
+                    return
+
+            for letter in ordered_letters:
+                if letter not in gaia_ids:
+                    gaia_ids[letter] = identifier
+                    return
+
+            for fallback_letter in ('A', 'B', 'C', 'D'):
+                if fallback_letter not in gaia_ids:
+                    gaia_ids[fallback_letter] = identifier
+                    return
+
+        structured_ids_raw = wds_summary.get('gaia_source_ids')
+        structured_mapping: Dict[str, Any] = {}
+
+        if isinstance(structured_ids_raw, dict):
+            structured_mapping = structured_ids_raw
+        elif isinstance(structured_ids_raw, str):
+            payload = structured_ids_raw.strip()
+            if payload:
+                try:
+                    parsed_payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    log.debug("Failed to decode gaia_source_ids JSON: %s", payload)
+                else:
+                    if isinstance(parsed_payload, dict):
+                        structured_mapping = parsed_payload
+                    elif isinstance(parsed_payload, list):
+                        for entry in parsed_payload:
+                            if not isinstance(entry, dict):
+                                continue
+                            component_key = (entry.get('component') or
+                                             entry.get('component_letter') or
+                                             entry.get('component_name'))
+                            value = (entry.get('source_id') or
+                                     entry.get('gaia_id') or
+                                     entry.get('value'))
+                            if component_key is None:
+                                continue
+                            structured_mapping[str(component_key)] = value
+        elif isinstance(structured_ids_raw, list):
+            for entry in structured_ids_raw:
+                if not isinstance(entry, dict):
+                    continue
+                component_key = (entry.get('component') or
+                                 entry.get('component_letter') or
+                                 entry.get('component_name'))
+                value = (entry.get('source_id') or
+                         entry.get('gaia_id') or
+                         entry.get('value'))
+                if component_key is None:
+                    continue
+                structured_mapping[str(component_key)] = value
+
+        for key, value in structured_mapping.items():
+            if key is None:
+                continue
+            normalized_key = str(key).strip()
+            if not normalized_key:
+                continue
+            if normalized_key.lower() == 'component':
+                continue
+            _record_structured_id(normalized_key, value)
+
+        if not ordered_letters and gaia_ids:
+            ordered_letters = list(gaia_ids.keys())
+            primary_letter = ordered_letters[0]
+            secondary_letter = ordered_letters[1] if len(ordered_letters) > 1 else secondary_letter
 
         def _parse_simple_id(field_value: Any) -> Optional[str]:
             if field_value is None:

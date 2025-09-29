@@ -138,6 +138,30 @@ class TestGaiaValidator:
         }
 
         assert gaia_validator._extract_gaia_source_ids(wds_summary) is None
+
+    def test_extract_gaia_source_ids_from_json_mapping(self, gaia_validator):
+        """Structured gaia_source_ids JSON is parsed directly into component mappings."""
+        wds_summary = {
+            'component_pair': 'AB',
+            'gaia_source_ids': '{"A": "3573745362476642048", "B": "3573745362474959360", "component": "unused"}'
+        }
+
+        assert gaia_validator._extract_gaia_source_ids(wds_summary) == {
+            'A': '3573745362476642048',
+            'B': '3573745362474959360'
+        }
+
+    def test_extract_gaia_source_ids_from_primary_secondary_fields(self, gaia_validator):
+        """Primary/secondary structured keys map using the declared component order."""
+        wds_summary = {
+            'component_pair': 'AC',
+            'gaia_source_ids': '{"primary": "123456", "secondary": "654321"}'
+        }
+
+        assert gaia_validator._extract_gaia_source_ids(wds_summary) == {
+            'A': '123456',
+            'C': '654321'
+        }
     
     def test_validate_physicality_sync_success(self, gaia_validator):
         """Test synchronous validation when Gaia IDs map directly to sources."""
