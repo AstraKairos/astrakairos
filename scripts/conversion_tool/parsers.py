@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 
 def extract_gaia_ids_from_name_field(name_field: str) -> Dict[str, str]:
     """
-    Extract Gaia DR3 source IDs from the WDSS 'name' field.
+    Extract Gaia DRx/ERx source IDs from the WDSS 'name' field.
     
     The name field may contain Gaia IDs in various formats, often associated
     with component letters. This function attempts to parse and match them.
@@ -52,6 +52,7 @@ def extract_gaia_ids_from_name_field(name_field: str) -> Dict[str, str]:
         
     Examples:
         "Gaia DR3 5853498713190525568 A, Gaia DR3 5853498713190678912 B"
+        "Gaia ER3 3907774724056384512 B"
         "5853498713190525568 A 5853498713190678912 B"
         "A:5853498713190525568 B:5853498713190678912"
         "6.65 DR2 3925443088835673600"  # Single ID without component -> assumed 'A'
@@ -79,10 +80,16 @@ def extract_gaia_ids_from_name_field(name_field: str) -> Dict[str, str]:
     for component, gaia_id in colon_matches:
         result[component] = gaia_id
     
-    # Pattern for Gaia DR3 format: Gaia DR3 123456... A
-    gaia_dr3_matches = re.findall(r'GAIA\s+DR3\s+(\d{18,20})\s+([A-Z])\b', name_upper)
-    for gaia_id, component in gaia_dr3_matches:
+    # Pattern for Gaia DRx/ERx formats: Gaia DR3 123456... A, Gaia ER3 123... B
+    gaia_release_matches = re.findall(r'GAIA\s+(?:DR|ER)\d\s+(\d{18,20})\s+([A-Z])\b', name_upper)
+    for gaia_id, component in gaia_release_matches:
         if component not in result:  # Don't overwrite colon matches
+            result[component] = gaia_id
+
+    # Pattern for release tokens without explicit "Gaia" prefix (e.g., DR2 123... A)
+    release_matches = re.findall(r'\b(?:DR|ER)\d\s+(\d{18,20})\s+([A-Z])\b', name_upper)
+    for gaia_id, component in release_matches:
+        if component not in result:
             result[component] = gaia_id
     
     # Pattern for number-space-letter: 123456... A (but not if already matched)

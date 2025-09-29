@@ -202,9 +202,6 @@ DEFAULT_MIN_OBS = 2
 DEFAULT_MAX_OBS = 10
 DEFAULT_CONCURRENT_REQUESTS = 200 # While testing, I couldn't see any major diferences between ~70, 100, 150 and 200, but leaving a higher value doesn't seem to cause any harm.
 DEFAULT_GAIA_P_VALUE = 0.020  # 2.0% - synchronized with provisional recalibrated DEFAULT_PHYSICAL_P_VALUE_THRESHOLD (2025-09 experimental)
-DEFAULT_GAIA_RADIUS_FACTOR = 1.5   # More generous radius factor for wide binaries
-DEFAULT_GAIA_MIN_RADIUS = 3.0      # Larger minimum radius
-DEFAULT_GAIA_MAX_RADIUS = 25.0     # Larger maximum radius for wide binaries
 DEFAULT_SORT_BY = 'v_total_median'
 TOP_RESULTS_DISPLAY_COUNT = 10
 
@@ -532,12 +529,6 @@ PARALLAX_SOURCE_PRIORITY = {
 
 # === GAIA Configuration - Component Matching and Quality Scoring ===
 
-# Component Matching Parameters
-GAIA_MATCHING_MAG_TOLERANCE = 1.5            # Magnitude tolerance for component matching
-GAIA_MATCHING_SPATIAL_PENALTY_FACTOR = 10.0  # Spatial penalty factor (arcsec/10)
-GAIA_MATCHING_MAX_SPATIAL_PENALTY = 5.0      # Maximum spatial penalty cap
-GAIA_MATCHING_MIN_PARALLAX_SIGNIFICANCE = 3.0 # Minimum parallax significance for mass calc
-
 # Quality Score Weights for Best Parallax Source Selection
 QUALITY_SCORE_RUWE_WEIGHT = 0.4              # Weight for RUWE quality
 QUALITY_SCORE_SIGNIFICANCE_WEIGHT = 0.4      # Weight for parallax significance
@@ -550,8 +541,6 @@ QUALITY_SCORE_MAG_REFERENCE = 20.0           # Reference magnitude for brightnes
 
 # Parallax Quality Thresholds
 GAIA_PARALLAX_MIN_SIGNIFICANCE = 3.0         # Minimum significance for reliable parallax
-GAIA_PARALLAX_NORMALIZATION_FACTOR = 10.0    # Normalization for significance scoring
-GAIA_MAGNITUDE_NORMALIZATION_LIMIT = 20.0    # Faint magnitude limit for scoring
 PARALLAX_SOURCE_PRIORITY = {
     'gaia_dr3': 1,      # Highest priority: Gaia DR3
     'gaia': 2,          # Second: Gaia DR2 or earlier
@@ -628,10 +617,9 @@ DATA_SOURCES = ['web', 'local', 'gaia']
 
 # Gaia Archive Configuration
 DEFAULT_GAIA_TABLE = 'gaiaedr3.gaia_source'  # Gaia EDR3 main table
-DEFAULT_GAIA_SEARCH_RADIUS_ARCSEC = 10.0     # Search radius around target
-DEFAULT_GAIA_MAG_LIMIT = 18.0                # Magnitude limit for Gaia queries
 DEFAULT_GAIA_TIMEOUT_SECONDS = 30            # Timeout for Gaia queries
-DEFAULT_GAIA_MAX_ROWS = 1000                 # Maximum rows to retrieve
+GAIA_REFERENCE_EPOCH = 2016.0                # Reference epoch for Gaia EDR3 astrometry
+GAIA_WDS_MAX_EPOCH_DIFFERENCE_YEARS = 5.0    # Skip strict separation checks if epochs differ too much
 
 # Gaia Physical Validation Thresholds
 # Provisional recalibration (2025-09) aiming to improve recall on vetted physical sample while
@@ -644,8 +632,6 @@ DEFAULT_GAIA_MAX_ROWS = 1000                 # Maximum rows to retrieve
 # NOTE: These are experimental and should be revalidated after collecting confusion matrix statistics.
 DEFAULT_PHYSICAL_P_VALUE_THRESHOLD = 0.020   # Physical if p_value > 2.0%
 DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD = 0.0015  # Ambiguous if between 0.15% and 2.0%
-GAIA_MAX_RETRY_ATTEMPTS = 3                 # Maximum retry attempts for failed queries
-GAIA_RETRY_DELAY_SECONDS = 2.0              # Delay between retry attempts
 
 # Gaia Data Quality Thresholds (More permissive for binary detection)
 MIN_PARALLAX_SIGNIFICANCE = 2.0             # Raised from 1.5 to 2.0 for slightly higher quality distance constraints
@@ -699,20 +685,14 @@ EXPERT_METHOD_PHYSICAL_BAD_RUWE = "physical_bad_ruwe"                 # PM consi
 EXPERT_METHOD_AMBIGUOUS_FALLBACK = "ambiguous_fallback"               # No clear pattern
 
 # Gaia Search Strategy Configuration
-GAIA_SEARCH_RADIUS_MULTIPLIER_SECOND = 2.0  # Second attempt radius multiplier  
-GAIA_SEARCH_RADIUS_MULTIPLIER_THIRD = 3.0   # Third attempt radius multiplier
 GAIA_RUWE_PERMISSIVE_MULTIPLIER = 1.5       # Multiplier for more permissive RUWE threshold
-GAIA_RUWE_QUERY_MULTIPLIER = 2.0            # Multiplier for Gaia query RUWE filter
-GAIA_PARALLAX_SIGNIFICANCE_DIVISOR = 3.0    # Divisor for very relaxed parallax significance
 GAIA_MIN_SOURCES_REQUIRED = 2               # Minimum number of sources needed for validation
-GAIA_MAG_LIMIT_BUFFER = 1.0                 # Buffer added to magnitude limit in queries
 
-# Wide Binary Search Configuration
-DEFAULT_GAIA_SEARCH_RADIUS_ARCSEC = 30.0    # Increased search radius for wide binaries
-GAIA_WIDE_BINARY_SEARCH_RADIUS_ARCSEC = 300.0  # Maximum search radius for very wide binaries
 
 # Separation Verification Configuration
 GAIA_WDS_SEPARATION_TOLERANCE_FRACTION = 0.4  # Tolerance for Gaia-WDS separation matching (ρ_diff/ρ_WDS <= 0.4)
+GAIA_RUWE_RELAX_THRESHOLD = 2.0              # RUWE threshold to relax separation tolerance
+GAIA_RUWE_TOLERANCE_MULTIPLIER = 2.0         # Multiplier applied to tolerance when RUWE is high
 
 # === PHYSICS Configuration - Kepler Solver ===
 

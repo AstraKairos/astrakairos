@@ -5,6 +5,7 @@ This module contains comprehensive tests for all components of the conversion to
 located in scripts/conversion_tool/.
 """
 
+import json
 import pytest
 import tempfile
 import sqlite3
@@ -18,11 +19,13 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent / "scripts"))
 
 from conversion_tool.parsers import (
+    extract_gaia_ids_from_name_field,
     parse_wdss_master_catalog,
     parse_el_badry_catalog,
     parse_orb6_catalog,
     estimate_uncertainty_from_technique
-)
+)  # type: ignore
+from conversion_tool.summary import generate_summary_table  # type: ignore
 
 # Import utility functions from main astrakairos package
 from astrakairos.utils.io import (
@@ -106,6 +109,19 @@ class TestParsingFunctions:
             assert isinstance(pa_err, float), f"Position angle error should be float for {technique}"
             assert sep_err > 0, f"Separation error should be positive for {technique}"
             assert pa_err > 0, f"Position angle error should be positive for {technique}"
+
+    def test_extract_gaia_ids_multiple_release_formats(self):
+        """Gaia IDs should be detected across DR2/DR3/ER3 notations."""
+
+        name_field = (
+            "Aa Ab 6.65 DR2 3925443088835673600 "
+            "Gaia ER3 3907774724056384512 B"
+        )
+
+        result = extract_gaia_ids_from_name_field(name_field)
+
+        assert result.get('A') == '3925443088835673600'
+        assert result.get('B') == '3907774724056384512'
     
     @patch('astropy.table.Table.read')
     def test_parse_el_badry_catalog_mock(self, mock_table_read):
@@ -214,6 +230,136 @@ class TestIntegrationScenarios:
         finally:
             os.unlink(temp_path)
 
+
+class TestSummaryGeneration:
+    """Tests focused on the summary table generation."""
+
+    def test_generate_summary_requires_complete_gaia_ids(self):
+        """Only component pairs with both Gaia IDs should be kept."""
+
+        # Components with valid Gaia IDs for pair AB
+        df_components = pd.DataFrame([
+            {
+                'wdss_id': '00001+0001',
+                'component': 'A',
+                'name': 'Gaia DR3 1234567890123456789 A',
+                'gaia_id_A': '1234567890123456789',
+                'gaia_id_B': None,
+                'gaia_id_component': '1234567890123456789',
+                'ra_deg': 10.0,
+                'dec_deg': 20.0,
+                'vmag': 9.5,
+                'kmag': 9.0,
+                'spectral_type': 'G2',
+                'pm_ra': 5.1,
+                'pm_dec': -3.2,
+                'parallax': 4.5
+            },
+            {
+                'wdss_id': '00001+0001',
+                'component': 'B',
+                'name': 'Gaia ER3 9876543210987654321 B',
+                'gaia_id_A': None,
+                'gaia_id_B': '9876543210987654321',
+                'gaia_id_component': '9876543210987654321',
+                'ra_deg': 10.0,
+                'dec_deg': 20.0,
+                'vmag': 10.5,
+                'kmag': 10.0,
+                'spectral_type': 'K5',
+                'pm_ra': 5.0,
+                'pm_dec': -3.1,
+                'parallax': 4.6
+            },
+            {
+                'wdss_id': '00002+0002',
+                'component': 'A',
+                'name': 'No Gaia IDs present',
+                'gaia_id_A': None,
+                'gaia_id_B': None,
+                'gaia_id_component': None,
+                'ra_deg': 11.0,
+                'dec_deg': 21.0,
+                'vmag': 11.5,
+                'kmag': 11.0,
+                'spectral_type': 'F5',
+                'pm_ra': 4.0,
+                'pm_dec': -2.0,
+                'parallax': 3.5
+            },
+            {
+                'wdss_id': '00002+0002',
+                'component': 'B',
+                'name': 'Still missing Gaia IDs',
+                'gaia_id_A': None,
+                'gaia_id_B': None,
+                'gaia_id_component': None,
+                'ra_deg': 11.0,
+                'dec_deg': 21.0,
+                'vmag': 12.0,
+                'kmag': 11.4,
+                'spectral_type': 'F8',
+                'pm_ra': 4.2,
+                'pm_dec': -2.1,
+                'parallax': 3.6
+            }
+        ])
+
+        df_measurements = pd.DataFrame([
+            {
+                'wdss_id': '00001+0001',
+                'pair': 'AB',
+                'epoch': 2010.0,
+                'theta': 120.0,
+                'rho': 1.2,
+                'theta_error': 0.1,
+                'rho_error': 0.01,
+                'mag1': 9.5,
+                'mag2': 10.5,
+                'reference': 'REF1',
+                'technique': 'VIS'
+            },
+            {
+                'wdss_id': '00002+0002',
+                'pair': 'AB',
+                'epoch': 2011.0,
+                'theta': 130.0,
+                'rho': 1.4,
+                'theta_error': 0.2,
+                'rho_error': 0.02,
+                'mag1': 11.5,
+                'mag2': 12.0,
+                'reference': 'REF2',
+                'technique': 'VIS'
+            }
+        ])
+
+        df_correspondence = pd.DataFrame([
+            {
+                'wdss_id': '00001+0001',
+                'wds_id': '00001+0001',
+                'discoverer_designation': 'TEST 1'
+            },
+            {
+                'wdss_id': '00002+0002',
+                'wds_id': '00002+0002',
+                'discoverer_designation': 'TEST 2'
+            }
+        ])
+
+        df_summary = generate_summary_table(df_components, df_measurements, df_correspondence)
+
+        # Only the system with both Gaia IDs should survive
+        assert len(df_summary) == 1
+        row = df_summary.iloc[0]
+
+        assert row['component_pair'] == 'AB'
+        assert row['gaia_id_primary'] == '1234567890123456789'
+        assert row['gaia_id_secondary'] == '9876543210987654321'
+
+        gaia_map = json.loads(row['gaia_source_ids'])
+        assert gaia_map['A'] == row['gaia_id_primary']
+        assert gaia_map['B'] == row['gaia_id_secondary']
 
 class TestParsingWithRealData:
     """Test parsing functions with realistic data structures."""

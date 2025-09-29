@@ -7,6 +7,7 @@ and measurement data to create optimized summary tables.
 
 import json
 import logging
+import re
 import pandas as pd
 import numpy as np
 from typing import Optional
@@ -362,6 +363,7 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
     """
     # Import here to avoid circular imports
     from .parsers import extract_gaia_ids_from_name_field
+    from astrakairos.config import GAIA_ID_PATTERN
     
     if df_summary.index.name == 'system_pair_id':
         df_summary.reset_index(inplace=True)
@@ -386,6 +388,55 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
             log.error(f"Neither wds_id_original nor wdss_id found. Available columns: {list(df_summary.columns)}")
             raise KeyError("Missing required wdss_id or wds_id_original columns")
     
+    gaia_regex = re.compile(GAIA_ID_PATTERN)
+
+    def _normalize_gaia_value(value):
+        if pd.isna(value) or value is None:
+            return None
+        candidate = str(value).strip()
+        if not candidate:
+            return None
+        match = gaia_regex.search(candidate)
+        if match:
+            return match.group(1)
+        return None
+
+    def _coalesce_gaia_columns(df: pd.DataFrame, base_name: str) -> None:
+        candidate_cols = [col for col in df.columns if col.startswith(base_name)]
+        if not candidate_cols:
+            df[base_name] = None
+            return
+
+        candidate_cols.sort(key=lambda col: (0 if col == base_name else 1, col))
+
+        coalesced = df[candidate_cols].apply(
+            lambda row: next((normalized for normalized in (_normalize_gaia_value(val) for val in row) if normalized), None),
+            axis=1
+        )
+
+        df[base_name] = coalesced
+
+        for col in candidate_cols:
+            if col != base_name:
+                df.drop(columns=col, inplace=True)
+
+    # Normalize all Gaia ID columns to string digits
+    all_gaia_columns = [col for col in df_summary.columns if col.startswith('gaia_id_')]
+    for col in all_gaia_columns:
+        df_summary[col] = df_summary[col].apply(_normalize_gaia_value)
+
+    # Coalesce primary and secondary identifiers
+    _coalesce_gaia_columns(df_summary, 'gaia_id_primary')
+    _coalesce_gaia_columns(df_summary, 'gaia_id_secondary')
+
+    # Require both primary and secondary Gaia IDs for downstream validation logic
+    if {'gaia_id_primary', 'gaia_id_secondary'}.issubset(df_summary.columns):
+        valid_gaia_mask = df_summary['gaia_id_primary'].notna() & df_summary['gaia_id_secondary'].notna()
+        dropped_pairs = (~valid_gaia_mask).sum()
+        if dropped_pairs:
+            log.info(f"Dropping {dropped_pairs} component pairs without complete Gaia IDs")
+        df_summary = df_summary[valid_gaia_mask].copy()
+
     # Extract Gaia source IDs from the 'name' field
     log.info("Extracting Gaia source IDs from 'name' field...")
     df_summary['gaia_source_ids'] = None
@@ -404,14 +455,28 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
                 gaia_id = row[col]
                 if pd.notna(gaia_id) and gaia_id is not None and str(gaia_id).strip():
                     gaia_dict[component] = str(gaia_id).strip()
+
+        # Ensure primary/secondary IDs are represented in the component mapping
+        pair_label = row.get('component_pair', '')
+        if len(pair_label) >= 2:
+            primary_component = pair_label[0]
+            secondary_component = pair_label[1]
+            primary_id = row.get('gaia_id_primary')
+            secondary_id = row.get('gaia_id_secondary')
+            if primary_id and primary_component not in gaia_dict:
+                gaia_dict[primary_component] = str(primary_id)
+            if secondary_id and secondary_component not in gaia_dict:
+                gaia_dict[secondary_component] = str(secondary_id)
         
-        # Method 2: Extract from name field if no existing columns or if they're empty
-        if not gaia_dict and 'name' in df_summary.columns:
+        # Method 2: Extract from name field if no existing columns or if they're incomplete
+        if (not gaia_dict or len(gaia_dict) < 2) and 'name' in df_summary.columns:
             name_field = row.get('name')
             if pd.notna(name_field) and name_field is not None:
                 extracted_ids = extract_gaia_ids_from_name_field(str(name_field))
                 if extracted_ids:
-                    gaia_dict.update(extracted_ids)
+                    for component, gaia_id in extracted_ids.items():
+                        if component not in gaia_dict:
+                            gaia_dict[component] = gaia_id
                     gaia_extraction_count += 1
         
         if gaia_dict:
@@ -433,7 +498,7 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
         'pa_first_error', 'pa_last_error', 'sep_first_error', 'sep_last_error',
         'vmag', 'kmag', 'ra_deg', 'dec_deg', 'spectral_type', 'parallax', 'pm_ra', 'pm_dec', 'name',
         'in_el_badry_catalog', 'R_chance_align', 'binary_type',
-        'gaia_source_ids'  # Add the consolidated Gaia source IDs
+        'gaia_id_primary', 'gaia_id_secondary', 'gaia_source_ids'  # Add consolidated Gaia identifiers
     ]
     
     # Add missing columns with NaN if they don't exist

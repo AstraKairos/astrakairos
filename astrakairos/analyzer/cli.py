@@ -13,8 +13,7 @@ from ..data.validators import HybridValidator
 from ..exceptions import ConfigurationError
 from ..config import (
     CLI_RESULT_KEYS, DEFAULT_CONCURRENT_REQUESTS, DEFAULT_MIN_OBS,
-    DEFAULT_GAIA_P_VALUE, DEFAULT_GAIA_RADIUS_FACTOR,
-    DEFAULT_GAIA_MIN_RADIUS, DEFAULT_GAIA_MAX_RADIUS,
+    DEFAULT_GAIA_P_VALUE,
     DEFAULT_ANALYSIS_MODE, AVAILABLE_ANALYSIS_MODES, DEFAULT_SORT_KEYS,
     AMBIGUOUS_P_VALUE_RATIO, DEFAULT_MC_SAMPLES,
     CLI_TOP_RESULTS_DISPLAY_COUNT, CLI_DISPLAY_LINE_WIDTH,
@@ -41,14 +40,11 @@ def _create_analysis_config(args: argparse.Namespace) -> Dict[str, Any]:
     """
     return {
         'mode': args.mode,
-    'validate_gaia': args.validate_gaia,
-    'validate_el_badry': args.validate_el_badry,
+        'validate_gaia': args.validate_gaia,
+        'validate_el_badry': args.validate_el_badry,
         'calculate_masses': getattr(args, 'calculate_masses', False),
         'parallax_source': getattr(args, 'parallax_source', 'auto'),
-        'gaia_radius_factor': args.gaia_radius_factor,
-        'gaia_min_radius': args.gaia_min_radius,
-        'gaia_max_radius': args.gaia_max_radius,
-        'gaia_p_value': args.gaia_p_value
+        'gaia_p_value': args.gaia_p_value,
     }
 
 
@@ -210,21 +206,6 @@ Examples:
                        type=float,
                        default=DEFAULT_GAIA_P_VALUE,
                        help=f'P-value threshold for physicality test (default: {DEFAULT_GAIA_P_VALUE})')
-    
-    gaia_group.add_argument('--gaia-radius-factor',
-                       type=float,
-                       default=DEFAULT_GAIA_RADIUS_FACTOR,
-                       help=f'Factor to multiply separation for search radius (default: {DEFAULT_GAIA_RADIUS_FACTOR})')
-    
-    gaia_group.add_argument('--gaia-min-radius',
-                       type=float,
-                       default=DEFAULT_GAIA_MIN_RADIUS,
-                       help=f'Minimum search radius in arcseconds (default: {DEFAULT_GAIA_MIN_RADIUS})')
-
-    gaia_group.add_argument('--gaia-max-radius',
-                       type=float,
-                       default=DEFAULT_GAIA_MAX_RADIUS,
-                       help=f'Maximum search radius in arcseconds (default: {DEFAULT_GAIA_MAX_RADIUS})')
 
     # Mass calculation options
     mass_group = parser.add_argument_group('Mass Calculation Options')

@@ -238,12 +238,6 @@ class TestCLIConfiguration:
         for mode in expected_modes:
             assert mode in modes
     
-    def test_gaia_configuration(self):
-        """Test Gaia search configuration."""
-        assert config.DEFAULT_GAIA_RADIUS_FACTOR > 1.0
-        assert config.DEFAULT_GAIA_MIN_RADIUS > 0
-        assert config.DEFAULT_GAIA_MAX_RADIUS > config.DEFAULT_GAIA_MIN_RADIUS
-    
     def test_display_configuration(self):
         """Test display configuration."""
         assert config.TOP_RESULTS_DISPLAY_COUNT > 0
@@ -505,10 +499,7 @@ class TestDataSourceConfiguration:
     def test_gaia_configuration(self):
         """Test Gaia archive configuration."""
         assert isinstance(config.DEFAULT_GAIA_TABLE, str)
-        assert config.DEFAULT_GAIA_SEARCH_RADIUS_ARCSEC > 0
-        assert config.DEFAULT_GAIA_MAG_LIMIT > 0
         assert config.DEFAULT_GAIA_TIMEOUT_SECONDS > 0
-        assert config.DEFAULT_GAIA_MAX_ROWS > 0
         
         # P-value thresholds should be properly ordered
         assert config.DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD < config.DEFAULT_PHYSICAL_P_VALUE_THRESHOLD

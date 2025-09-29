@@ -28,7 +28,7 @@ from ..config import (
     MIN_EPOCH_YEAR, MAX_EPOCH_YEAR, MIN_SEPARATION_ARCSEC, MAX_SEPARATION_ARCSEC,
     MIN_POSITION_ANGLE_DEG, MAX_POSITION_ANGLE_DEG,
     ALLOW_SINGLE_EPOCH_SYSTEMS, ENABLE_VALIDATION_WARNINGS, 
-    VALIDATION_WARNING_SAMPLE_RATE, DEFAULT_GAIA_MIN_RADIUS,
+    VALIDATION_WARNING_SAMPLE_RATE,
     CLI_VALUE_NOT_AVAILABLE, CLI_DEFAULT_PHYSICALITY_VALUES
 )
 
@@ -43,28 +43,6 @@ def _get_current_decimal_year() -> float:
         float: Current decimal year
     """
     return Time.now().decimalyear
-
-
-def _calculate_search_radius(wds_summary: WdsSummary, analysis_config: Dict[str, Any]) -> float:
-    """
-    Calculate Gaia search radius based on system separation.
-    
-    Calculates the appropriate search radius for Gaia catalog queries
-    based on the last separation measurement and configuration parameters.
-    
-    Args:
-        wds_summary: WDS summary data
-        analysis_config: Analysis configuration with radius parameters
-        
-    Returns:
-        float: Search radius in arcseconds
-    """
-    if wds_summary.get('sep_last') is not None:
-        base_radius = wds_summary['sep_last'] * analysis_config['gaia_radius_factor']
-        return max(analysis_config['gaia_min_radius'], 
-                  min(base_radius, analysis_config['gaia_max_radius']))
-    
-    return DEFAULT_GAIA_MIN_RADIUS
 
 
 def _should_log_validation_warning() -> bool:
@@ -328,9 +306,6 @@ async def _perform_gaia_validation(wds_id: str, wds_summary: WdsSummary,
     log.debug(f"Running Gaia validation for {wds_id}")
     
     try:
-        search_radius = _calculate_search_radius(wds_summary, analysis_config)
-        log.debug(f"Calculated search radius: {search_radius:.1f}\" for {wds_id}")
-        
         # Create system_data dict as expected by HybridValidator
         system_data = {
             'wds_id': wds_id,
@@ -338,10 +313,11 @@ async def _perform_gaia_validation(wds_id: str, wds_summary: WdsSummary,
             **wds_summary  # Include all summary data
         }
         
-        log.debug(f"Calling validator.validate_physicality for {wds_id} with coordinates ({wds_summary.get('ra_deg', 'N/A'):.4f}, {wds_summary.get('dec_deg', 'N/A'):.4f})")
-        physicality_assessment = await gaia_validator.validate_physicality(
-            system_data, search_radius_arcsec=search_radius
+        log.debug(
+            "Calling validator.validate_physicality for %s with stored Gaia identifiers",
+            wds_id
         )
+        physicality_assessment = await gaia_validator.validate_physicality(system_data)
         log.debug(f"Physicality assessment result for {wds_id}: {physicality_assessment}")
         
         if physicality_assessment:

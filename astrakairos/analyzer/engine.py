@@ -138,9 +138,6 @@ class AnalyzerRunner:
                 - validate_el_badry: Whether to perform El-Badry validation (local cache only)
                 - calculate_masses: Whether to calculate masses (orbital mode)
                 - parallax_source: Parallax source preference
-                - gaia_radius_factor: Factor for Gaia search radius
-                - gaia_min_radius: Minimum Gaia search radius
-                - gaia_max_radius: Maximum Gaia search radius
             semaphore: Concurrency control semaphore
             
         Returns:
