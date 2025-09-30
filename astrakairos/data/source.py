@@ -133,6 +133,11 @@ class WdsSummary(TypedDict, total=True):
     
     # Multi-pair architecture fields - optional  
     system_pair_id: Optional[str]
+    component_pair: Optional[str]
+    pair_primary_component: Optional[str]
+    pair_secondary_component: Optional[str]
+    gaia_id_primary: Optional[str]
+    gaia_id_secondary: Optional[str]
 
 class OrbitalElements(TypedDict, total=True):
     """Data structure for complete Keplerian orbital elements with uncertainties.

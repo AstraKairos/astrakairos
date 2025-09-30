@@ -226,14 +226,113 @@ class GaiaValidator(PhysicalityValidator):
 
         gaia_ids: Dict[str, str] = {}
 
-        pair_source = (wds_summary.get('component_pair') or
-                       wds_summary.get('components') or '')
-        ordered_letters: list[str] = []
-        for char in str(pair_source):
-            if char.isalpha():
-                upper = char.upper()
-                if upper not in ordered_letters:
-                    ordered_letters.append(upper)
+        def _normalize_component_letter(raw_value: Any) -> Optional[str]:
+            if raw_value is None:
+                return None
+            text = str(raw_value).strip()
+            if not text:
+                return None
+            upper_text = text.upper()
+            if upper_text in {'PRIMARY', 'SECONDARY'}:
+                return None
+            for char in text:
+                if char.isalpha():
+                    return char.upper()
+            return None
+
+        def _collect_letters_from_string(raw_value: Any) -> list[str]:
+            if raw_value is None:
+                return []
+            text = str(raw_value).strip()
+            if not text:
+                return []
+
+            letters: list[str] = []
+            cleaned = re.sub(r"[^A-Za-z]", " ", text)
+            tokens = [token for token in cleaned.split() if token]
+            for token in tokens:
+                normalized = ''.join(ch for ch in token.upper() if ch.isalpha())
+                if not normalized:
+                    continue
+                if normalized in {'PRIMARY', 'SECONDARY'}:
+                    continue
+                if len(normalized) == 1:
+                    if normalized not in letters:
+                        letters.append(normalized)
+                else:
+                    for char in normalized:
+                        if char.isalpha():
+                            upper = char.upper()
+                            if upper not in letters:
+                                letters.append(upper)
+                        if len(letters) >= 2:
+                            break
+                if len(letters) >= 2:
+                    break
+
+            if not letters:
+                for char in text:
+                    if char.isalpha():
+                        upper = char.upper()
+                        if upper not in letters:
+                            letters.append(upper)
+                        if len(letters) >= 2:
+                            break
+
+            return letters
+
+        primary_letter = None
+        secondary_letter = None
+
+        for field in (
+            'pair_primary_component',
+            'primary_component',
+            'primary_component_letter',
+            'component_letter_primary',
+            'primary_component_name',
+            'component_primary'
+        ):
+            candidate = _normalize_component_letter(wds_summary.get(field))
+            if candidate:
+                primary_letter = candidate
+                break
+
+        for field in (
+            'pair_secondary_component',
+            'secondary_component',
+            'secondary_component_letter',
+            'component_letter_secondary',
+            'secondary_component_name',
+            'component_secondary'
+        ):
+            candidate = _normalize_component_letter(wds_summary.get(field))
+            if candidate:
+                secondary_letter = candidate
+                break
+
+        pair_letters: list[str] = []
+        if primary_letter:
+            pair_letters.append(primary_letter)
+        if secondary_letter and secondary_letter not in pair_letters:
+            pair_letters.append(secondary_letter)
+
+        for field in ('component_pair', 'components', 'pair', 'pair_label', 'pair_name'):
+            if len(pair_letters) >= 2:
+                break
+            for letter in _collect_letters_from_string(wds_summary.get(field)):
+                if letter not in pair_letters:
+                    pair_letters.append(letter)
+                if len(pair_letters) >= 2:
+                    break
+
+        if not pair_letters:
+            ordered_letters: list[str] = ['A', 'B']
+            primary_letter = ordered_letters[0]
+            secondary_letter = ordered_letters[1]
+        else:
+            ordered_letters = pair_letters.copy()
+            primary_letter = primary_letter or ordered_letters[0]
+            secondary_letter = secondary_letter or (ordered_letters[1] if len(ordered_letters) > 1 else None)
 
         # First, scan all textual fields for the supported WDS record formats
         for value in wds_summary.values():
@@ -269,9 +368,10 @@ class GaiaValidator(PhysicalityValidator):
                 if normalized_hint in {'PRIMARY', 'SECONDARY'}:
                     target_letter = primary_letter if normalized_hint == 'PRIMARY' else secondary_letter
                     if target_letter:
-                        gaia_ids.setdefault(target_letter.upper(), identifier)
-                        if target_letter not in ordered_letters:
-                            ordered_letters.append(target_letter.upper())
+                        upper_target = target_letter.upper()
+                        gaia_ids.setdefault(upper_target, identifier)
+                        if upper_target not in ordered_letters:
+                            ordered_letters.append(upper_target)
                     return
 
             for letter in ordered_letters:
@@ -336,11 +436,6 @@ class GaiaValidator(PhysicalityValidator):
                 continue
             _record_structured_id(normalized_key, value)
 
-        if not ordered_letters and gaia_ids:
-            ordered_letters = list(gaia_ids.keys())
-            primary_letter = ordered_letters[0]
-            secondary_letter = ordered_letters[1] if len(ordered_letters) > 1 else secondary_letter
-
         def _parse_simple_id(field_value: Any) -> Optional[str]:
             if field_value is None:
                 return None
@@ -355,8 +450,18 @@ class GaiaValidator(PhysicalityValidator):
         if secondary_simple and secondary_letter:
             gaia_ids.setdefault(secondary_letter, secondary_simple)
 
+        if ordered_letters:
+            filtered_ids = {}
+            for letter in ordered_letters:
+                value = gaia_ids.get(letter)
+                if value:
+                    filtered_ids[letter] = value
+            if len(filtered_ids) >= 2:
+                return filtered_ids
+
         if len(gaia_ids) >= 2:
-            return gaia_ids
+            filtered_items = list(gaia_ids.items())[:2]
+            return {key: value for key, value in filtered_items}
         return None
     
     async def _query_gaia_by_source_ids_async(self, gaia_source_ids: Dict[str, str]):

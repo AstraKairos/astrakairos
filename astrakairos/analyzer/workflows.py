@@ -307,11 +307,26 @@ async def _perform_gaia_validation(wds_id: str, wds_summary: WdsSummary,
     
     try:
         # Create system_data dict as expected by HybridValidator
-        system_data = {
-            'wds_id': wds_id,
-            'component_pair': 'AB',  # Default component pair
-            **wds_summary  # Include all summary data
-        }
+        system_data = dict(wds_summary)
+        system_data['wds_id'] = wds_id
+
+        component_pair = system_data.get('component_pair') or system_data.get('components')
+        if component_pair:
+            system_data['component_pair'] = component_pair
+        else:
+            system_data.setdefault('component_pair', 'AB')
+
+        # Ensure component letters are available for Gaia validator resolution
+        if component_pair:
+            letters = [char.upper() for char in component_pair if char.isalpha()]
+        else:
+            letters = []
+
+        if letters and not system_data.get('pair_primary_component'):
+            system_data['pair_primary_component'] = letters[0]
+
+        if len(letters) > 1 and not system_data.get('pair_secondary_component'):
+            system_data['pair_secondary_component'] = letters[1]
         
         log.debug(
             "Calling validator.validate_physicality for %s with stored Gaia identifiers",

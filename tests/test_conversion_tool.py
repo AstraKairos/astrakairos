@@ -234,8 +234,8 @@ class TestIntegrationScenarios:
 class TestSummaryGeneration:
     """Tests focused on the summary table generation."""
 
-    def test_generate_summary_requires_complete_gaia_ids(self):
-        """Only component pairs with both Gaia IDs should be kept."""
+    def test_generate_summary_retains_incomplete_gaia_pairs(self):
+        """Component pairs without full Gaia IDs should still appear with metadata."""
 
         # Components with valid Gaia IDs for pair AB
         df_components = pd.DataFrame([
@@ -349,17 +349,32 @@ class TestSummaryGeneration:
 
         df_summary = generate_summary_table(df_components, df_measurements, df_correspondence)
 
-        # Only the system with both Gaia IDs should survive
-        assert len(df_summary) == 1
-        row = df_summary.iloc[0]
+        # Both systems should be preserved even if Gaia IDs are incomplete
+        assert len(df_summary) == 2
 
-        assert row['component_pair'] == 'AB'
-        assert row['gaia_id_primary'] == '1234567890123456789'
-        assert row['gaia_id_secondary'] == '9876543210987654321'
+        df_summary = df_summary.sort_values('wdss_id').reset_index(drop=True)
 
-        gaia_map = json.loads(row['gaia_source_ids'])
-        assert gaia_map['A'] == row['gaia_id_primary']
-        assert gaia_map['B'] == row['gaia_id_secondary']
+        complete_row = df_summary.iloc[0]
+        incomplete_row = df_summary.iloc[1]
+
+        assert complete_row['wdss_id'] == '00001+0001'
+        assert complete_row['component_pair'] == 'AB'
+        assert complete_row['pair_primary_component'] == 'A'
+        assert complete_row['pair_secondary_component'] == 'B'
+        assert complete_row['gaia_id_primary'] == '1234567890123456789'
+        assert complete_row['gaia_id_secondary'] == '9876543210987654321'
+
+        gaia_map = json.loads(complete_row['gaia_source_ids'])
+        assert gaia_map['A'] == complete_row['gaia_id_primary']
+        assert gaia_map['B'] == complete_row['gaia_id_secondary']
+
+        assert incomplete_row['wdss_id'] == '00002+0002'
+        assert incomplete_row['component_pair'] == 'AB'
+        assert incomplete_row['pair_primary_component'] == 'A'
+        assert incomplete_row['pair_secondary_component'] == 'B'
+        assert pd.isna(incomplete_row['gaia_id_primary'])
+        assert pd.isna(incomplete_row['gaia_id_secondary'])
+        assert incomplete_row['gaia_source_ids'] is None or pd.isna(incomplete_row['gaia_source_ids'])
 
 class TestParsingWithRealData:
     """Test parsing functions with realistic data structures."""

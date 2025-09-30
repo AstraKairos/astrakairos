@@ -10,9 +10,42 @@ import logging
 import re
 import pandas as pd
 import numpy as np
-from typing import Optional
+from typing import Optional, Dict
 
 log = logging.getLogger(__name__)
+
+
+def _split_component_pair(pair_label: Optional[str]) -> list[str]:
+    """Normalize a component pair label (e.g. "AB", "A-B", "A B") into letters."""
+    if pair_label is None:
+        return []
+
+    raw = str(pair_label).strip()
+    if not raw:
+        return []
+
+    # Replace separators with spaces to isolate tokens
+    cleaned = re.sub(r"[^A-Za-z]", " ", raw)
+    tokens = [token for token in cleaned.split() if token]
+    if len(tokens) >= 2:
+        return [tokens[0].upper(), tokens[1].upper()]
+
+    # Fallback: treat consecutive characters as individual components
+    if len(raw) >= 2:
+        letters = []
+        for char in raw:
+            if char.isalpha():
+                upper = char.upper()
+                if upper not in letters:
+                    letters.append(upper)
+        if letters:
+            return letters[:2]
+        return []
+
+    if raw and raw[0].isalpha():
+        return [raw[0].upper()]
+
+    return []
 
 
 def generate_summary_table(df_components: pd.DataFrame, df_measurements: pd.DataFrame, 
@@ -166,16 +199,14 @@ def _pivot_components(df_components: pd.DataFrame, df_measurements: pd.DataFrame
         
         for idx, row in df_pair_components.iterrows():
             pair = row.get('component_pair', '')
-            if len(pair) >= 2:
-                primary_component = pair[0]  # e.g., 'A' from 'AB'
-                secondary_component = pair[1]  # e.g., 'B' from 'AB'
-                
-                # Map component letters to Gaia IDs
-                gaia_id_primary = row.get(f'gaia_id_{primary_component}')
-                gaia_id_secondary = row.get(f'gaia_id_{secondary_component}')
-                
-                df_pair_components.loc[idx, 'gaia_id_primary'] = gaia_id_primary
-                df_pair_components.loc[idx, 'gaia_id_secondary'] = gaia_id_secondary
+            pair_components = _split_component_pair(pair)
+            primary_component = pair_components[0] if pair_components else None
+            secondary_component = pair_components[1] if len(pair_components) > 1 else None
+
+            if primary_component:
+                df_pair_components.loc[idx, 'gaia_id_primary'] = row.get(f'gaia_id_{primary_component}')
+            if secondary_component:
+                df_pair_components.loc[idx, 'gaia_id_secondary'] = row.get(f'gaia_id_{secondary_component}')
     
     # Set index and return
     return df_pair_components.set_index('system_pair_id')
@@ -425,17 +456,9 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
     for col in all_gaia_columns:
         df_summary[col] = df_summary[col].apply(_normalize_gaia_value)
 
-    # Coalesce primary and secondary identifiers
+    # Coalesce primary and secondary identifiers without dropping incomplete entries
     _coalesce_gaia_columns(df_summary, 'gaia_id_primary')
     _coalesce_gaia_columns(df_summary, 'gaia_id_secondary')
-
-    # Require both primary and secondary Gaia IDs for downstream validation logic
-    if {'gaia_id_primary', 'gaia_id_secondary'}.issubset(df_summary.columns):
-        valid_gaia_mask = df_summary['gaia_id_primary'].notna() & df_summary['gaia_id_secondary'].notna()
-        dropped_pairs = (~valid_gaia_mask).sum()
-        if dropped_pairs:
-            log.info(f"Dropping {dropped_pairs} component pairs without complete Gaia IDs")
-        df_summary = df_summary[valid_gaia_mask].copy()
 
     # Extract Gaia source IDs from the 'name' field
     log.info("Extracting Gaia source IDs from 'name' field...")
@@ -445,8 +468,20 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
     gaia_id_columns = [col for col in df_summary.columns if col.startswith('gaia_id_') and col not in ['gaia_id_primary', 'gaia_id_secondary']]
     
     gaia_extraction_count = 0
+    if 'pair_primary_component' not in df_summary.columns:
+        df_summary['pair_primary_component'] = None
+    if 'pair_secondary_component' not in df_summary.columns:
+        df_summary['pair_secondary_component'] = None
+
     for idx, row in df_summary.iterrows():
-        gaia_dict = {}
+        gaia_dict: Dict[str, str] = {}
+        pair_label = row.get('component_pair', '')
+        pair_components = _split_component_pair(pair_label)
+        primary_component = pair_components[0] if pair_components else None
+        secondary_component = pair_components[1] if len(pair_components) > 1 else None
+
+        df_summary.at[idx, 'pair_primary_component'] = primary_component
+        df_summary.at[idx, 'pair_secondary_component'] = secondary_component
         
         # Method 1: Use existing gaia_id_ columns if available
         if gaia_id_columns:
@@ -454,19 +489,15 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
                 component = col.replace('gaia_id_', '')
                 gaia_id = row[col]
                 if pd.notna(gaia_id) and gaia_id is not None and str(gaia_id).strip():
-                    gaia_dict[component] = str(gaia_id).strip()
+                    gaia_dict[component.upper()] = str(gaia_id).strip()
 
         # Ensure primary/secondary IDs are represented in the component mapping
-        pair_label = row.get('component_pair', '')
-        if len(pair_label) >= 2:
-            primary_component = pair_label[0]
-            secondary_component = pair_label[1]
-            primary_id = row.get('gaia_id_primary')
-            secondary_id = row.get('gaia_id_secondary')
-            if primary_id and primary_component not in gaia_dict:
-                gaia_dict[primary_component] = str(primary_id)
-            if secondary_id and secondary_component not in gaia_dict:
-                gaia_dict[secondary_component] = str(secondary_id)
+        primary_id = row.get('gaia_id_primary')
+        secondary_id = row.get('gaia_id_secondary')
+        if primary_id and primary_component and primary_component not in gaia_dict:
+            gaia_dict[primary_component.upper()] = str(primary_id)
+        if secondary_id and secondary_component and secondary_component not in gaia_dict:
+            gaia_dict[secondary_component.upper()] = str(secondary_id)
         
         # Method 2: Extract from name field if no existing columns or if they're incomplete
         if (not gaia_dict or len(gaia_dict) < 2) and 'name' in df_summary.columns:
@@ -475,11 +506,22 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
                 extracted_ids = extract_gaia_ids_from_name_field(str(name_field))
                 if extracted_ids:
                     for component, gaia_id in extracted_ids.items():
-                        if component not in gaia_dict:
-                            gaia_dict[component] = gaia_id
+                        component_key = component.upper()
+                        if component_key not in gaia_dict:
+                            gaia_dict[component_key] = gaia_id
                     gaia_extraction_count += 1
         
         if gaia_dict:
+            if len(pair_components) >= 2:
+                filtered_dict = {}
+                for component in pair_components[:2]:
+                    gaia_value = gaia_dict.get(component)
+                    if gaia_value:
+                        filtered_dict[component] = str(gaia_value)
+                # Only fall back to full dictionary if filtering removes all entries
+                if filtered_dict:
+                    gaia_dict = filtered_dict
+
             # Convert to JSON string for storage in SQLite
             df_summary.loc[idx, 'gaia_source_ids'] = json.dumps(gaia_dict)
     
@@ -492,7 +534,8 @@ def _finalize_and_rename_columns(df_summary: pd.DataFrame) -> pd.DataFrame:
     
     # Select final columns including the CRITICAL component_pair field
     final_cols = [
-        'system_pair_id', 'wds_id', 'wdss_id', 'component_pair',  # ← KEY ADDITIONS
+        'system_pair_id', 'wds_id', 'wdss_id', 'component_pair',
+        'pair_primary_component', 'pair_secondary_component',
         'discoverer_designation', 'date_first', 'date_last', 'n_obs',
         'pa_first', 'pa_last', 'sep_first', 'sep_last', 
         'pa_first_error', 'pa_last_error', 'sep_first_error', 'sep_last_error',

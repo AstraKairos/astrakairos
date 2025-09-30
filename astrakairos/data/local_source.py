@@ -187,40 +187,74 @@ class LocalDataSource(DataSource):
         normalized_id = wds_id.strip()
         
         try:
-            # Check if we have component_pair column (new multi-pair architecture)
+            # Check available columns to tailor query to database schema
             cursor = self.conn.execute(f"PRAGMA table_info({self.summary_table})")
             columns = {row[1] for row in cursor.fetchall()}
             has_component_pair = 'component_pair' in columns
-            
+
+            component_pair_alias = (
+                "component_pair as components" if has_component_pair else "'' as components"
+            )
+            component_pair_field = (
+                'component_pair' if has_component_pair else 'NULL as component_pair'
+            )
+            system_pair_field = (
+                'system_pair_id' if 'system_pair_id' in columns else 'NULL as system_pair_id'
+            )
+            primary_component_field = (
+                'pair_primary_component' if 'pair_primary_component' in columns else 'NULL as pair_primary_component'
+            )
+            secondary_component_field = (
+                'pair_secondary_component' if 'pair_secondary_component' in columns else 'NULL as pair_secondary_component'
+            )
+            gaia_primary_field = (
+                'gaia_id_primary' if 'gaia_id_primary' in columns else 'NULL as gaia_id_primary'
+            )
+            gaia_secondary_field = (
+                'gaia_id_secondary' if 'gaia_id_secondary' in columns else 'NULL as gaia_id_secondary'
+            )
+
             # Determine which columns to select (gaia_source_ids may not exist)
             gaia_column = "gaia_source_ids" if self.has_gaia_source_ids else "NULL as gaia_source_ids"
-            
-            if has_component_pair:
-                # New multi-pair architecture: get all component pairs
-                cursor = self.conn.execute(
-                    f"""SELECT wds_id, discoverer_designation as discoverer, component_pair as components, 
-                              date_first, date_last, n_obs as n_observations, 
-                              pa_first, pa_last, sep_first, sep_last, 
-                              vmag as mag_pri, kmag as mag_sec, spectral_type as spec_type, ra_deg, dec_deg,
-                              wdss_id, discoverer_designation, system_pair_id,
-                              pa_first_error, pa_last_error,
-                              sep_first_error, sep_last_error, {gaia_column}
-                       FROM {self.summary_table} WHERE wds_id = ? ORDER BY component_pair""",
-                    (normalized_id,)
-                )
-            else:
-                # Old single-pair architecture: get single entry
-                cursor = self.conn.execute(
-                    f"""SELECT wds_id, discoverer_designation as discoverer, '' as components, 
-                              date_first, date_last, n_obs as n_observations, 
-                              pa_first, pa_last, sep_first, sep_last, 
-                              vmag as mag_pri, kmag as mag_sec, spectral_type as spec_type, ra_deg, dec_deg,
-                              wdss_id, discoverer_designation,
-                              pa_first_error, pa_last_error,
-                              sep_first_error, sep_last_error, {gaia_column}
-                       FROM {self.summary_table} WHERE wds_id = ?""",
-                    (normalized_id,)
-                )
+
+            select_columns = [
+                "wds_id",
+                "discoverer_designation as discoverer",
+                component_pair_alias,
+                "date_first",
+                "date_last",
+                "n_obs as n_observations",
+                "pa_first",
+                "pa_last",
+                "sep_first",
+                "sep_last",
+                "vmag as mag_pri",
+                "kmag as mag_sec",
+                "spectral_type as spec_type",
+                "ra_deg",
+                "dec_deg",
+                "wdss_id",
+                "discoverer_designation",
+                system_pair_field,
+                component_pair_field,
+                primary_component_field,
+                secondary_component_field,
+                gaia_primary_field,
+                gaia_secondary_field,
+                "pa_first_error",
+                "pa_last_error",
+                "sep_first_error",
+                "sep_last_error",
+                gaia_column,
+            ]
+
+            select_clause = ", ".join(select_columns)
+            order_clause = " ORDER BY component_pair" if has_component_pair else ""
+
+            cursor = self.conn.execute(
+                f"SELECT {select_clause} FROM {self.summary_table} WHERE wds_id = ?{order_clause}",
+                (normalized_id,)
+            )
             
             rows = cursor.fetchall()
             if not rows:
@@ -275,18 +309,69 @@ class LocalDataSource(DataSource):
         normalized_id = wds_id.strip()
         
         try:
-            # Determine which columns to select (gaia_source_ids may not exist)
+            cursor = self.conn.execute(f"PRAGMA table_info({self.summary_table})")
+            columns = {row[1] for row in cursor.fetchall()}
+            has_component_pair = 'component_pair' in columns
+
+            component_pair_alias = (
+                "component_pair as components" if has_component_pair else "'' as components"
+            )
+            component_pair_field = (
+                'component_pair' if has_component_pair else 'NULL as component_pair'
+            )
+            system_pair_field = (
+                'system_pair_id' if 'system_pair_id' in columns else 'NULL as system_pair_id'
+            )
+            primary_component_field = (
+                'pair_primary_component' if 'pair_primary_component' in columns else 'NULL as pair_primary_component'
+            )
+            secondary_component_field = (
+                'pair_secondary_component' if 'pair_secondary_component' in columns else 'NULL as pair_secondary_component'
+            )
+            gaia_primary_field = (
+                'gaia_id_primary' if 'gaia_id_primary' in columns else 'NULL as gaia_id_primary'
+            )
+            gaia_secondary_field = (
+                'gaia_id_secondary' if 'gaia_id_secondary' in columns else 'NULL as gaia_id_secondary'
+            )
+
             gaia_column = "gaia_source_ids" if self.has_gaia_source_ids else "NULL as gaia_source_ids"
-            
+
+            select_columns = [
+                "wds_id",
+                "discoverer_designation as discoverer",
+                component_pair_alias,
+                "date_first",
+                "date_last",
+                "n_obs as n_observations",
+                "pa_first",
+                "pa_last",
+                "sep_first",
+                "sep_last",
+                "vmag as mag_pri",
+                "kmag as mag_sec",
+                "spectral_type as spec_type",
+                "ra_deg",
+                "dec_deg",
+                "wdss_id",
+                "discoverer_designation",
+                system_pair_field,
+                component_pair_field,
+                primary_component_field,
+                secondary_component_field,
+                gaia_primary_field,
+                gaia_secondary_field,
+                "pa_first_error",
+                "pa_last_error",
+                "sep_first_error",
+                "sep_last_error",
+                gaia_column,
+            ]
+
+            select_clause = ", ".join(select_columns)
+
             cursor = self.conn.execute(
-                f"""SELECT wds_id, discoverer_designation as discoverer, '' as components, 
-                          date_first, date_last, n_obs as n_observations, 
-                          pa_first, pa_last, sep_first, sep_last, 
-                          vmag as mag_pri, kmag as mag_sec, spectral_type as spec_type, ra_deg, dec_deg,
-                          wdss_id, discoverer_designation,
-                          pa_first_error, pa_last_error,
-                          sep_first_error, sep_last_error, {gaia_column}
-                   FROM {self.summary_table} WHERE wds_id = ?""",
+                f"SELECT {select_clause} FROM {self.summary_table} WHERE wds_id = ?",
                 (normalized_id,)
             )
             
