@@ -105,6 +105,10 @@ class GaiaValidator(PhysicalityValidator):
             enable_ruwe_correction=True
         )
         
+        # Simple cache to avoid duplicate Gaia queries within the same session
+        # Key: frozenset of Gaia source IDs, Value: query results
+        self._gaia_query_cache = {}
+        
         # Validate thresholds
         if self.physical_threshold <= self.ambiguous_threshold:
             raise ValueError(
@@ -122,6 +126,17 @@ class GaiaValidator(PhysicalityValidator):
         
         log.info(f"GaiaValidator initialized: table={gaia_table}, "
                 f"thresholds=({self.physical_threshold:.3f}, {self.ambiguous_threshold:.3f})")
+    
+    def clear_cache(self):
+        """Clear the internal Gaia query cache.
+        
+        Useful when processing many systems to prevent memory buildup,
+        or when you want to force fresh queries from Gaia.
+        """
+        cache_size = len(self._gaia_query_cache)
+        self._gaia_query_cache.clear()
+        if cache_size > 0:
+            log.debug(f"Cleared Gaia query cache ({cache_size} entries)")
     
     
     async def validate_physicality(self,
@@ -465,7 +480,12 @@ class GaiaValidator(PhysicalityValidator):
         return None
     
     async def _query_gaia_by_source_ids_async(self, gaia_source_ids: Dict[str, str]):
-        """Query Gaia directly by source IDs - much more reliable than coordinate search."""
+        """Query Gaia directly by source IDs - much more reliable than coordinate search.
+        
+        Uses internal caching to avoid duplicate queries for the same source IDs
+        within a single validation session (e.g., when both validate_physicality 
+        and get_parallax_data are called for the same system).
+        """
         from astroquery.gaia import Gaia
         
         source_ids: list[str] = []
@@ -476,6 +496,15 @@ class GaiaValidator(PhysicalityValidator):
                     f"Gaia source ID for component {component} is not numeric: {candidate}"
                 )
             source_ids.append(candidate)
+        
+        # Create cache key from sorted source IDs
+        cache_key = frozenset(source_ids)
+        
+        # Check cache first
+        if cache_key in self._gaia_query_cache:
+            log.debug(f"Using cached Gaia data for source IDs: {source_ids}")
+            return self._gaia_query_cache[cache_key]
+        
         source_ids_str = ','.join(source_ids)
         
         query = f"""
@@ -499,6 +528,9 @@ class GaiaValidator(PhysicalityValidator):
             raise InsufficientAstrometricDataError(f"Only found {len(results)} of {len(source_ids)} requested Gaia sources")
         
         log.info(f"Successfully retrieved {len(results)} Gaia sources by ID")
+        
+        # Cache the results
+        self._gaia_query_cache[cache_key] = results
         return results
     
     def _create_assessment(self, label: PhysicalityLabel, search_radius_arcsec: Optional[float] = None, 
