@@ -79,7 +79,8 @@ def _create_dependencies(args: argparse.Namespace) -> Tuple[DataSource, Optional
         from ..data.gaia_source import GaiaValidator
         online_validator = GaiaValidator(
             physical_p_value_threshold=args.gaia_p_value,
-            ambiguous_p_value_threshold=args.gaia_p_value / AMBIGUOUS_P_VALUE_RATIO
+            ambiguous_p_value_threshold=args.gaia_p_value / AMBIGUOUS_P_VALUE_RATIO,
+            local_cache_db=args.database_path  # Use pre-fetched Gaia data if available
         )
         
         # The main validator is the hybrid one
@@ -105,10 +106,26 @@ def _create_dependencies(args: argparse.Namespace) -> Tuple[DataSource, Optional
         from ..data.gaia_source import GaiaValidator
         gaia_validator = GaiaValidator(
             physical_p_value_threshold=args.gaia_p_value,
-            ambiguous_p_value_threshold=args.gaia_p_value / AMBIGUOUS_P_VALUE_RATIO
+            ambiguous_p_value_threshold=args.gaia_p_value / AMBIGUOUS_P_VALUE_RATIO,
+            local_cache_db=args.database_path  # Use pre-fetched Gaia data if available
         )
         
-        log.info("All systems will be validated using direct Gaia queries with Expert Hierarchical Validator")
+        # Check if local Gaia cache is available
+        try:
+            import sqlite3
+            conn = sqlite3.connect(args.database_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM gaia_cache")
+            cache_count = cursor.fetchone()[0]
+            conn.close()
+            if cache_count > 0:
+                log.info(f"Using local Gaia cache: {cache_count:,} pre-fetched sources (ultra-fast mode)")
+            else:
+                log.info("Local Gaia cache is empty - will query Gaia online")
+        except:
+            log.info("No local Gaia cache found - will query Gaia online (slower)")
+        
+        log.info("All systems will be validated using Expert Hierarchical Validator")
     
     elif args.validate_el_badry:
         # El-Badry-only mode: Local cache only

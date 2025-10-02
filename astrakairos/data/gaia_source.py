@@ -77,7 +77,8 @@ class GaiaValidator(PhysicalityValidator):
                  gaia_table: str = DEFAULT_GAIA_TABLE,
                  physical_p_value_threshold: float = DEFAULT_PHYSICAL_P_VALUE_THRESHOLD,
                  ambiguous_p_value_threshold: float = DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD,
-                 gaia_client=None):
+                 gaia_client=None,
+                 local_cache_db: str = None):
         """
         Initializes the Gaia validator with configuration parameters.
 
@@ -88,12 +89,15 @@ class GaiaValidator(PhysicalityValidator):
             ambiguous_p_value_threshold: The p-value above which a pair is 'Ambiguous'.
                                          Below this: 'Likely Optical'. Default: 0.005 (0.5%)
             gaia_client: Optional Gaia client for dependency injection (testing)
+            local_cache_db: Optional path to SQLite database with gaia_cache table
+                          (for massive batch processing - avoids all Gaia queries)
 
         Raises:
             ValueError: If thresholds are not in valid order
         """
         self.gaia_table = gaia_table
         self.gaia = gaia_client or Gaia
+        self.local_cache_db = local_cache_db
 
         self.physical_threshold = physical_p_value_threshold
         self.ambiguous_threshold = ambiguous_p_value_threshold
@@ -138,6 +142,77 @@ class GaiaValidator(PhysicalityValidator):
         if cache_size > 0:
             log.debug(f"Cleared Gaia query cache ({cache_size} entries)")
     
+    def _query_local_cache(self, source_ids: list[str]):
+        """Query local SQLite cache for Gaia data (pre-fetched data).
+        
+        Returns None if cache doesn't exist or IDs not found.
+        Returns astropy Table compatible with Gaia query results if found.
+        """
+        if not self.local_cache_db:
+            return None
+        
+        import sqlite3
+        from astropy.table import Table
+        import numpy as np
+        
+        try:
+            conn = sqlite3.connect(self.local_cache_db)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # Query cache table
+            placeholders = ','.join('?' * len(source_ids))
+            cursor.execute(f"""
+                SELECT source_id, ra, dec, parallax, parallax_error,
+                       pmra, pmra_error, pmdec, pmdec_error,
+                       ra_error, dec_error,
+                       ra_dec_corr, ra_parallax_corr, ra_pmra_corr, ra_pmdec_corr,
+                       dec_parallax_corr, dec_pmra_corr, dec_pmdec_corr,
+                       parallax_pmra_corr, parallax_pmdec_corr, pmra_pmdec_corr,
+                       phot_g_mean_mag, bp_rp, ruwe
+                FROM gaia_cache
+                WHERE source_id IN ({placeholders})
+            """, source_ids)
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            if not rows or len(rows) < 2:
+                return None
+            
+            # Convert to astropy Table to match Gaia query format
+            data = {
+                'source_id': np.array([r['source_id'] for r in rows], dtype=np.int64),
+                'ra': np.array([r['ra'] for r in rows], dtype=np.float64),
+                'dec': np.array([r['dec'] for r in rows], dtype=np.float64),
+                'parallax': np.array([r['parallax'] if r['parallax'] is not None else np.nan for r in rows], dtype=np.float64),
+                'parallax_error': np.array([r['parallax_error'] if r['parallax_error'] is not None else np.nan for r in rows], dtype=np.float64),
+                'pmra': np.array([r['pmra'] if r['pmra'] is not None else np.nan for r in rows], dtype=np.float64),
+                'pmra_error': np.array([r['pmra_error'] if r['pmra_error'] is not None else np.nan for r in rows], dtype=np.float64),
+                'pmdec': np.array([r['pmdec'] if r['pmdec'] is not None else np.nan for r in rows], dtype=np.float64),
+                'pmdec_error': np.array([r['pmdec_error'] if r['pmdec_error'] is not None else np.nan for r in rows], dtype=np.float64),
+                'ra_error': np.array([r['ra_error'] if r['ra_error'] is not None else np.nan for r in rows], dtype=np.float64),
+                'dec_error': np.array([r['dec_error'] if r['dec_error'] is not None else np.nan for r in rows], dtype=np.float64),
+                'ra_dec_corr': np.array([r['ra_dec_corr'] if r['ra_dec_corr'] is not None else np.nan for r in rows], dtype=np.float64),
+                'ra_parallax_corr': np.array([r['ra_parallax_corr'] if r['ra_parallax_corr'] is not None else np.nan for r in rows], dtype=np.float64),
+                'ra_pmra_corr': np.array([r['ra_pmra_corr'] if r['ra_pmra_corr'] is not None else np.nan for r in rows], dtype=np.float64),
+                'ra_pmdec_corr': np.array([r['ra_pmdec_corr'] if r['ra_pmdec_corr'] is not None else np.nan for r in rows], dtype=np.float64),
+                'dec_parallax_corr': np.array([r['dec_parallax_corr'] if r['dec_parallax_corr'] is not None else np.nan for r in rows], dtype=np.float64),
+                'dec_pmra_corr': np.array([r['dec_pmra_corr'] if r['dec_pmra_corr'] is not None else np.nan for r in rows], dtype=np.float64),
+                'dec_pmdec_corr': np.array([r['dec_pmdec_corr'] if r['dec_pmdec_corr'] is not None else np.nan for r in rows], dtype=np.float64),
+                'parallax_pmra_corr': np.array([r['parallax_pmra_corr'] if r['parallax_pmra_corr'] is not None else np.nan for r in rows], dtype=np.float64),
+                'parallax_pmdec_corr': np.array([r['parallax_pmdec_corr'] if r['parallax_pmdec_corr'] is not None else np.nan for r in rows], dtype=np.float64),
+                'pmra_pmdec_corr': np.array([r['pmra_pmdec_corr'] if r['pmra_pmdec_corr'] is not None else np.nan for r in rows], dtype=np.float64),
+                'phot_g_mean_mag': np.array([r['phot_g_mean_mag'] if r['phot_g_mean_mag'] is not None else np.nan for r in rows], dtype=np.float64),
+                'bp_rp': np.array([r['bp_rp'] if r['bp_rp'] is not None else np.nan for r in rows], dtype=np.float64),
+                'ruwe': np.array([r['ruwe'] if r['ruwe'] is not None else np.nan for r in rows], dtype=np.float64),
+            }
+            
+            return Table(data)
+            
+        except Exception as e:
+            log.debug(f"Local cache query failed: {e}")
+            return None
     
     async def validate_physicality(self,
                                    wds_summary: Dict[str, Any]) -> PhysicalityAssessment:
@@ -500,10 +575,22 @@ class GaiaValidator(PhysicalityValidator):
         # Create cache key from sorted source IDs
         cache_key = frozenset(source_ids)
         
-        # Check cache first
+        # Check in-memory cache first
         if cache_key in self._gaia_query_cache:
             log.debug(f"Using cached Gaia data for source IDs: {source_ids}")
             return self._gaia_query_cache[cache_key]
+        
+        # Check local database cache (for pre-fetched data)
+        if self.local_cache_db:
+            try:
+                results = self._query_local_cache(source_ids)
+                if results is not None and len(results) >= 2:
+                    log.debug(f"Using local database cache for source IDs: {source_ids}")
+                    self._gaia_query_cache[cache_key] = results
+                    return results
+            except Exception as e:
+                log.warning(f"Failed to query local cache: {e}")
+                # Fall through to Gaia query
         
         source_ids_str = ','.join(source_ids)
         
