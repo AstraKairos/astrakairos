@@ -99,7 +99,7 @@ class TestHybridValidator:
         result = await validator.validate_physicality(sample_system_data)
         
         assert result == mock_physicality_assessment
-        mock_local_source.get_precomputed_physicality.assert_called_once_with('00001+0001')
+        mock_local_source.get_precomputed_physicality.assert_called_once_with('00001+0001', None)
 
     @pytest.mark.asyncio
     async def test_validate_physicality_online_fallback(
@@ -115,7 +115,7 @@ class TestHybridValidator:
         result = await validator.validate_physicality(sample_system_data)
         
         assert result == mock_physicality_assessment
-        mock_local_source.get_precomputed_physicality.assert_called_once_with('00001+0001')
+        mock_local_source.get_precomputed_physicality.assert_called_once_with('00001+0001', None)
         mock_gaia_validator.validate_physicality.assert_called_once_with(sample_system_data)
 
     @pytest.mark.asyncio

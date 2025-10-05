@@ -80,11 +80,16 @@ class HybridValidator(PhysicalityValidator):
         if not wds_id:
             raise InvalidInputError("Missing required field 'wds_id' in system_data")
 
+        # Get wdss_id if available for accurate validation of multiple component systems
+        wdss_id = system_data.get('wdss_id')
+
         # Step 1: Check the pre-computed local cache
-        local_assessment = await self.data_source.get_precomputed_physicality(wds_id)
+        # Pass wdss_id to ensure correct validation for triple/quadruple systems
+        local_assessment = await self.data_source.get_precomputed_physicality(wds_id, wdss_id)
         
         if local_assessment:
-            log.debug(f"Validation for {wds_id} found in local El-Badry cache")
+            identifier = wdss_id if wdss_id else wds_id
+            log.debug(f"Validation for {identifier} found in local El-Badry cache")
             return local_assessment
 
         # Step 2: If not in cache, fall back to the online validator

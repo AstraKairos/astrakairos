@@ -703,7 +703,7 @@ class LocalDataSource(DataSource):
             log.error(f"Error getting WDS IDs: {e}")
             raise AstraKairosDataError(f"Database query failed: {e}") from e
 
-    async def get_precomputed_physicality(self, wds_id: str) -> Optional[PhysicalityAssessment]:
+    async def get_precomputed_physicality(self, wds_id: str, wdss_id: Optional[str] = None) -> Optional[PhysicalityAssessment]:
         """
         Retrieves pre-computed physicality assessment from the local database
         based on El-Badry et al. (2021) cross-match data.
@@ -714,6 +714,10 @@ class LocalDataSource(DataSource):
         
         Args:
             wds_id: WDS identifier to check
+            wdss_id: Optional WDSS identifier (unique per component pair).
+                     If provided, this ensures correct validation for multiple 
+                     component systems (triples, quadruples) where wds_id alone
+                     would return multiple rows.
             
         Returns:
             PhysicalityAssessment if system is in El-Badry catalog, None otherwise
@@ -729,11 +733,20 @@ class LocalDataSource(DataSource):
             return None
 
         try:
-            cursor = self.conn.execute(
-                f"""SELECT in_el_badry_catalog, R_chance_align, binary_type 
-                   FROM {self.summary_table} WHERE wds_id = ?""",
-                (wds_id,)
-            )
+            # Use wdss_id if available (unique per component pair) to avoid ambiguity
+            # in multiple component systems where wds_id returns multiple rows
+            if wdss_id:
+                cursor = self.conn.execute(
+                    f"""SELECT in_el_badry_catalog, R_chance_align, binary_type 
+                       FROM {self.summary_table} WHERE wdss_id = ?""",
+                    (wdss_id,)
+                )
+            else:
+                cursor = self.conn.execute(
+                    f"""SELECT in_el_badry_catalog, R_chance_align, binary_type 
+                       FROM {self.summary_table} WHERE wds_id = ?""",
+                    (wds_id,)
+                )
             row = cursor.fetchone()
 
             if row and row['in_el_badry_catalog']:
