@@ -49,6 +49,8 @@ from ..config import (
     EXPERT_METHOD_AMBIGUOUS_FALLBACK
 )
 
+from ..data.gaia_utils import get_adaptive_delta_mu_thresholds
+
 # Import Gaia utilities
 from ..data.gaia_utils import (
     correct_gaia_error,
@@ -133,18 +135,24 @@ class ExpertHierarchicalValidator:
 
     def validate_pair(self,
                      primary_gaia: Dict[str, Any],
-                     secondary_gaia: Dict[str, Any]) -> ExpertDecisionResult:
+                     secondary_gaia: Dict[str, Any],
+                     separation_arcsec: Optional[float] = None) -> ExpertDecisionResult:
         """
         Expert validation of a binary star pair using hierarchical decision rules.
         
         Args:
             primary_gaia: Primary component Gaia data
             secondary_gaia: Secondary component Gaia data
+            separation_arcsec: Angular separation between components (optional)
             
         Returns:
             ExpertDecisionResult with classification and reasoning
         """
-        # Step 1: Assess data quality for both components
+        from ..data.gaia_utils import inflate_gaia_uncertainties
+        
+        primary_gaia = inflate_gaia_uncertainties(primary_gaia, separation_arcsec)
+        secondary_gaia = inflate_gaia_uncertainties(secondary_gaia, separation_arcsec)
+        
         primary_quality = assess_gaia_data_quality(primary_gaia)
         secondary_quality = assess_gaia_data_quality(secondary_gaia)
         
@@ -155,24 +163,23 @@ class ExpertHierarchicalValidator:
             primary_quality['correlation_warning'] = correlation_warning
             secondary_quality['correlation_warning'] = correlation_warning
         
-        # Step 2: Evaluate individual criteria
         evidence_chain = []
         
-        # Global astrometric consistency (χ² test)
         astrometric_result = self._evaluate_astrometric_consistency(
             primary_gaia, secondary_gaia, primary_quality, secondary_quality
         )
         evidence_chain.append(astrometric_result)
         
-        # Parallax compatibility
         parallax_result = self._evaluate_parallax_compatibility(
-            primary_gaia, secondary_gaia, primary_quality, secondary_quality
+            primary_gaia, secondary_gaia, primary_quality, secondary_quality,
+            separation_arcsec
         )
         evidence_chain.append(parallax_result)
         
-        # Proper motion alignment
+        # Proper motion alignment (with adaptive thresholds)
         pm_result = self._evaluate_proper_motion_alignment(
-            primary_gaia, secondary_gaia, primary_quality, secondary_quality
+            primary_gaia, secondary_gaia, primary_quality, secondary_quality,
+            separation_arcsec
         )
         evidence_chain.append(pm_result)
         
@@ -287,7 +294,8 @@ class ExpertHierarchicalValidator:
                                       primary: Dict[str, Any],
                                       secondary: Dict[str, Any],
                                       primary_quality: Dict[str, Any],
-                                      secondary_quality: Dict[str, Any]) -> ValidationCriterion:
+                                      secondary_quality: Dict[str, Any],
+                                      separation_arcsec: Optional[float] = None) -> ValidationCriterion:
         """
         Evaluate parallax compatibility between components.
         
@@ -295,7 +303,6 @@ class ExpertHierarchicalValidator:
         proper motion may be dominated by orbital motion.
         """
         try:
-            # Get parallax values and errors (with RUWE correction)
             plx1 = primary.get('parallax')
             plx2 = secondary.get('parallax')
             
@@ -310,7 +317,6 @@ class ExpertHierarchicalValidator:
                     reasoning="Parallax data unavailable for one or both components"
                 )
             
-            # Get safe errors with RUWE correction
             plx_err1 = get_gaia_parallax_error_safe(
                 primary.get('parallax_error'), 
                 primary.get('ruwe')
@@ -320,30 +326,32 @@ class ExpertHierarchicalValidator:
                 secondary.get('ruwe')
             )
             
-            # Calculate significance of difference
             plx_diff = abs(plx1 - plx2)
             combined_error = np.sqrt(plx_err1**2 + plx_err2**2)
             
             if combined_error > 0:
                 sigma_difference = plx_diff / combined_error
                 
-                # Apply expert thresholds
+                parallax_threshold = EXPERT_PARALLAX_COMPATIBILITY_SIGMA_THRESHOLD
+                if separation_arcsec is not None and separation_arcsec < 4.0:
+                    from ..config import GAIA_ADAPTIVE_THRESHOLDS
+                    multiplier = GAIA_ADAPTIVE_THRESHOLDS['close_separation']['parallax_sigma_multiplier']
+                    parallax_threshold *= multiplier
+                
                 if sigma_difference > EXPERT_PARALLAX_EXTREME_SIGMA_THRESHOLD:
-                    # VETO: Extreme parallax difference
                     return ValidationCriterion(
                         passed=False,
                         evidence=ValidationEvidence.SUPPORTS_OPTICAL,
                         priority=EvidencePriority.CRITICAL,
                         evidence_strength=EXPERT_CONFIDENCE_VERY_HIGH,
-                        p_value=None,  # Not applicable for this type of evidence
+                        p_value=None,
                         details={
                             'plx1': plx1, 'plx2': plx2, 'difference': plx_diff,
                             'sigma_difference': sigma_difference, 'threshold': EXPERT_PARALLAX_EXTREME_SIGMA_THRESHOLD
                         },
                         reasoning=f"VETO ÓPTICO #2: Extreme parallax difference ({sigma_difference:.1f}σ > {EXPERT_PARALLAX_EXTREME_SIGMA_THRESHOLD}σ) indicates different distances"
                     )
-                elif sigma_difference < EXPERT_PARALLAX_COMPATIBILITY_SIGMA_THRESHOLD:
-                    # Compatible parallax
+                elif sigma_difference < parallax_threshold:
                     priority = EvidencePriority.HIGH if (
                         primary_quality.get('parallax_quality', False) and 
                         secondary_quality.get('parallax_quality', False)
@@ -353,13 +361,13 @@ class ExpertHierarchicalValidator:
                         passed=True,
                         evidence=ValidationEvidence.SUPPORTS_PHYSICAL,
                         priority=priority,
-                        evidence_strength=1.0 - (sigma_difference / EXPERT_PARALLAX_COMPATIBILITY_SIGMA_THRESHOLD),
-                        p_value=None,  # Not applicable for this type of evidence
+                        evidence_strength=1.0 - (sigma_difference / parallax_threshold),
+                        p_value=None,
                         details={
                             'plx1': plx1, 'plx2': plx2, 'difference': plx_diff,
-                            'sigma_difference': sigma_difference, 'threshold': EXPERT_PARALLAX_COMPATIBILITY_SIGMA_THRESHOLD
+                            'sigma_difference': sigma_difference, 'threshold': parallax_threshold
                         },
-                        reasoning=f"Parallax values are compatible ({sigma_difference:.1f}σ < {EXPERT_PARALLAX_COMPATIBILITY_SIGMA_THRESHOLD}σ)"
+                        reasoning=f"Parallax values are compatible ({sigma_difference:.1f}σ < {parallax_threshold:.1f}σ)"
                     )
                 else:
                     # Ambiguous parallax difference
@@ -393,9 +401,14 @@ class ExpertHierarchicalValidator:
                                        primary: Dict[str, Any],
                                        secondary: Dict[str, Any],
                                        primary_quality: Dict[str, Any],
-                                       secondary_quality: Dict[str, Any]) -> ValidationCriterion:
+                                       secondary_quality: Dict[str, Any],
+                                       separation_arcsec: Optional[float] = None) -> ValidationCriterion:
         """
         Evaluate proper motion alignment between components.
+        
+        Uses adaptive thresholds based on separation and RUWE following
+        El-Badry et al. (2021) methodology: 5σ for Δμ physical threshold,
+        8σ for ambiguous threshold.
         
         For physical pairs, proper motions should be similar unless
         orbital motion is significant.
@@ -444,10 +457,97 @@ class ExpertHierarchicalValidator:
             combined_pmdec_err = np.sqrt(pmdec_err1**2 + pmdec_err2**2)
             combined_pm_err = np.sqrt(combined_pmra_err**2 + combined_pmdec_err**2)
             
+            # =====================================================================
+            # CRITICAL: Calculate Δμ_orbit (El-Badry & Rix 2018)
+            # This is the tangential component of PM difference, which is the 
+            # PRIMARY criterion for physicality (not the 2D magnitude)
+            # =====================================================================
+            delta_mu_orbit = None
+            delta_mu_orbit_sigma = None
+            
+            if separation_arcsec is not None and separation_arcsec > 0:
+                try:
+                    from astropy.coordinates import SkyCoord
+                    import astropy.units as u
+                    
+                    # Get sky coordinates
+                    ra1 = primary.get('ra')
+                    dec1 = primary.get('dec')
+                    ra2 = secondary.get('ra')
+                    dec2 = secondary.get('dec')
+                    
+                    if all(x is not None for x in [ra1, dec1, ra2, dec2]):
+                        coord1 = SkyCoord(ra=ra1 * u.deg, dec=dec1 * u.deg)
+                        coord2 = SkyCoord(ra=ra2 * u.deg, dec=dec2 * u.deg)
+                        
+                        # Get position angle and calculate tangential unit vector
+                        position_angle = coord1.position_angle(coord2)
+                        pa_rad = position_angle.to(u.radian).value
+                        
+                        # Tangential unit vector (perpendicular to radial)
+                        # Following El-Badry: e_t = (-sin(PA), cos(PA)) rotated 90°
+                        delta_ra = separation_arcsec * np.sin(pa_rad)
+                        delta_dec = separation_arcsec * np.cos(pa_rad)
+                        r_norm = np.hypot(delta_ra, delta_dec)
+                        
+                        if r_norm > 0:
+                            e_r_ra = delta_ra / r_norm
+                            e_r_dec = delta_dec / r_norm
+                            # Tangential is perpendicular to radial
+                            e_t_ra = -e_r_dec
+                            e_t_dec = e_r_ra
+                            
+                            # Project PM difference onto tangential direction
+                            delta_mu_orbit = float(dpmra * e_t_ra + dpmdec * e_t_dec)
+                            
+                            # Calculate error in tangential component using covariance
+                            corr1 = float(primary.get('pmra_pmdec_corr', 0.0) or 0.0)
+                            corr2 = float(secondary.get('pmra_pmdec_corr', 0.0) or 0.0)
+                            
+                            cov1 = np.array([
+                                [pmra_err1**2, pmra_err1 * pmdec_err1 * corr1],
+                                [pmra_err1 * pmdec_err1 * corr1, pmdec_err1**2]
+                            ])
+                            cov2 = np.array([
+                                [pmra_err2**2, pmra_err2 * pmdec_err2 * corr2],
+                                [pmra_err2 * pmdec_err2 * corr2, pmdec_err2**2]
+                            ])
+                            
+                            cov_delta = cov1 + cov2
+                            e_t = np.array([e_t_ra, e_t_dec])
+                            variance = float(e_t.T @ cov_delta @ e_t)
+                            variance = max(variance, 0.0)
+                            delta_mu_orbit_error = float(np.sqrt(variance)) if variance > 0 else float('inf')
+                            
+                            if np.isfinite(delta_mu_orbit_error) and delta_mu_orbit_error > 0:
+                                delta_mu_orbit_sigma = abs(delta_mu_orbit) / delta_mu_orbit_error
+                                log.debug(f"✅ Δμ_orbit calculated: {delta_mu_orbit_sigma:.2f}σ (tangential)")
+                        else:
+                            log.warning(f"Failed to calculate Δμ_orbit: r_norm = 0")
+                    else:
+                        missing = [k for k, v in {'ra1': ra1, 'dec1': dec1, 'ra2': ra2, 'dec2': dec2}.items() if v is None]
+                        log.warning(f"Failed to calculate Δμ_orbit: missing coordinates {missing}")
+                            
+                except Exception as e:
+                    log.warning(f"Failed to calculate Δμ_orbit: {e}")
+            
             if combined_pm_err > 0:
                 sigma_difference = pm_diff_magnitude / combined_pm_err
                 
-                if sigma_difference < EXPERT_PM_COMPATIBILITY_SIGMA_THRESHOLD:
+                # Get adaptive thresholds based on separation and RUWE
+                ruwe_p = primary.get('ruwe')
+                ruwe_s = secondary.get('ruwe')
+                
+                if separation_arcsec is not None and ruwe_p is not None and ruwe_s is not None:
+                    physical_thresh, ambiguous_thresh = get_adaptive_delta_mu_thresholds(
+                        separation_arcsec, ruwe_p, ruwe_s
+                    )
+                else:
+                    # Fallback to old hardcoded values if data unavailable
+                    physical_thresh = EXPERT_PM_COMPATIBILITY_SIGMA_THRESHOLD
+                    ambiguous_thresh = EXPERT_PM_EXTREME_SIGMA_THRESHOLD
+                
+                if sigma_difference < physical_thresh:
                     # Aligned proper motion
                     priority = EvidencePriority.HIGH if (
                         primary_quality.get('pm_quality', False) and 
@@ -458,45 +558,55 @@ class ExpertHierarchicalValidator:
                         passed=True,
                         evidence=ValidationEvidence.SUPPORTS_PHYSICAL,
                         priority=priority,
-                        evidence_strength=1.0 - (sigma_difference / EXPERT_PM_COMPATIBILITY_SIGMA_THRESHOLD),
+                        evidence_strength=1.0 - (sigma_difference / physical_thresh),
                         p_value=None,
                         details={
                             'pm_diff_magnitude': pm_diff_magnitude,
                             'sigma_difference': sigma_difference,
-                            'threshold': EXPERT_PM_COMPATIBILITY_SIGMA_THRESHOLD
+                            'threshold': physical_thresh,
+                            'separation_arcsec': separation_arcsec,
+                            'delta_mu_orbit': delta_mu_orbit,
+                            'delta_mu_orbit_sigma': delta_mu_orbit_sigma
                         },
-                        reasoning=f"Proper motions are aligned ({sigma_difference:.1f}σ < {EXPERT_PM_COMPATIBILITY_SIGMA_THRESHOLD}σ)"
+                        reasoning=f"Proper motions are aligned ({sigma_difference:.1f}σ < {physical_thresh:.1f}σ)"
                     )
                 else:
                     # Misaligned proper motion - could be orbital motion or optical pair
-                    # Apply extreme veto if difference is very large
-                    if sigma_difference > EXPERT_PM_EXTREME_SIGMA_THRESHOLD:
+                    # Apply extreme veto if difference exceeds ambiguous threshold
+                    if sigma_difference > ambiguous_thresh:
                         return ValidationCriterion(
                             passed=False,
                             evidence=ValidationEvidence.SUPPORTS_OPTICAL,
-                            priority=EvidencePriority.HIGH,  # Strong evidence but not critical like parallax
+                            priority=EvidencePriority.HIGH,
                             evidence_strength=0.9,
                             p_value=None,
                             details={
                                 'pm_diff_magnitude': pm_diff_magnitude,
                                 'sigma_difference': sigma_difference,
-                                'extreme_threshold': EXPERT_PM_EXTREME_SIGMA_THRESHOLD
+                                'extreme_threshold': ambiguous_thresh,
+                                'separation_arcsec': separation_arcsec,
+                                'delta_mu_orbit': delta_mu_orbit,
+                                'delta_mu_orbit_sigma': delta_mu_orbit_sigma
                             },
-                            reasoning=f"VETO ÓPTICO PM: Extreme proper motion difference ({sigma_difference:.1f}σ > {EXPERT_PM_EXTREME_SIGMA_THRESHOLD}σ) indicates unrelated motion"
+                            reasoning=f"VETO ÓPTICO PM: Extreme proper motion difference ({sigma_difference:.1f}σ > {ambiguous_thresh:.1f}σ) indicates unrelated motion"
                         )
                     else:
                         return ValidationCriterion(
                             passed=False,
-                            evidence=ValidationEvidence.AMBIGUOUS,  # Not definitive optical evidence
+                            evidence=ValidationEvidence.AMBIGUOUS,
                             priority=EvidencePriority.MEDIUM,
                             evidence_strength=0.5,
                             p_value=None,
                             details={
                                 'pm_diff_magnitude': pm_diff_magnitude,
                                 'sigma_difference': sigma_difference,
-                                'threshold': EXPERT_PM_COMPATIBILITY_SIGMA_THRESHOLD
+                                'physical_threshold': physical_thresh,
+                                'ambiguous_threshold': ambiguous_thresh,
+                                'separation_arcsec': separation_arcsec,
+                                'delta_mu_orbit': delta_mu_orbit,
+                                'delta_mu_orbit_sigma': delta_mu_orbit_sigma
                             },
-                            reasoning=f"Proper motions are misaligned ({sigma_difference:.1f}σ > {EXPERT_PM_COMPATIBILITY_SIGMA_THRESHOLD}σ) - could indicate orbital motion or optical pair"
+                            reasoning=f"Proper motions are misaligned ({sigma_difference:.1f}σ > {physical_thresh:.1f}σ) - could indicate orbital motion or optical pair"
                         )
                     
         except Exception as e:
@@ -584,56 +694,149 @@ class ExpertHierarchicalValidator:
         """
         Apply expert hierarchical decision rules.
         
-        This implements the expert decision tree with explicit vetos and
-        priority-based reasoning:
+        UPDATED HIERARCHY (El-Badry 2021 aligned, Oct 2025):
+        Following El-Badry et al. (2021) Section 4.4, we prioritize Δμ check
+        over chi-squared test. El-Badry uses ΔV < V_orb + 2σ_V as PRIMARY criterion.
         
-        1. VETO ÓPTICO #1: Astrometría inconsistente con datos de alta calidad
-        2. VETO ÓPTICO #2: Paralaje absolutamente incompatible (>10σ)
-        3. CASO DE ALTA CONFIANZA FÍSICA: Toda la evidencia apoya
+        New hierarchy:
+        0. ΔΜORBIT CHECK (NEW): Proper motion consistency with orbital motion
+        1. VETO ÓPTICO #1: Paralaje absolutamente incompatible (>5σ)
+        2. VETO ÓPTICO #2: Movimiento Propio Extremo (>12σ)
+        3. CASO DE ALTA CONFIANZA FÍSICA: Δμ_orbit + astrometry + RUWE all good
         4. MANEJO DE RUWE ALTO: Datos de mala calidad
-        5. MANEJO DE MOVIMIENTO ORBITAL: Paralaje OK, PM no
+        5. MANEJO DE MOVIMIENTO ORBITAL: Paralaje OK, PM marginally inconsistent
         6. FALLBACK: Cualquier otro caso
         """
+        from ..config import (EXPERT_DELTA_MU_PRIMARY_VETO, ORBIT_EXCESS_SIGMA_PHYSICAL_MAX,
+                             ORBIT_EXCESS_SIGMA_AMBIGUOUS_MAX)
+        
         # Extract evidence by type
         astrometric_evidence = evidence_chain[0]  # Global chi-squared
         parallax_evidence = evidence_chain[1]     # Parallax compatibility
         pm_evidence = evidence_chain[2]           # Proper motion alignment
         ruwe_evidence = evidence_chain[3]         # RUWE quality
         
-        # VETO ÓPTICO #1: Astrometría Inconsistente con Datos de Alta Calidad
-        if (astrometric_evidence.passed == False and 
-            astrometric_evidence.priority == EvidencePriority.HIGH and
-            ruwe_evidence.passed == True):
+        # NEW: Δμ_orbit Primary Check (El-Badry 2021 methodology)
+        # Check proper motion consistency FIRST, override chi-squared if consistent
+        # CRITICAL: Use delta_mu_orbit_sigma (tangential component), NOT sigma_difference (2D magnitude)
+        if EXPERT_DELTA_MU_PRIMARY_VETO:
+            # Try to get Δμ_orbit first (El-Badry metric), fallback to standard PM if unavailable
+            delta_mu_sigma = pm_evidence.details.get('delta_mu_orbit_sigma')
+            pm_sigma_2d = pm_evidence.details.get('sigma_difference', float('inf'))
             
-            return {
-                'label': PhysicalityLabel.LIKELY_OPTICAL,
-                'evidence_strength': EXPERT_CONFIDENCE_HIGH,
-                'method': EXPERT_METHOD_OPTICAL_VETO_ASTROMETRY,
-                'p_value': astrometric_evidence.details.get('p_value'),
-                'reasoning': f"VETO ÓPTICO #1: {astrometric_evidence.reasoning} with good RUWE quality - strong evidence for optical pair"
-            }
+            # Prefer Δμ_orbit if available, otherwise use standard PM
+            pm_sigma = delta_mu_sigma if delta_mu_sigma is not None else pm_sigma_2d
+            
+            # Log which metric is being used
+            if delta_mu_sigma is not None:
+                log.debug(f"Using Δμ_orbit_sigma = {delta_mu_sigma:.2f}σ for primary check")
+            else:
+                log.debug(f"Δμ_orbit unavailable, using PM 2D sigma = {pm_sigma_2d:.2f}σ")
+            
+            # Physical if Δμ < 5σ (El-Badry-inspired threshold)
+            if pm_sigma < ORBIT_EXCESS_SIGMA_PHYSICAL_MAX:
+                # Additional check: parallax must not be extreme
+                if parallax_evidence.priority != EvidencePriority.CRITICAL:
+                    metric_used = "Δμ_orbit" if delta_mu_sigma is not None else "PM difference"
+                    return {
+                        'label': PhysicalityLabel.LIKELY_PHYSICAL,
+                        'evidence_strength': EXPERT_CONFIDENCE_HIGH,
+                        'method': EXPERT_METHOD_PHYSICAL_HIGH_CONFIDENCE,
+                        'p_value': astrometric_evidence.details.get('p_value'),
+                        'reasoning': f"ΔΜORBIT PHYSICAL: {metric_used} = {pm_sigma:.1f}σ < {ORBIT_EXCESS_SIGMA_PHYSICAL_MAX}σ - consistent with orbital motion (El-Badry 2021 criterion)"
+                    }
+            
+            # Ambiguous if 5σ < Δμ < 10σ
+            elif pm_sigma < ORBIT_EXCESS_SIGMA_AMBIGUOUS_MAX:
+                if parallax_evidence.passed != False:
+                    return {
+                        'label': PhysicalityLabel.AMBIGUOUS,
+                        'evidence_strength': EXPERT_CONFIDENCE_MEDIUM,
+                        'method': EXPERT_METHOD_AMBIGUOUS_FALLBACK,
+                        'p_value': astrometric_evidence.details.get('p_value'),
+                        'reasoning': f"ΔΜORBIT AMBIGUOUS: Moderate proper motion difference ({pm_sigma:.1f}σ) - could be orbital or optical"
+                    }
         
-        # VETO ÓPTICO #2: Paralaje Absolutamente Incompatible
+        # VETO ÓPTICO #1: Paralaje Absolutamente Incompatible
         if parallax_evidence.priority == EvidencePriority.CRITICAL:
             return {
                 'label': PhysicalityLabel.LIKELY_OPTICAL,
                 'evidence_strength': EXPERT_CONFIDENCE_VERY_HIGH,
                 'method': EXPERT_METHOD_OPTICAL_VETO_PARALLAX,
                 'p_value': None,
-                'reasoning': f"VETO ÓPTICO #2: {parallax_evidence.reasoning} - distance difference too large to be physical"
+                'reasoning': f"VETO ÓPTICO PARALLAX: {parallax_evidence.reasoning} - distance difference too large to be physical"
             }
         
-        # VETO ÓPTICO #3: Movimiento Propio Extremo
+        # VETO ÓPTICO #2: Movimiento Propio Extremo (now at 12σ threshold)
+        # CRITICAL FIX: Only veto if Δμ_orbit > 12σ, not just PM 2D magnitude
+        # This prevents false optical classifications for wide pairs with high PM but consistent orbits
         if (pm_evidence.passed == False and 
             pm_evidence.evidence == ValidationEvidence.SUPPORTS_OPTICAL and
             pm_evidence.priority == EvidencePriority.HIGH):
-            return {
-                'label': PhysicalityLabel.LIKELY_OPTICAL,
-                'evidence_strength': EXPERT_CONFIDENCE_HIGH,
-                'method': EXPERT_METHOD_OPTICAL_VETO_PROPER_MOTION,
-                'p_value': None,
-                'reasoning': f"VETO ÓPTICO #3: {pm_evidence.reasoning} - proper motion difference too extreme for orbital motion"
-            }
+            
+            # Check if Δμ_orbit is available and use it for veto decision
+            delta_mu_sigma = pm_evidence.details.get('delta_mu_orbit_sigma')
+            pm_sigma_2d = pm_evidence.details.get('sigma_difference', float('inf'))
+            
+            # Use Δμ_orbit if available, otherwise fallback to PM 2D
+            effective_sigma = delta_mu_sigma if delta_mu_sigma is not None else pm_sigma_2d
+            
+            # Log which metric is being used for transparency
+            if delta_mu_sigma is not None:
+                log.debug(f"PM veto check: Using Δμ_orbit = {delta_mu_sigma:.2f}σ (tangential component)")
+            else:
+                log.warning(f"PM veto check: Δμ_orbit unavailable, using PM 2D = {pm_sigma_2d:.2f}σ (FALLBACK)")
+            
+            # Only apply veto if Δμ_orbit (or PM 2D as fallback) truly exceeds threshold
+            if effective_sigma > EXPERT_PM_EXTREME_SIGMA_THRESHOLD:
+                metric_used = "Δμ_orbit" if delta_mu_sigma is not None else "PM 2D (FALLBACK)"
+                return {
+                    'label': PhysicalityLabel.LIKELY_OPTICAL,
+                    'evidence_strength': EXPERT_CONFIDENCE_HIGH,
+                    'method': EXPERT_METHOD_OPTICAL_VETO_PROPER_MOTION,
+                    'p_value': None,
+                    'reasoning': f"VETO ÓPTICO PM: {metric_used} = {effective_sigma:.1f}σ > {EXPERT_PM_EXTREME_SIGMA_THRESHOLD}σ - proper motion difference too extreme for orbital motion"
+                }
+            else:
+                # Sigma is below veto threshold - reclassify as ambiguous instead
+                metric_used = "Δμ_orbit" if delta_mu_sigma is not None else "PM 2D"
+                log.info(f"PM veto SUPPRESSED: {metric_used} = {effective_sigma:.1f}σ < {EXPERT_PM_EXTREME_SIGMA_THRESHOLD}σ threshold")
+                return {
+                    'label': PhysicalityLabel.AMBIGUOUS,
+                    'evidence_strength': EXPERT_CONFIDENCE_MEDIUM,
+                    'method': EXPERT_METHOD_AMBIGUOUS_FALLBACK,
+                    'p_value': None,
+                    'reasoning': f"Moderate {metric_used} ({effective_sigma:.1f}σ) - insufficient for optical veto, could be orbital motion"
+                }
+        
+        # VETO ÓPTICO #3 (DOWNGRADED): Astrometría Inconsistente
+        # Now AFTER Δμ_orbit check and only if both chi² AND PM fail
+        # CRITICAL: Suppress this veto if Δμ_orbit < 12σ (orbital motion possible)
+        if (astrometric_evidence.passed == False and 
+            astrometric_evidence.priority == EvidencePriority.HIGH and
+            ruwe_evidence.passed == True and
+            pm_evidence.passed == False):
+            
+            # Check Δμ_orbit before applying veto
+            delta_mu_sigma = pm_evidence.details.get('delta_mu_orbit_sigma')
+            pm_sigma_2d = pm_evidence.details.get('sigma_difference', float('inf'))
+            effective_sigma = delta_mu_sigma if delta_mu_sigma is not None else pm_sigma_2d
+            
+            # Only veto if Δμ_orbit truly exceeds threshold
+            if effective_sigma > EXPERT_PM_EXTREME_SIGMA_THRESHOLD:
+                metric_used = "Δμ_orbit" if delta_mu_sigma is not None else "PM 2D (FALLBACK)"
+                return {
+                    'label': PhysicalityLabel.LIKELY_OPTICAL,
+                    'evidence_strength': EXPERT_CONFIDENCE_MEDIUM,  # Reduced from HIGH
+                    'method': EXPERT_METHOD_OPTICAL_VETO_ASTROMETRY,
+                    'p_value': astrometric_evidence.details.get('p_value'),
+                    'reasoning': f"VETO ÓPTICO ASTROMETRY: {astrometric_evidence.reasoning} with good RUWE - both chi-squared and PM fail ({metric_used} = {effective_sigma:.1f}σ > {EXPERT_PM_EXTREME_SIGMA_THRESHOLD}σ)"
+                }
+            else:
+                # Suppress veto - Δμ_orbit below threshold suggests possible orbital motion
+                metric_used = "Δμ_orbit" if delta_mu_sigma is not None else "PM 2D"
+                log.info(f"Astrometry veto SUPPRESSED: {metric_used} = {effective_sigma:.1f}σ < {EXPERT_PM_EXTREME_SIGMA_THRESHOLD}σ threshold")
+                # Fall through to evaluate other evidence
         
         # CASO DE ALTA CONFIANZA FÍSICA: Toda la Evidencia Apoya
         if (astrometric_evidence.passed == True and

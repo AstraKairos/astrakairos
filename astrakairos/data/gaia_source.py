@@ -961,23 +961,34 @@ class GaiaValidator(PhysicalityValidator):
         # Secondary statistical assessment using classical chi-squared tests
         statistical_result = self._calculate_statistical_consistency(primary_gaia, secondary_gaia)
 
-        # Compute El-Badry Δμ_orbit metrics for reporting
-        el_badry_metrics = self._calculate_el_badry_metrics(primary_gaia, secondary_gaia)
-        if el_badry_metrics:
-            expert_result.update(el_badry_metrics)
-            if statistical_result:
-                statistical_result.update(el_badry_metrics)
+        # Compute El-Badry Δμ_orbit metrics for reporting (if not already present from expert)
+        # IMPORTANT: Only calculate if expert didn't already provide Δμ_orbit (from decision tree)
+        if 'delta_mu_orbit_significance' not in expert_result:
+            el_badry_metrics = self._calculate_el_badry_metrics(primary_gaia, secondary_gaia)
+            if el_badry_metrics:
+                expert_result.update(el_badry_metrics)
+                if statistical_result:
+                    statistical_result.update(el_badry_metrics)
+        else:
+            log.debug("Using Δμ_orbit from expert decision tree (not recalculating)")
 
         # Preserve the expected geometry context for downstream consumers
         self._attach_expected_geometry(expert_result, expected_sep, expected_pa)
         if statistical_result:
             self._attach_expected_geometry(statistical_result, expected_sep, expected_pa)
 
-        # If expert reasoning failed or remained ambiguous, fall back to statistical evidence
+        # If expert reasoning failed or remained ambiguous, conditionally fall back to statistical evidence
+        # UPDATED (Oct 2025): Only fallback if Δμ is extreme (>10σ) or expert truly failed
+        # For moderate Δμ (5-10σ), trust expert ambiguous classification (El-Badry 2021 aligned)
         expert_failed = expert_result.get('expert_method') == "fallback_error"
         expert_ambiguous = expert_result['label'] == PhysicalityLabel.AMBIGUOUS
-
-        if statistical_result and (expert_failed or expert_ambiguous):
+        
+        # Check if Δμ is extreme (would justify statistical veto)
+        delta_mu_sigma = expert_result.get('delta_mu_orbit_significance', float('inf'))
+        delta_mu_extreme = delta_mu_sigma > 10.0  # Above our ambiguous threshold
+        
+        # Only fallback if expert failed OR (ambiguous AND extreme Δμ)
+        if statistical_result and (expert_failed or (expert_ambiguous and delta_mu_extreme)):
             statistical_result['expert_confidence'] = expert_result.get('expert_confidence', 0.0)
             statistical_result['expert_reasoning'] = expert_result.get('expert_reasoning')
             statistical_result['expert_method'] = expert_result.get('expert_method')
@@ -1000,22 +1011,38 @@ class GaiaValidator(PhysicalityValidator):
         This is the new, sophisticated approach that uses expert reasoning.
         """
         try:
-            # Prepare data for expert validator
             log.debug("🔬 Preparing data for Expert Hierarchical Validator...")
             primary_data = self._prepare_expert_data(primary_gaia)
             secondary_data = self._prepare_expert_data(secondary_gaia)
             
-            # Run expert validation
+            separation_arcsec = self._calculate_angular_separation(primary_gaia, secondary_gaia)
+            
             log.debug("🔬 Running expert validation...")
-            expert_result = self.decision_tree.validate_pair(primary_data, secondary_data)
+            expert_result = self.decision_tree.validate_pair(
+                primary_data, secondary_data, separation_arcsec
+            )
             
             # Log expert decision
             log.info(f"Expert Hierarchical Validator: {expert_result.label.value} "
                     f"(evidence_strength: {expert_result.evidence_strength:.2f}, method: {expert_result.method})")
             log.info(f"Expert reasoning: {expert_result.reasoning}")
             
-            # Return expert decision
-            return {
+            # Extract Δμ_orbit from PM evidence if available
+            delta_mu_orbit = None
+            delta_mu_orbit_error = None
+            delta_mu_orbit_sigma = None
+            
+            if expert_result.evidence_chain and len(expert_result.evidence_chain) > 2:
+                pm_evidence = expert_result.evidence_chain[2]  # Third is PM alignment
+                if pm_evidence and pm_evidence.details:
+                    delta_mu_orbit = pm_evidence.details.get('delta_mu_orbit')
+                    delta_mu_orbit_sigma = pm_evidence.details.get('delta_mu_orbit_sigma')
+                    if delta_mu_orbit is not None and delta_mu_orbit_sigma is not None and delta_mu_orbit_sigma > 0:
+                        delta_mu_orbit_error = abs(delta_mu_orbit) / delta_mu_orbit_sigma if delta_mu_orbit_sigma > 0 else None
+                        log.debug(f"Extracted Δμ_orbit from expert: {delta_mu_orbit:.4f} ± {delta_mu_orbit_error:.4f} mas/yr ({delta_mu_orbit_sigma:.2f}σ)")
+            
+            # Return expert decision with Δμ_orbit metrics
+            result = {
                 'label': expert_result.label,
                 'p_value': expert_result.p_value,  # May be None if unreliable
                 'method': ValidationMethod.EXPERT_EL_BADRY,
@@ -1023,6 +1050,14 @@ class GaiaValidator(PhysicalityValidator):
                 'expert_confidence': expert_result.evidence_strength,
                 'expert_reasoning': expert_result.reasoning
             }
+            
+            # Add Δμ_orbit metrics if available (these will be used instead of recalculating)
+            if delta_mu_orbit_sigma is not None:
+                result['delta_mu_orbit'] = delta_mu_orbit
+                result['delta_mu_orbit_error'] = delta_mu_orbit_error
+                result['delta_mu_orbit_significance'] = delta_mu_orbit_sigma
+            
+            return result
         except Exception as e:
             log.error(f"Expert Hierarchical Validator failed: {e}")
             # Return AMBIGUOUS instead of falling back to traditional method
@@ -1073,6 +1108,13 @@ class GaiaValidator(PhysicalityValidator):
         pmra_error = get_gaia_pmra_error_safe(pmra_error_raw, ruwe)
         pmdec_error = get_gaia_pmdec_error_safe(pmdec_error_raw, ruwe)
         
+        # Get RA/DEC for Δμ_orbit calculation (El-Badry 2018)
+        ra = safe_float(gaia_star.get('ra', None))
+        dec = safe_float(gaia_star.get('dec', None))
+        
+        # Get PM correlation for covariance matrix
+        pmra_pmdec_corr = safe_float(gaia_star.get('pmra_pmdec_corr', 0.0), 0.0)
+        
         return {
             'parallax': parallax,
             'parallax_error': parallax_error,
@@ -1080,6 +1122,9 @@ class GaiaValidator(PhysicalityValidator):
             'pmra_error': pmra_error,
             'pmdec': pmdec,
             'pmdec_error': pmdec_error,
+            'pmra_pmdec_corr': pmra_pmdec_corr,
+            'ra': ra,
+            'dec': dec,
             'ruwe': ruwe,
             'source_id': str(gaia_star.get('source_id', 'unknown'))
         }

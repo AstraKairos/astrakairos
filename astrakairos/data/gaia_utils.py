@@ -11,7 +11,7 @@ for systematic uncertainties in poor astrometric solutions.
 
 import numpy as np
 import logging
-from typing import Optional, Union, Dict, Any
+from typing import Optional, Union, Dict, Any, Tuple
 
 from ..config import (
     RUWE_CORRECTION_ENABLED,
@@ -144,31 +144,31 @@ def get_safe_error_with_fallback(
 
 
 def get_gaia_parallax_error_safe(parallax_error: Optional[float], ruwe: Optional[float] = None) -> float:
-    """Get safe parallax error with fallback."""
+    """Get safe parallax error with fallback. No additional correction applied."""
     return get_safe_error_with_fallback(
         parallax_error, 
         FALLBACK_PARALLAX_ERROR_MAS, 
-        ruwe, 
+        None,
         "parallax"
     )
 
 
 def get_gaia_pmra_error_safe(pmra_error: Optional[float], ruwe: Optional[float] = None) -> float:
-    """Get safe proper motion RA error with fallback."""
+    """Get safe proper motion RA error with fallback. No additional correction applied."""
     return get_safe_error_with_fallback(
         pmra_error, 
         FALLBACK_PMRA_ERROR_MAS_PER_YEAR, 
-        ruwe, 
+        None,
         "pmra"
     )
 
 
 def get_gaia_pmdec_error_safe(pmdec_error: Optional[float], ruwe: Optional[float] = None) -> float:
-    """Get safe proper motion Dec error with fallback."""
+    """Get safe proper motion Dec error with fallback. No additional correction applied."""
     return get_safe_error_with_fallback(
         pmdec_error, 
         FALLBACK_PMDEC_ERROR_MAS_PER_YEAR, 
-        ruwe, 
+        None,
         "pmdec"
     )
 
@@ -328,10 +328,11 @@ def validate_gaia_source_completeness(star: Dict[str, Any]) -> Dict[str, bool]:
 
 def build_covariance_matrix(star: Dict[str, Any], dimensions: int = 3) -> Optional[np.ndarray]:
     """
-    Build covariance matrix for astrometric parameters with RUWE correction.
+    Build covariance matrix for astrometric parameters.
     
-    This function constructs the full covariance matrix including correlations
-    and applies RUWE-based error correction to account for systematic uncertainties.
+    This function constructs the full covariance matrix including correlations.
+    If errors have already been inflated (via inflate_gaia_uncertainties),
+    no additional correction is applied.
     
     Args:
         star: Gaia source data dictionary
@@ -354,44 +355,38 @@ def build_covariance_matrix(star: Dict[str, Any], dimensions: int = 3) -> Option
         return float(corr)
     
     try:
-        # Get RUWE for error correction (default to 1.0 if missing)
-        ruwe = star.get('ruwe', 1.0)
-        if ruwe is None or not np.isfinite(ruwe):
-            ruwe = 1.0
+        errors_already_inflated = star.get('_errors_inflated', False)
             
         if dimensions == 1:
-            # 1D: parallax only
             err = star.get('parallax_error')
             if err is None or err <= 0:
                 return None
                 
-            # Apply RUWE correction
-            corrected_err = get_gaia_parallax_error_safe(err, ruwe)
-            return np.array([[corrected_err**2]])
+            if not errors_already_inflated:
+                err = get_gaia_parallax_error_safe(err, star.get('ruwe'))
+                
+            return np.array([[err**2]])
             
         elif dimensions == 2:
-            # 2D: proper motion only
             pmra_err = star.get('pmra_error')
             pmdec_err = star.get('pmdec_error')
             
             if pmra_err is None or pmdec_err is None or pmra_err <= 0 or pmdec_err <= 0:
                 return None
             
-            # Apply RUWE correction
-            corrected_pmra_err = get_gaia_pmra_error_safe(pmra_err, ruwe)
-            corrected_pmdec_err = get_gaia_pmdec_error_safe(pmdec_err, ruwe)
+            if not errors_already_inflated:
+                pmra_err = get_gaia_pmra_error_safe(pmra_err, star.get('ruwe'))
+                pmdec_err = get_gaia_pmdec_error_safe(pmdec_err, star.get('ruwe'))
                 
-            # Get correlation
             pmra_pmdec_corr = get_correlation_safe(star, 'pmra_pmdec_corr')
             
             C = np.zeros((2, 2))
-            C[0, 0] = corrected_pmra_err**2
-            C[1, 1] = corrected_pmdec_err**2
-            C[0, 1] = C[1, 0] = corrected_pmra_err * corrected_pmdec_err * pmra_pmdec_corr
+            C[0, 0] = pmra_err**2
+            C[1, 1] = pmdec_err**2
+            C[0, 1] = C[1, 0] = pmra_err * pmdec_err * pmra_pmdec_corr
             return C
             
         elif dimensions == 3:
-            # 3D: parallax + proper motion
             plx_err = star.get('parallax_error')
             pmra_err = star.get('pmra_error') 
             pmdec_err = star.get('pmdec_error')
@@ -400,23 +395,23 @@ def build_covariance_matrix(star: Dict[str, Any], dimensions: int = 3) -> Option
                 plx_err <= 0 or pmra_err <= 0 or pmdec_err <= 0):
                 return None
             
-            # Apply RUWE correction to all astrometric errors
-            corrected_plx_err = correct_gaia_error(plx_err, ruwe, 'parallax')
-            corrected_pmra_err = correct_gaia_error(pmra_err, ruwe, 'pmra')
-            corrected_pmdec_err = correct_gaia_error(pmdec_err, ruwe, 'pmdec')
+            if not errors_already_inflated:
+                ruwe = star.get('ruwe')
+                plx_err = correct_gaia_error(plx_err, ruwe, 'parallax')
+                pmra_err = correct_gaia_error(pmra_err, ruwe, 'pmra')
+                pmdec_err = correct_gaia_error(pmdec_err, ruwe, 'pmdec')
             
-            # Get correlations
             plx_pmra_corr = get_correlation_safe(star, 'parallax_pmra_corr')
             plx_pmdec_corr = get_correlation_safe(star, 'parallax_pmdec_corr')
             pmra_pmdec_corr = get_correlation_safe(star, 'pmra_pmdec_corr')
             
             C = np.zeros((3, 3))
-            C[0, 0] = corrected_plx_err**2
-            C[1, 1] = corrected_pmra_err**2
-            C[2, 2] = corrected_pmdec_err**2
-            C[0, 1] = C[1, 0] = corrected_plx_err * corrected_pmra_err * plx_pmra_corr
-            C[0, 2] = C[2, 0] = corrected_plx_err * corrected_pmdec_err * plx_pmdec_corr
-            C[1, 2] = C[2, 1] = corrected_pmra_err * corrected_pmdec_err * pmra_pmdec_corr
+            C[0, 0] = plx_err**2
+            C[1, 1] = pmra_err**2
+            C[2, 2] = pmdec_err**2
+            C[0, 1] = C[1, 0] = plx_err * pmra_err * plx_pmra_corr
+            C[0, 2] = C[2, 0] = plx_err * pmdec_err * plx_pmdec_corr
+            C[1, 2] = C[2, 1] = pmra_err * pmdec_err * pmra_pmdec_corr
             return C
             
         else:
@@ -425,3 +420,328 @@ def build_covariance_matrix(star: Dict[str, Any], dimensions: int = 3) -> Option
     except Exception as e:
         log.debug(f"Error building {dimensions}D covariance matrix: {e}")
         return None
+
+
+def apply_magnitude_dependent_error_inflation(g_mag: float) -> float:
+    """
+    Calculate systematic parallax error inflation factor based on G magnitude.
+    
+    Implements El-Badry et al. (2021) Equation 16, which corrects for
+    magnitude-dependent underestimation of Gaia parallax uncertainties.
+    At G ≈ 13, σ_π is underestimated by ~30%. The correction is largest
+    for bright (G < 13) and faint (G > 17) sources.
+    
+    Args:
+        g_mag: Gaia G-band magnitude
+        
+    Returns:
+        Multiplicative inflation factor (≥ 1.0)
+        
+    Reference:
+        El-Badry et al. (2021), MNRAS 506, 2269-2295
+        https://doi.org/10.1093/mnras/stab323
+    """
+    from ..config import GAIA_PARALLAX_INFLATION_PARAMS
+    
+    if g_mag < 7 or g_mag > 21:
+        return 1.0
+    
+    A = GAIA_PARALLAX_INFLATION_PARAMS['A']
+    G0 = GAIA_PARALLAX_INFLATION_PARAMS['G0']
+    b = GAIA_PARALLAX_INFLATION_PARAMS['b']
+    p0 = GAIA_PARALLAX_INFLATION_PARAMS['p0']
+    p1 = GAIA_PARALLAX_INFLATION_PARAMS['p1']
+    p2 = GAIA_PARALLAX_INFLATION_PARAMS['p2']
+    
+    gaussian_bump = A * np.exp(-((g_mag - G0)**2) / (b**2))
+    polynomial = p0 + p1*g_mag + p2*(g_mag**2)
+    
+    return gaussian_bump + polynomial
+
+
+def apply_separation_dependent_error_inflation(separation_arcsec: float) -> float:
+    """
+    Calculate additional error inflation for close angular separations.
+    
+    For sources with companions at θ < 4 arcsec, Gaia astrometric
+    uncertainties are underestimated by ~40-80% due to blending effects.
+    This function implements an empirical correction based on El-Badry
+    et al. (2021) Fig. 16-17.
+    
+    Args:
+        separation_arcsec: Angular separation in arcseconds
+        
+    Returns:
+        Additional multiplicative inflation factor (≥ 1.0)
+        
+    Reference:
+        El-Badry et al. (2021), MNRAS 506, 2269-2295, Fig. 16-17
+    """
+    from ..config import GAIA_ADAPTIVE_THRESHOLDS
+    
+    threshold = GAIA_ADAPTIVE_THRESHOLDS['close_separation']['angle_threshold_arcsec']
+    
+    if separation_arcsec >= threshold:
+        return 1.0
+    
+    max_inflation = 1.6
+    inflation = 1.0 + (max_inflation - 1.0) * (1.0 - separation_arcsec / threshold)
+    
+    return inflation
+
+
+def apply_ruwe_dependent_error_inflation(ruwe: float) -> float:
+    """
+    Calculate additional error inflation for high RUWE values.
+    
+    RUWE primarily serves as a quality flag in El-Badry et al. (2021).
+    Sources with RUWE > 1.4 have potentially problematic astrometric solutions
+    and show larger error underestimates (Fig. 16), but the paper provides
+    no explicit functional form for RUWE-dependent inflation.
+    
+    From Fig. 16, sources with RUWE > 1.4 show approximately 1.3-1.5x larger
+    inflation factors compared to RUWE < 1.4 at similar magnitudes/separations.
+    We use a conservative step function based on these empirical values.
+    
+    Args:
+        ruwe: Renormalized Unit Weight Error
+        
+    Returns:
+        Additional multiplicative inflation factor (≥ 1.0)
+        
+    Reference:
+        El-Badry et al. (2021), MNRAS 506, 2269-2295, Fig. 16, Section 5.3
+    """
+    from ..config import GAIA_ADAPTIVE_THRESHOLDS
+    
+    threshold = GAIA_ADAPTIVE_THRESHOLDS['ruwe_threshold']
+    
+    if ruwe <= threshold:
+        # Good astrometry: no additional inflation
+        return 1.0
+    elif ruwe <= 2.0:
+        # Moderately problematic: ~1.3x additional factor (Fig. 16)
+        return 1.3
+    else:
+        # Severely problematic: ~1.5x additional factor
+        return 1.5
+
+
+def inflate_gaia_uncertainties(gaia_data: Dict[str, Any],
+                               separation_arcsec: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Apply all systematic error corrections to Gaia astrometric data.
+    
+    Combines three independent sources of error underestimation:
+    1. Magnitude-dependent (El-Badry Eq. 16)
+    2. Separation-dependent (for θ < 4 arcsec)
+    3. RUWE-dependent (for poor astrometric solutions)
+    
+    Args:
+        gaia_data: Dictionary containing Gaia astrometric measurements
+        separation_arcsec: Angular separation to companion (if known)
+        
+    Returns:
+        Copy of gaia_data with inflated error values and correction flag
+        
+    Reference:
+        El-Badry et al. (2021), MNRAS 506, 2269-2295
+    """
+    if gaia_data.get('_errors_inflated'):
+        return gaia_data
+    
+    inflated = gaia_data.copy()
+    
+    g_mag = gaia_data.get('phot_g_mean_mag')
+    ruwe = gaia_data.get('ruwe')
+    
+    parallax_inflation = 1.0
+    pm_inflation = 1.0
+    
+    if g_mag is not None and np.isfinite(g_mag):
+        mag_factor = apply_magnitude_dependent_error_inflation(g_mag)
+        parallax_inflation *= mag_factor
+        pm_inflation *= np.sqrt(mag_factor)
+    
+    if separation_arcsec is not None and separation_arcsec < 4.0:
+        sep_factor = apply_separation_dependent_error_inflation(separation_arcsec)
+        parallax_inflation *= sep_factor
+        pm_inflation *= np.sqrt(sep_factor)
+    
+    if ruwe is not None and ruwe > 1.4:
+        ruwe_factor = apply_ruwe_dependent_error_inflation(ruwe)
+        parallax_inflation *= ruwe_factor
+        pm_inflation *= ruwe_factor
+    
+    if 'parallax_error' in inflated and inflated['parallax_error'] is not None:
+        inflated['parallax_error'] *= parallax_inflation
+    
+    if 'pmra_error' in inflated and inflated['pmra_error'] is not None:
+        inflated['pmra_error'] *= pm_inflation
+    
+    if 'pmdec_error' in inflated and inflated['pmdec_error'] is not None:
+        inflated['pmdec_error'] *= pm_inflation
+    
+    inflated['_errors_inflated'] = True
+    inflated['_parallax_inflation_factor'] = parallax_inflation
+    inflated['_pm_inflation_factor'] = pm_inflation
+    
+    return inflated
+
+
+def get_adaptive_delta_mu_thresholds(separation_arcsec: float,
+                                     ruwe_primary: float,
+                                     ruwe_secondary: float) -> Tuple[float, float]:
+    """
+    Calculate adaptive classification thresholds for delta_mu_orbit significance.
+    
+    For close separations (θ < 4 arcsec) and poor astrometry (RUWE > 1.4),
+    the standard thresholds (2.5σ physical, 5.0σ optical) are too strict
+    due to systematic error underestimation. This function adjusts thresholds
+    to maintain consistent classification rates.
+    
+    Args:
+        separation_arcsec: Angular separation in arcseconds
+        ruwe_primary: RUWE of primary component
+        ruwe_secondary: RUWE of secondary component
+        
+    Returns:
+        Tuple of (physical_threshold, ambiguous_threshold) in units of σ
+        
+    Reference:
+        El-Badry et al. (2021), MNRAS 506, 2269-2295, Fig. 15-17
+    """
+    from ..config import GAIA_ADAPTIVE_THRESHOLDS
+    
+    close_config = GAIA_ADAPTIVE_THRESHOLDS['close_separation']
+    wide_config = GAIA_ADAPTIVE_THRESHOLDS['wide_separation']
+    
+    if separation_arcsec < close_config['angle_threshold_arcsec']:
+        physical_threshold = close_config['delta_mu_physical']
+        ambiguous_threshold = close_config['delta_mu_ambiguous']
+    else:
+        physical_threshold = wide_config['delta_mu_physical']
+        ambiguous_threshold = wide_config['delta_mu_ambiguous']
+    
+    # Note: We don't adjust thresholds for RUWE here because error inflation
+    # already accounts for RUWE effects via apply_ruwe_dependent_error_inflation()
+    # The 5σ and 8σ thresholds are designed to work with inflated errors.
+    
+    return physical_threshold, ambiguous_threshold
+
+
+def check_astrometric_quality_flags(gaia_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Evaluate Image Parameter Determination (IPD) quality flags.
+    
+    IPD flags detect astrometric problems not captured by RUWE alone,
+    particularly for unresolved binaries or sources with companions at
+    θ < 2 arcsec. These flags detect ~40% of problems missed by RUWE.
+    
+    Args:
+        gaia_data: Dictionary containing Gaia astrometric data
+        
+    Returns:
+        Dictionary with quality assessment:
+        - 'quality': 'excellent', 'good', 'marginal', or 'poor'
+        - 'flags': Individual flag status
+        - 'n_bad_flags': Count of problematic flags
+        
+    Reference:
+        El-Badry et al. (2021), MNRAS 506, 2269-2295, Fig. 18
+        Lindegren et al. (2021), A&A 649, A2
+    """
+    from ..config import GAIA_QUALITY_FLAGS
+    
+    ruwe = gaia_data.get('ruwe', 1.0)
+    ipd_harmonic = gaia_data.get('ipd_gof_harmonic_amplitude', 0.0)
+    ipd_multi_peak = gaia_data.get('ipd_frac_multi_peak', 0.0)
+    
+    flags = {
+        'ruwe_excellent': ruwe < GAIA_QUALITY_FLAGS['ruwe_excellent'],
+        'ruwe_good': ruwe < GAIA_QUALITY_FLAGS['ruwe_good'],
+        'ruwe_acceptable': ruwe < GAIA_QUALITY_FLAGS['ruwe_marginal'],
+        'ipd_harmonic_good': ipd_harmonic < GAIA_QUALITY_FLAGS['ipd_gof_harmonic_amplitude_threshold'],
+        'ipd_multi_peak_good': ipd_multi_peak < GAIA_QUALITY_FLAGS['ipd_frac_multi_peak_threshold']
+    }
+    
+    n_bad_flags = sum([
+        not flags['ruwe_acceptable'],
+        not flags['ipd_harmonic_good'],
+        not flags['ipd_multi_peak_good']
+    ])
+    
+    if n_bad_flags == 0 and flags['ruwe_excellent']:
+        quality = 'excellent'
+    elif n_bad_flags == 0:
+        quality = 'good'
+    elif n_bad_flags == 1:
+        quality = 'marginal'
+    else:
+        quality = 'poor'
+    
+    return {
+        'quality': quality,
+        'flags': flags,
+        'n_bad_flags': n_bad_flags
+    }
+
+
+def check_tangential_velocity_consistency(gaia_primary: Dict[str, Any],
+                                         gaia_secondary: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Check if tangential velocities are consistent between components.
+    
+    Physically bound systems should have similar space velocities. Large
+    differences in v_tan suggest an optical alignment. This is used as
+    a tie-breaker for ambiguous cases, not as a primary discriminator.
+    
+    Args:
+        gaia_primary: Primary component Gaia data
+        gaia_secondary: Secondary component Gaia data
+        
+    Returns:
+        Dictionary with consistency assessment:
+        - 'consistent': Boolean
+        - 'v_tan_primary': Tangential velocity of primary (km/s)
+        - 'v_tan_secondary': Tangential velocity of secondary (km/s)
+        - 'fractional_difference': |v1 - v2| / mean(v1, v2)
+        
+    Reference:
+        El-Badry et al. (2021), MNRAS 506, 2269-2295, Table A1
+    """
+    from ..config import GAIA_VELOCITY_CONSISTENCY
+    
+    conversion_factor = GAIA_VELOCITY_CONSISTENCY['velocity_conversion_factor']
+    max_diff_fraction = GAIA_VELOCITY_CONSISTENCY['tangential_velocity_max_diff_fraction']
+    
+    pm_total_p = gaia_primary.get('pm_total')
+    pm_total_s = gaia_secondary.get('pm_total')
+    parallax_p = gaia_primary.get('parallax')
+    parallax_s = gaia_secondary.get('parallax')
+    
+    if None in [pm_total_p, pm_total_s, parallax_p, parallax_s]:
+        return {'consistent': None, 'error': 'missing_data'}
+    
+    if parallax_p <= 0 or parallax_s <= 0:
+        return {'consistent': None, 'error': 'invalid_parallax'}
+    
+    v_tan_p = conversion_factor * pm_total_p / parallax_p
+    v_tan_s = conversion_factor * pm_total_s / parallax_s
+    
+    v_diff = abs(v_tan_p - v_tan_s)
+    v_mean = (v_tan_p + v_tan_s) / 2.0
+    
+    if v_mean <= 0:
+        return {'consistent': None, 'error': 'zero_mean_velocity'}
+    
+    fractional_diff = v_diff / v_mean
+    consistent = fractional_diff <= max_diff_fraction
+    
+    return {
+        'consistent': consistent,
+        'v_tan_primary': v_tan_p,
+        'v_tan_secondary': v_tan_s,
+        'fractional_difference': fractional_diff
+    }
+

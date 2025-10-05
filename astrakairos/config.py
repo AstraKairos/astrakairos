@@ -622,16 +622,16 @@ GAIA_REFERENCE_EPOCH = 2016.0                # Reference epoch for Gaia EDR3 ast
 GAIA_WDS_MAX_EPOCH_DIFFERENCE_YEARS = 5.0    # Skip strict separation checks if epochs differ too much
 
 # Gaia Physical Validation Thresholds
-# Provisional recalibration (2025-09) aiming to improve recall on vetted physical sample while
-# tightening ambiguous band. Rationale:
-# - Prior setting (4.5% / 0.5%) produced ~46% recall on ground-truth physical systems
-# - Expanding physical acceptance to p>2.0% (was 4.5%) would normally reduce recall, but here we
-#   simultaneously introduce Δμ_orbit significance bands to reclassify systems with modest orbital motion
-#   as physical even if p-value is slightly below former threshold.
-# - Ambiguous lower bound tightened from 0.5% to 0.15% to reduce ambiguous inflation.
-# NOTE: These are experimental and should be revalidated after collecting confusion matrix statistics.
-DEFAULT_PHYSICAL_P_VALUE_THRESHOLD = 0.020   # Physical if p_value > 2.0%
-DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD = 0.0015  # Ambiguous if between 0.15% and 2.0%
+# Updated October 2025 to compensate for systematic error inflation (El-Badry et al. 2021)
+# After applying magnitude-, separation-, and RUWE-dependent error corrections,
+# chi-squared statistics naturally increase due to larger uncertainties.
+# Following El-Badry methodology (Section 5.3, Figs 15-17):
+# - p > 0.01 for physical: Consistent with El-Badry "compatible astrometry" threshold
+# - 0.001 < p < 0.01 for ambiguous: Marginal statistical compatibility
+# - p < 0.001 for optical: Strong astrometric incompatibility
+# These thresholds work in conjunction with inflated errors and 5σ Δμ thresholds.
+DEFAULT_PHYSICAL_P_VALUE_THRESHOLD = 0.01   # Physical if p_value > 1.0%
+DEFAULT_AMBIGUOUS_P_VALUE_THRESHOLD = 0.001  # Ambiguous if between 0.1% and 1.0%
 
 # Gaia Data Quality Thresholds (More permissive for binary detection)
 MIN_PARALLAX_SIGNIFICANCE = 2.0             # Raised from 1.5 to 2.0 for slightly higher quality distance constraints
@@ -656,18 +656,25 @@ FALLBACK_DEC_ERROR_MAS = 1.0               # Conservative Dec error fallback (ma
 # Expert Hierarchical Validator Configuration
 # Thresholds for the expert decision tree system
 EXPERT_PARALLAX_EXTREME_SIGMA_THRESHOLD = 5.0       # Sigma threshold for absolute parallax incompatibility veto (reduced from 10σ for better discrimination)
-EXPERT_PM_EXTREME_SIGMA_THRESHOLD = 8.0             # Sigma threshold for extreme proper motion veto
+EXPERT_PM_EXTREME_SIGMA_THRESHOLD = 12.0            # Sigma threshold for extreme proper motion veto (increased from 8.0 to align with El-Badry 2021)
 EXPERT_RUWE_GOOD_THRESHOLD = 1.4                    # RUWE threshold for "good quality" data
 EXPERT_PARALLAX_COMPATIBILITY_SIGMA_THRESHOLD = 3.0  # Sigma threshold for parallax compatibility
 EXPERT_PM_COMPATIBILITY_SIGMA_THRESHOLD = 3.0       # Sigma threshold for proper motion compatibility
 
-# Δμ_orbit Significance Band Constants (El-Badry inspired; provisional 2025-09)
-# Interpretation (absolute delta_mu_orbit_significance):
-#   < 3σ  : Consistent with orbital motion (supports physical)
-#   3–6σ : Transitional / ambiguous regime
-#   ≥ 6σ : Strong orbital excess inconsistent with co-motion (supports optical)
-ORBIT_EXCESS_SIGMA_PHYSICAL_MAX = 3.0
-ORBIT_EXCESS_SIGMA_AMBIGUOUS_MAX = 6.0  # Above this classified as optical veto unless other expert rules override
+# Δμ_orbit Significance Band Constants (El-Badry 2021 aligned; updated 2025-10)
+# Interpretation follows El-Badry et al. (2021) Section 4.4:
+#   - El-Badry uses ΔV < V_orb + 2σ_V as PRIMARY criterion (not chi-squared)
+#   - Systems with large Δμ but large uncertainty are kept as physical (orbital motion)
+#   - Chi-squared is SECONDARY diagnostic, not primary veto
+# Thresholds adjusted to match El-Badry classifications:
+#   < 5σ  : Consistent with orbital motion (supports physical) - was 3σ
+#   5–10σ : Transitional / ambiguous regime - was 3-6σ  
+#   ≥ 10σ : Strong orbital excess inconsistent with co-motion (supports optical) - was 6σ
+ORBIT_EXCESS_SIGMA_PHYSICAL_MAX = 5.0  # Increased from 3.0 to reduce false opticals
+ORBIT_EXCESS_SIGMA_AMBIGUOUS_MAX = 10.0  # Increased from 6.0 to align with El-Badry permissiveness
+
+# Expert Decision Logic Control
+EXPERT_DELTA_MU_PRIMARY_VETO = True  # If True, check Δμ_orbit BEFORE chi-squared (El-Badry 2021 style)
 
 # Expert Confidence Levels
 EXPERT_CONFIDENCE_VERY_HIGH = 0.95         # Very high confidence (e.g., extreme parallax veto)
@@ -904,3 +911,44 @@ CLI_VALID_SORT_KEYS = {
 
 # Error handling configuration
 CLI_FAIL_ON_ERROR_DEFAULT = False  # Whether to stop on first error by default
+
+# === GAIA VALIDATION CONFIGURATION ===
+# El-Badry et al. (2021) systematic error corrections
+
+GAIA_PARALLAX_INFLATION_PARAMS = {
+    'A': 0.21,
+    'G0': 12.65,
+    'b': 0.90,
+    'p0': 1.141,
+    'p1': 0.0040,
+    'p2': -0.00062
+}
+
+GAIA_ADAPTIVE_THRESHOLDS = {
+    'close_separation': {
+        'angle_threshold_arcsec': 4.0,
+        'parallax_sigma_multiplier': 1.5,
+        'pm_sigma_multiplier': 1.3,
+        'delta_mu_physical': 5.0,
+        'delta_mu_ambiguous': 8.0
+    },
+    'wide_separation': {
+        'delta_mu_physical': 5.0,
+        'delta_mu_ambiguous': 8.0
+    },
+    'ruwe_threshold': 1.4
+}
+
+GAIA_QUALITY_FLAGS = {
+    'ipd_gof_harmonic_amplitude_threshold': 0.1,
+    'ipd_frac_multi_peak_threshold': 10.0,
+    'ruwe_excellent': 1.2,
+    'ruwe_good': 1.4,
+    'ruwe_marginal': 2.0
+}
+
+GAIA_VELOCITY_CONSISTENCY = {
+    'tangential_velocity_max_diff_fraction': 0.3,
+    'velocity_conversion_factor': 4.74
+}
+
