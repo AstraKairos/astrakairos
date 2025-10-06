@@ -114,8 +114,7 @@ async def _perform_discovery_analysis(wds_id: str, wds_summary: WdsSummary, data
                 
                 # Metadata
                 'uncertainty_quality': 0.0,
-                'analysis_type': 'single_epoch',
-                'velocity_available': False
+                'analysis_type': 'single_epoch'
             }
         
         log.debug(f"Discovery analysis successful for {wds_id}")

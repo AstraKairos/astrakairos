@@ -699,7 +699,8 @@ def estimate_velocity_from_endpoints_mc(
                 'quality': 'point_estimate',
                 'uncertainty_source': 'none',
                 'v_total_uncertainty': None,
-                'pa_v_uncertainty': None
+                'pa_v_uncertainty': None,
+                'analysis_type': 'multi_epoch'
             })
         return result
     
@@ -775,7 +776,8 @@ def estimate_velocity_from_endpoints_mc(
             'uncertainty_source': uncertainty_source,
             'quality_score': quality_score,
             'num_samples': num_samples,
-            'method': 'two_point_mc'
+            'method': 'two_point_mc',
+            'analysis_type': 'multi_epoch'
         }
         
     except Exception as e:
