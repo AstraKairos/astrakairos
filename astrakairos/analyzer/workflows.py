@@ -79,22 +79,44 @@ async def _perform_discovery_analysis(wds_id: str, wds_summary: WdsSummary, data
         if not wds_summary.get('date_last') and not ALLOW_SINGLE_EPOCH_SYSTEMS:
             raise AnalysisError(f"Single-epoch system not allowed: {wds_id}")
         
+        # Check if we truly have multiple epochs (different dates)
+        is_single_epoch = (
+            not wds_summary.get('date_last') or 
+            wds_summary.get('date_last') == wds_summary.get('date_first') or
+            abs(wds_summary.get('date_last', 0) - wds_summary.get('date_first', 0)) < 0.001  # Effectively same date
+        )
+        
         # Perform endpoint velocity estimation with Monte Carlo uncertainties
-        if wds_summary.get('date_last'):
+        if not is_single_epoch:
             # Multi-epoch analysis
             velocity_result = estimate_velocity_from_endpoints_mc(wds_summary)
         else:
-            # Single-epoch analysis (limited information)
-            velocity_result = estimate_velocity_from_endpoints(wds_summary)
-            # For single-epoch systems, add uncertainty placeholders
-            if velocity_result:
-                velocity_result.update({
-                    'v_total_uncertainty': None,
-                    'uncertainty_quality': 0.0,
-                    'analysis_type': 'single_epoch'
-                })
-            else:
-                raise AnalysisError(f"Failed to process single-epoch system: {wds_id}")
+            # Single-epoch analysis (no velocity can be computed)
+            log.info(f"Single-epoch system detected for {wds_id} - velocity cannot be computed")
+            velocity_result = {
+                # Basic position information from the single observation
+                'sep_first': wds_summary.get('sep_first'),
+                'sep_last': wds_summary.get('sep_last') or wds_summary.get('sep_first'),
+                'pa_first': wds_summary.get('pa_first'),
+                'pa_last': wds_summary.get('pa_last') or wds_summary.get('pa_first'),
+                'date_first': wds_summary.get('date_first'),
+                'date_last': wds_summary.get('date_last') or wds_summary.get('date_first'),
+                'delta_epoch': 0.0,
+                
+                # Velocity fields marked as unavailable
+                'v_total': None,
+                'v_total_median': None,
+                'v_total_uncertainty': None,
+                'v_radial': None,
+                'v_tangential': None,
+                'v_radial_median': None,
+                'v_tangential_median': None,
+                
+                # Metadata
+                'uncertainty_quality': 0.0,
+                'analysis_type': 'single_epoch',
+                'velocity_available': False
+            }
         
         log.debug(f"Discovery analysis successful for {wds_id}")
         return velocity_result
