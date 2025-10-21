@@ -108,7 +108,8 @@ python -m astrakairos.analyzer.cli --help
 Launch the graphical interface to plan an observing session:
 
 ```bash
-python main.py planner```
+python main.py planner
+```
 <!-- Or, if an entry point is defined in setup.py: `astrakairos-planner` -->
 
 ## Project Roadmap
