@@ -4,12 +4,19 @@
 [![Tests](https://github.com/AstraKairos/astrakairos/actions/workflows/ci.yml/badge.svg)](https://github.com/AstraKairos/astrakairos/actions/workflows/ci.yml)
 <!-- [![PyPI version](https://badge.fury.io/py/astrakairos.svg)](https://badge.fury.io/py/astrakairos) -->
 
+<<<<<<< HEAD
 **AstraKairos is an open-source Python framework for binary star research. It bridges the gap between large-scale astronomical catalogs and practical, targeted observation by providing tools for the validation, characterization, and prioritization of binary systems.**
 
 AstraKairos equips both professional researchers and amateur astronomers with a modern toolset to answer two fundamental questions: "Is this star system a true physical binary?" and "Which systems are the most scientifically valuable to observe next?".
+=======
+**NOTE**: *AstraKairos is currently under development for version 1.0. If you want to track the current progress of the project, please check out the [development](https://github.com/AstraKairos/astrakairos/tree/development) branch.*
 
-## Key Features
+**AstraKairos is an integrated framework to find the *kairos*—the opportune moment—for astronomical discovery. v1.0 focuses on Binary Stars projects by presenting several QOL-improving as well as analysis tools. This open-source Python suite bridges the gap between massive astronomical catalogs (Such as the WDS, WDSS, and the ORB6) and practical night-to-night observation.**
+>>>>>>> c5c948ce674403bc5193310f6e8a797c03aa5e59
 
+AstraKairos brings researchers and amateur astronomers modern tools to identify, prioritize, and analyze targets in the Binary Stars realm.
+
+<<<<<<< HEAD
 AstraKairos is composed of two primary components: a **Catalog Analyzer (CLI)** for large-scale research and an **Observation Planner (GUI)** for preparing targeted observing campaigns.
 
 ### 🔬 **Catalog Analyzer (CLI)**
@@ -41,6 +48,47 @@ A desktop application designed for amateur and professional astronomers to plan 
 ## Installation
 
 AstraKairos requires Python 3.9+ and is designed for easy installation. A virtual environment is highly recommended.
+=======
+## Key Features (v1.0)
+
+### 🔭 **Observation Planner (GUI)**
+A desktop application that optimizes astronomical observations by analyzing:
+- **Location-aware calculations:** Over 3,000+ observatory locations worldwide  
+- **Twilight calculations:** Civil, nautical, and astronomical twilight times with timezone support
+- **Sky quality mapping:** Atmospheric extinction and lunar contamination models
+- **Target search generation:** Filtering with 18 search methods based on [Stelle Doppie](https://www.stelledoppie.it/)'s searching tool
+- **CSV import & analysis:** Parsing of downloaded Stelle Doppie's data with format auto-detection
+- **Multi-platform compatibility:** Compatible with Windows, macOS, and Linux distributions
+
+### 🚀 **Velocity Analysis Engine** 
+- **Binary velocity calculation:** Calculates total observed angular velocity for imported results from Stelle Doppie
+- **Endpoint velocity calculations:** Uses first/last observation epochs for motion analysis
+- **Velocity statistics:** Statistics and high-priority target identification
+- **Column mapping:** Handles both basic and full CSV formats from Stelle Doppie
+
+### 🌙 **Astronomical Calculations**
+- **Precise ephemeris:** Powered by Skyfield with JPL DE421 ephemeris data
+- **Sky brightness modeling:** Krisciunas & Schaefer (1991) lunar scattering implementation
+- **Atmospheric extinction:** Site-specific extinction coefficients for photometry
+- **Time-domain optimization:** Finds optimal observing windows considering environmental factors
+
+### 📊 **Data-Driven Target Prioritization (CLI)**
+A command-line tool that analyzes star catalogs to find high-priority targets:
+- **Apparent Motion Vectors:** Identifies high-velocity systems with significant relative motion
+- **Observation Priority Index (OPI):** Metric quantifying orbital deviation urgency
+- **Physicality Validation:** Uses Gaia DR3 data to distinguish physical binaries from optical alignments
+
+### 🔧 **Data Handling**
+- **Multiple export formats:** CSV, JSON, LaTeX tables with metadata
+- **File processing:** Handles various encodings and CSV formats with error handling
+- **Modular data sources:** Local catalogs (WDSS, ORB6) or real-time web scraping
+- **Orbital Prediction Engine:** Implements Kepler's equation solver to predict future positions of stars in known orbits
+- **Modular Data Sources:** Can operate using local, offline catalogs (for performance and reproducibility) or by scraping up-to-date web sources
+
+## Installation
+
+AstraKairos requires Python 3.8+ and is designed for easy installation. A virtual environment is recommended.
+>>>>>>> c5c948ce674403bc5193310f6e8a797c03aa5e59
 
 ```bash
 # Create and activate a virtual environment
@@ -48,16 +96,38 @@ python -m venv venv
 # On Windows:   .\venv\Scripts\activate  
 # On macOS/Linux: source venv/bin/activate
 
+<<<<<<< HEAD
 # Install the latest version directly from GitHub
+=======
+# Install from the repository
+>>>>>>> c5c948ce674403bc5193310f6e8a797c03aa5e59
 pip install git+https://github.com/AstraKairos/astrakairos.git
+
+# Or install in development mode
+git clone https://github.com/AstraKairos/astrakairos.git
+cd astrakairos
+pip install -e .
 ```
 
+<<<<<<< HEAD
 **Key dependencies:** `astropy`, `astroquery`, `pandas`, `scikit-learn`, `skyfield`, `numpy`, `scipy`.
+=======
+**Dependencies automatically installed:**
+- `skyfield` - High-precision astronomical calculations
+- `pandas` - Data analysis and CSV processing
+- `astropy` - Astronomical data structures and utilities
+- `astroquery` - Access to astronomical databases  
+- `pytz` - Timezone calculations
+- `numpy`, `scipy` - Numerical computations
+
+**First-time setup:** On first run, Skyfield will automatically download the JPL DE421 ephemeris file (~17MB) for precise planetary positions.
+>>>>>>> c5c948ce674403bc5193310f6e8a797c03aa5e59
 
 ## Usage
 
 ### 1. Data Preparation (CLI Analyzer Only)
 
+<<<<<<< HEAD
 Before using the analyzer, you must build the local database from the raw catalog files. This is a one-time step.
 
 ```bash
@@ -75,9 +145,27 @@ python scripts/convert_catalogs_to_sqlite.py \
 ```bash
 python scripts/prefetch_gaia_data.py catalogs.db
 ```
+=======
+### 1. Observation Planner (GUI)
+
+Launch the observation planning interface:
+
+```bash
+python main.py planner
+```
+
+The GUI provides:
+- **Observatory selection** from 3,000+ worldwide locations
+- **Optimal sky region calculation** using atmospheric models  
+- **Stelle Doppie search generation** with 18 filtering methods
+- **CSV data import & analysis** with automatic format detection
+- **Velocity analysis** for identifying high-motion binary systems
+- **Export capabilities** in multiple formats
+>>>>>>> c5c948ce674403bc5193310f6e8a797c03aa5e59
 
 ### 2. Catalog Analyzer (CLI)
 
+<<<<<<< HEAD
 The `analyzer` is the primary tool for large-scale research.
 
 ```bash
@@ -109,11 +197,45 @@ Launch the graphical interface to plan an observing session:
 
 ```bash
 python main.py planner
+=======
+Process star catalogs to find high-priority observation targets using local databases:
+
+```bash
+# Basic analysis with discovery mode (motion analysis)
+python -m astrakairos.analyzer.cli targets.csv --database-path catalogs.db --limit 10
+
+# Orbital analysis with Gaia validation
+python -m astrakairos.analyzer.cli targets.csv --database-path catalogs.db --mode orbital --validate-gaia --output results.csv
+
+# Analyze all systems in database with characterization mode
+python -m astrakairos.analyzer.cli --all --database-path catalogs.db --mode characterize --limit 100
+
+# Discovery mode with custom sorting
+python -m astrakairos.analyzer.cli targets.csv --database-path catalogs.db --mode discovery --sort-by v_total_arcsec_yr
+```
+
+**Analysis modes:**
+- `discovery`: Motion analysis and velocity calculations (default)
+- `characterize`: Robust linear fitting with Theil-Sen regression  
+- `orbital`: Observation Priority Index (OPI) calculation for ranking
+
+**Key options:**
+- `--database-path`: Required path to local SQLite catalog database 
+- `--validate-gaia`: Enable Gaia DR3 physicality validation (requires network)
+- `--mode`: Analysis type (discovery/characterize/orbital)
+- `--limit`: Maximum number of systems to process
+- `--output`: Output CSV file for results
+
+For complete documentation:
+```bash
+python -m astrakairos.analyzer.cli --help
+>>>>>>> c5c948ce674403bc5193310f6e8a797c03aa5e59
 ```
 <!-- Or, if an entry point is defined in setup.py: `astrakairos-planner` -->
 
 ## Project Roadmap
 
+<<<<<<< HEAD
 AstraKairos is an actively developed project with a long-term vision.
 
 ### **Current Version (v1.0 - The Binary Star Suite)**
@@ -130,6 +252,59 @@ The vision is to expand AstraKairos into a general-purpose platform for time-dom
 -   [ ] **Orbit Fitting:** Integration of orbit-fitting tools (e.g., MCMC) to compute new orbital solutions.
 -   [ ] **Variable Stars:** A module for light curve analysis (periodograms, template fitting) and prioritization of photometric observations.
 -   [ ] **Minor Bodies:** Tools for ephemeris prediction and orbit determination of asteroids and comets.
+=======
+The development of AstraKairos is phased to deliver a valuable tool at each stage.
+
+### v1.0: The Binary Star Research Suite
+*Binary star validation, analysis, and observation planning tool.*
+
+**Core Architecture & Data Layer**
+- [x] **Data Source Abstraction:** Modular `DataSource` interface implemented
+- [x] **Local Source:** Parsers for offline **WDSS** and **ORB6** catalogs  
+- [x] **Catalog Hub:** Cross-matching and **SIMBAD** name resolution
+
+**Engine**
+- [x] **Kepler's Equation Solver:** High-precision numerical solver with hybrid initial guess strategy
+- [x] **Orbital Prediction:** Precise ephemerides (PA/Sep) from orbital elements
+- [x] **Dynamics Analysis:** Apparent motion vectors (`v_total`, `PA_v`) with endpoint method
+- [x] **Observation Priority Index (OPI):** Complete implementation for ranking orbital deviations
+- [x] **Physicality Validation:** Fully integrated **Gaia DR3** parallax and proper motion validation
+- [ ] **Mass Calculation:** Dynamic mass calculation using Kepler's Third Law
+
+**User Interfaces & Workflow**
+- [x] **Planner (GUI):** Complete interface with location selection, twilight calculations, and CSV analysis
+- [x] **Analyzer (CLI):** Full batch processing with report generation and export
+- [x] **Features:** Velocity analysis, high-motion detection, and multi-format export
+
+**Project Quality**
+- [x] Test coverage with `pytest` (>80% of functions tested)
+- [x] Error handling and file processing
+- [x] Documentation with proper citations and methodology  
+- [ ] Configure Continuous Integration (CI) workflow with GitHub Actions
+- [ ] Complete API reference documentation with Sphinx
+
+---
+
+### v2.0 & Beyond: The Time-Domain Astrophysics Framework 🔮
+*Expand AstraKairos into a general-purpose platform for time-domain astrophysics.*
+
+**Variable Stars Module:**
+- [ ] **AAVSO VSX Integration:** Automatic period prediction and minima/maxima calculations
+- [ ] **Comparison Star Finder:** Automated selection of photometric comparison stars  
+- [ ] **Time-Series Analysis:** Lomb-Scargle periodograms and phase-folding tools
+- [ ] **Light Curve Modeling:** Template fitting for eclipsing binaries and pulsating variables
+
+**Analysis & Visualization:**
+- [ ] **MCMC Orbit Fitting:** Bayesian orbit determination with uncertainty quantification
+- [ ] **Universal Solver:** Support for parabolic/hyperbolic orbits (comets, interstellar objects)
+- [ ] **Statistical Framework:** Complete error propagation and uncertainty analysis
+- [ ] **Interactive Visualization:** 3D orbit displays and sky chart overlays with real-time updates
+
+**Minor Planet Module:** 
+- [ ] **Asteroid ephemeris:** Integration with MPC database for accurate position predictions
+- [ ] **Orbit determination:** Least-squares and differential correction algorithms
+- [ ] **Discovery tools:** Automated moving object detection in image sequences
+>>>>>>> c5c948ce674403bc5193310f6e8a797c03aa5e59
 
 ## Contributing
 
