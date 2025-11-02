@@ -5,11 +5,11 @@
 # --- Core Calculations ---
 
 """
-    Observation Priority Index (OPI):
+    Orbital Deviation Index (ODI):
     Calculates the deviation of the latest measurement from the predicted position
     based on current orbital elements.
 """
-def calculate_opi(orbital_elements, latest_measurement):
+def calculate_odi(orbital_elements, latest_measurement):
     pass
 
 
@@ -64,5 +64,16 @@ def predict_position(orbital_elements, date):
     per year, given the position angle (pa), separation (sep) and the 
     time baseline over which the measurements were taken.
 """
-def v_total(pa, sep, pa_error, sep_error, time_baseline):
+def v_total(measurements: list, time_baseline):
+    pass
+
+
+# --- Secondary Calculations ---
+
+"""
+    Masses from Orbital Elements:
+    Given the orbital elements, calculate the masses of the
+    primary and secondary stars in the binary system using Kepler's third law.
+"""
+def calculate_masses(orbital_elements):
     pass
