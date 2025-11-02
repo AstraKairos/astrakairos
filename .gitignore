@@ -9,6 +9,8 @@ __pycache__/
 *.bsp.download
 deprecated/
 data/
+models/
+docs/papers/
 pre-refactorization/
 *.db 
 *.txt
