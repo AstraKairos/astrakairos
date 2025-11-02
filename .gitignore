@@ -8,6 +8,7 @@ __pycache__/
 *.bsp
 *.bsp.download
 deprecated/
+pre-refactorization/
 *.db 
 *.txt
 *.html
