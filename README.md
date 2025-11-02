@@ -4,6 +4,8 @@
 [![Tests](https://github.com/AstraKairos/astrakairos/actions/workflows/ci.yml/badge.svg)](https://github.com/AstraKairos/astrakairos/actions/workflows/ci.yml)
 <!-- [![PyPI version](https://badge.fury.io/py/astrakairos.svg)](https://badge.fury.io/py/astrakairos) -->
 
+**NOTE**: *I'm working on a full code refactorization to clean everything up and make sure that everything is consistent and properly tested. All of the refactoring will be based on this branch (development), which contains the main functions and ideas that are already implemented. However, the final code will only be available in the full-refactorization branch.*
+
 **AstraKairos is an open-source Python framework for binary star research. It bridges the gap between large-scale astronomical catalogs and practical, targeted observation by providing tools for the validation, characterization, and prioritization of binary systems.**
 
 AstraKairos equips both professional researchers and amateur astronomers with a modern toolset to answer two fundamental questions: "Is this star system a true physical binary?" and "Which systems are the most scientifically valuable to observe next?".
