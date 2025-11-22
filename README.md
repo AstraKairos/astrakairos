@@ -1,22 +1,17 @@
 # AstraKairos 🌠
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://github.com/AstraKairos/astrakairos/actions/workflows/ci.yml/badge.svg)](https://github.com/AstraKairos/astrakairos/actions/workflows/ci.yml)
-<!-- [![PyPI version](https://badge.fury.io/py/astrakairos.svg)](https://badge.fury.io/py/astrakairos) -->
-
-<<<<<<< HEAD
 **AstraKairos is an open-source Python framework for binary star research. It bridges the gap between large-scale astronomical catalogs and practical, targeted observation by providing tools for the validation, characterization, and prioritization of binary systems.**
 
-AstraKairos equips both professional researchers and amateur astronomers with a modern toolset to answer two fundamental questions: "Is this star system a true physical binary?" and "Which systems are the most scientifically valuable to observe next?".
-=======
-**NOTE**: *AstraKairos is currently under development for version 1.0. If you want to track the current progress of the project, please check out the [development](https://github.com/AstraKairos/astrakairos/tree/development) branch.*
+**NOTE**: *AstraKairos is currently under development for version 1.0 (expected to be ready before March 2026). If you want to track the current progress of the project (mostly, its current features before we finish the refactorization), please check out the [development](https://github.com/AstraKairos/astrakairos/tree/development) branch.*
+
+**NOTE 2**: We're working on a full manual refactorization of the project to make all of the code more consistent, accurate, readable, scalable, maintainable, and all of the other able's. Check that out in the 
+[full-refactorization](https://github.com/AstraKairos/astrakairos/tree/full-refactorization) branch!
+
+**NOTE 3**: THIS README IS OUTDATED AND DOESN'T FULLY REPRESENT THE CURRENT VISION, FEATURES, AND STATUS OF ASTRAKAIROS
+
 
 **AstraKairos is an integrated framework to find the *kairos*—the opportune moment—for astronomical discovery. v1.0 focuses on Binary Stars projects by presenting several QOL-improving as well as analysis tools. This open-source Python suite bridges the gap between massive astronomical catalogs (Such as the WDS, WDSS, and the ORB6) and practical night-to-night observation.**
->>>>>>> c5c948ce674403bc5193310f6e8a797c03aa5e59
 
-AstraKairos brings researchers and amateur astronomers modern tools to identify, prioritize, and analyze targets in the Binary Stars realm.
-
-<<<<<<< HEAD
 AstraKairos is composed of two primary components: a **Catalog Analyzer (CLI)** for large-scale research and an **Observation Planner (GUI)** for preparing targeted observing campaigns.
 
 ### 🔬 **Catalog Analyzer (CLI)**
