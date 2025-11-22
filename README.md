@@ -4,7 +4,7 @@
 
 **NOTE**: *AstraKairos is currently under development for version 1.0 (expected to be ready before March 2026). If you want to track the current progress of the project (mostly, its current features before we finish the refactorization), please check out the [development](https://github.com/AstraKairos/astrakairos/tree/development) branch.*
 
-**NOTE 2**: We're working on a full manual refactorization of the project to make all of the code more consistent, accurate, readable, scalable, maintainable, and all of the other able's. Check that out in the 
+**NOTE 2**: We're working on a full manual refactorization of the project to make all of the code more consistent, accurate, readable, scalable, maintainable, and all of the other able's (as well as removing random/broken AI code that was made to test the concept of AstraKairos). Check that out in the 
 [full-refactorization](https://github.com/AstraKairos/astrakairos/tree/full-refactorization) branch!
 
 **NOTE 3**: THIS README IS OUTDATED AND DOESN'T FULLY REPRESENT THE CURRENT VISION, FEATURES, AND STATUS OF ASTRAKAIROS
