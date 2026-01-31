@@ -6,9 +6,10 @@
 
 **AstraKairos is an open-source Python framework for binary star research. It bridges the gap between large-scale astronomical catalogs and practical, targeted observation by providing tools for the validation, characterization, and prioritization of binary systems.**
 
-AstraKairos equips both professional researchers and amateur astronomers with a modern toolset to answer two fundamental questions: "Is this star system a true physical binary?" and "Which systems are the most scientifically valuable to observe next?".
+<!-- Include PDF image: -->
+AstraKairos was awarded with the First Place for Astronomy Posters at VI Congreso de Estudiantes de Ciencias Físicas y Astronómicas (CECFA). ![Link to the poster](AstraKairos_Poster_CECFA.pdf).
 
-AstraKairos brings researchers and amateur astronomers modern tools to identify, prioritize, and analyze targets in the Binary Stars realm.
+AstraKairos brings researchers and amateur astronomers modern tools to identify, prioritize, and analyze targets in the Binary Stars realm with a focus on data purification.
 
 AstraKairos is composed of two primary components: a **Catalog Analyzer (CLI)** for large-scale research and an **Observation Planner (GUI)** for preparing targeted observing campaigns.
 
@@ -17,8 +18,8 @@ A powerful command-line tool for the batch analysis of binary star catalogs.
 
 -   **Unified Data Pipeline:** Includes scripts to parse legacy text-based catalogs (WDS, WDSS, ORB6) into a single, query-optimized SQLite database.
 -   **Machine Learning Physicality Classifier:**
-    -   Utilizes a pre-trained **Random Forest** classifier to assign a **physicality probability (`P_phys`)** to each pair, distinguishing genuine physical binaries from optical chance alignments.
-    -   The model is trained on a high-confidence ground-truth sample that fuses data from El-Badry et al. (2021) and the Gaia DR3 Non-Single Star (NSS) catalog.
+    -   Utilizes a pre-trained **LightGBM** Regression model to predict the a **chance alignment** probability to each pair, helping distinguish genuine physical binaries from optical chance alignments.
+    -   The model is trained on a sample data from El-Badry et al. (2021)'s "A million binaries from Gaia eDR3" catalog.
 -   **Dynamic Prioritization Metrics:**
     -   **Observation Priority Index (OPI):** Quantifies the urgency of re-observing systems with known orbits (from the ORB6 catalog) by measuring the deviation between the published orbit and the latest measurements.
     -   **Curvature Index:** Identifies systems *without* known orbits that exhibit significant non-linear motion, flagging them as high-priority candidates for a first orbit determination.
