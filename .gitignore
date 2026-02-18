@@ -8,10 +8,19 @@ __pycache__/
 *.bsp
 *.bsp.download
 deprecated/
+models/
+docs/papers/
+pre-refactorization/
 *.db 
 *.txt
 *.html
 *.fits
+/experiments
+
+# Leave out the training scripts for models 1-3
+/scripts/ml-training/train_ml_model1.py
+/scripts/ml-training/train_ml_model2.py
+/scripts/ml-training/train_ml_model3.py
 
 # C extensions
 *.so
