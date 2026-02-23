@@ -35,7 +35,7 @@ This project builds upon the foundational work of the astronomical community and
 <!--**Software foundation:**
 This project leverages the Python ecosystem, particularly **NumPy**, **SciPy**, **Pandas**, **Astropy**, **Skyfield**, and **AstroQuery**. -->
 
-Additionally, this project was developed with the assistance of AI-powered tools such as Google DeepMind's Gemini 3 Pro. These tools were exclusively used for writing the base code of some of AstraKairos' features. All AI output was deeply steered and reviewed by the authors of AstraKairos. AstraKairos' methodology is a result of several months of human work reviewing studies related to the field of Stellar Evolution and Binary Stars.
+Additionally, this project was developed with the assistance of AI-powered tools such as Google DeepMind's Gemini 3 Pro. These tools were exclusively used for aiding in writing the code of some components in AstraKairos' features. All AI output was deeply steered and reviewed by the authors of AstraKairos. AstraKairos' methodology is a result of several months of human work reviewing studies related to the field of Stellar Evolution and Binary Stars.
 
 ## License
 
